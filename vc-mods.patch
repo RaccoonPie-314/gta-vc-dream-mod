@@ -33,6 +33,94 @@ index f6ac3eb..04b92dd 100644
  }
  
  CAnimBlendAssociation*
+diff --git a/src/control/Replay.cpp b/src/control/Replay.cpp
+index 71b28f7..130aa70 100644
+--- a/src/control/Replay.cpp
++++ b/src/control/Replay.cpp
+@@ -52,6 +52,7 @@
+ #include "Radar.h"
+ #include "Fluff.h"
+ #include "WaterCreatures.h"
++#include "vcmodpanel.h"
+ 
+ uint8 CReplay::Mode;
+ CAddressInReplayBuffer CReplay::Record;
+@@ -1329,6 +1330,8 @@ void CReplay::TriggerPlayback(uint8 cam_mode, float cam_x, float cam_y, float ca
+ 
+ void CReplay::StoreStuffInMem(void)
+ {
++	// Replay copies player bytes, but not the mod's runtime ownership.
++	VCModSuspendAdrenaline();
+ #ifdef FIX_BUGS
+ 	for (int i = 0; i < NUMPLAYERS; i++)
+ 		nHandleOfPlayerPed[i] = CPools::GetPedPool()->GetIndex(CWorld::Players[i].m_pPed);
+diff --git a/src/core/PlayerInfo.cpp b/src/core/PlayerInfo.cpp
+index 36d05b8..b159fc0 100644
+--- a/src/core/PlayerInfo.cpp
++++ b/src/core/PlayerInfo.cpp
+@@ -34,6 +34,7 @@
+ #include "Bike.h"
+ #include "Automobile.h"
+ #include "GameLogic.h"
++#include "vcmodpanel.h"
+ 
+ CVector lastPlayerPos;
+ 
+@@ -383,7 +384,8 @@ CPlayerInfo::Process(void)
+ 					}
+ 				}
+ 				// carBelow is now closest vehicle
+-				if (carBelow && !weAreOnBoat) {
++				// passenger mode owns the press when it is on, refusal included
++				if (carBelow && !weAreOnBoat && !VCModPassengerEntry(carBelow)) {
+ 					if (carBelow->GetStatus() == STATUS_TRAIN_NOT_MOVING) {
+ 						m_pPed->SetObjective(OBJECTIVE_ENTER_CAR_AS_PASSENGER, carBelow);
+ 					} else if (carBelow->IsBoat()) {
+diff --git a/src/core/Streaming.cpp b/src/core/Streaming.cpp
+index 83bb21b..ee418aa 100644
+--- a/src/core/Streaming.cpp
++++ b/src/core/Streaming.cpp
+@@ -1063,6 +1063,16 @@ CStreaming::HasSpecialCharLoaded(int32 id)
+ 	return HasModelLoaded(id + MI_SPECIAL01);
+ }
+ 
++// the MI_SPECIAL slots are placeholders in default.ide; the body one of them
++// wears is whichever file this table names for it
++const char *
++CStreaming::GetSpecialCharModelName(int32 charId)
++{
++	if(charId < 0 || charId >= (int32) ARRAY_SIZE(IGnames) - 1)
++		return nil;
++	return IGnames[charId];
++}
++
+ void
+ CStreaming::SetMissionDoesntRequireSpecialChar(int32 id)
+ {
+diff --git a/src/core/Streaming.h b/src/core/Streaming.h
+index 18f5b90..4b119fc 100644
+--- a/src/core/Streaming.h
++++ b/src/core/Streaming.h
+@@ -148,6 +148,7 @@ public:
+ 	static void RequestSpecialModel(int32 modelId, const char *modelName, int32 flags);
+ 	static void RequestSpecialChar(int32 charId, const char *modelName, int32 flags);
+ 	static bool HasSpecialCharLoaded(int32 id);
++	static const char *GetSpecialCharModelName(int32 charId);
+ 	static void SetMissionDoesntRequireSpecialChar(int32 id);
+ 	static void DecrementRef(int32 id);
+ 	static void RemoveModel(int32 id);
+diff --git a/src/core/Zones.h b/src/core/Zones.h
+index 01aff76..0946d33 100644
+--- a/src/core/Zones.h
++++ b/src/core/Zones.h
+@@ -78,6 +78,7 @@ public:
+ 	static CZone *GetInfoZone(uint16 i) { return &InfoZoneArray[i]; }
+ 	static CZone *GetNavigationZone(uint16 i) { return &NavigationZoneArray[i]; }
+ 	static CZone *GetMapZone(uint16 i) { return &MapZoneArray[i]; }
++	static uint16 GetNumberOfMapZones(void) { return TotalNumberOfMapZones; }
+ 	static CZone *GetAudioZone(uint16 i) { return &NavigationZoneArray[AudioZoneArray[i]]; }
+ 	static void PostZoneCreation(void);
+ 	static void CheckZonesForOverlap(void);
 diff --git a/src/core/main.cpp b/src/core/main.cpp
 index a412a98..9c8bcf9 100644
 --- a/src/core/main.cpp
@@ -54,7 +142,7 @@ index a412a98..9c8bcf9 100644
  	POP_RENDERGROUP();
  }
 diff --git a/src/core/re3.cpp b/src/core/re3.cpp
-index d16088f..af65912 100644
+index d16088f..242ad89 100644
 --- a/src/core/re3.cpp
 +++ b/src/core/re3.cpp
 @@ -32,6 +32,7 @@
@@ -65,7 +153,7 @@ index d16088f..af65912 100644
  #include "Frontend.h"
  #include "WaterLevel.h"
  #include "main.h"
-@@ -622,6 +623,18 @@ bool LoadINISettings()
+@@ -622,6 +623,25 @@ bool LoadINISettings()
  	}
  #endif
  
@@ -80,6 +168,13 @@ index d16088f..af65912 100644
 +	ReadIniIfExists("VC Mods", "LockOnVehicles", &bVCModLockOnVehicles);
 +	ReadIniIfExists("VC Mods", "NeverWanted", &bVCModNeverWanted);
 +	ReadIniIfExists("VC Mods", "LockOnLatch", &bVCModLockOnLatch);
++	ReadIniIfExists("VC Mods", "Adrenaline", &bVCModAdrenaline);
++	ReadIniIfExists("VC Mods", "AdrenalineSlowMo", &bVCModAdrenalineSlowMo);
++	ReadIniIfExists("VC Mods", "CopPistol", &bVCModCopPistol);
++	ReadIniIfExists("VC Mods", "CopHoldFrame", &nVCModCopHoldFrame);
++	ReadIniIfExists("VC Mods", "PedModel", &nVCModPedModel);
++	ReadIniIfExists("VC Mods", "PassengerMode", &bVCModPassengerMode);
++	ReadIniIfExists("VC Mods", "RideZone", &nVCModRideZone);
 +
  	// Fetched in above block, but needs evaluation
  #ifdef PED_CAR_DENSITY_SLIDERS
@@ -124,10 +219,10 @@ index a160c06..e25b3a9 100644
  // Some overloads for simplicity
 diff --git a/src/extras/vcmodpanel.cpp b/src/extras/vcmodpanel.cpp
 new file mode 100644
-index 0000000..440edb1
+index 0000000..164e996
 --- /dev/null
 +++ b/src/extras/vcmodpanel.cpp
-@@ -0,0 +1,435 @@
+@@ -0,0 +1,1001 @@
 +#include "common.h"
 +
 +#include <stdio.h>
@@ -139,6 +234,13 @@ index 0000000..440edb1
 +#include "AnimBlendAssocGroup.h"
 +#include "AnimBlendAssociation.h"
 +#include "AnimBlendHierarchy.h"
++#include "ModelInfo.h"
++#include "PedModelInfo.h"
++#include "ModelIndices.h"
++#include "PedType.h"
++#include "Streaming.h"
++#include "Directory.h"
++#include "Zones.h"
 +#include "vcmodpanel.h"
 +
 +bool bVCModPlayerNpcAnims;
@@ -151,6 +253,16 @@ index 0000000..440edb1
 +bool bVCModLockOnVehicles;
 +bool bVCModNeverWanted;
 +bool bVCModLockOnLatch;
++bool bVCModAdrenaline;
++bool bVCModAdrenalineSlowMo = true;
++bool bVCModCopPistol;
++// weapon.dat has no loop window for the cop animation, so the frame it is held at
++// has to come from somewhere the player can see and change
++int32 nVCModCopHoldFrame;
++int32 nVCModPedModel = -1;
++int32 nVCModPedCategory;
++bool bVCModPassengerMode;
++int32 nVCModRideZone;
 +
 +// only groups built from aStdAnimDescs are offered: they are the ones carrying all
 +// five locomotion slots, so the swap can't leave a slot unresolved
@@ -166,18 +278,38 @@ index 0000000..440edb1
 +	ASSOCGRP_JOGWOMAN, ASSOCGRP_PANICCHUNKY
 +};
 +
-+// SetRealMoveAnim reaches m_animGroup every frame from ProcessControl, using ids
-+// beyond the five move slots, so every association a group can hand out has to be
-+// usable before the group becomes current
++// SetRealMoveAnim and ReApplyMoveAnims reach these five every frame, so a group
++// that cannot hand them out must never become current
++static const AnimationId aVCModMoveAnims[] = {
++	ANIM_STD_IDLE, ANIM_STD_STARTWALK, ANIM_STD_WALK, ANIM_STD_RUN, ANIM_STD_RUNFAST
++};
++
 +static bool
 +VCModGroupPlayable(AssocGroupId groupId)
 +{
++	// model info carries group ids the mod never offered, so range-check before
++	// indexing the group table
++	if (groupId < 0 || groupId >= NUM_ANIM_ASSOC_GROUPS)
++		return false;
++
 +	CAnimBlendAssocGroup *grp = &CAnimManager::GetAnimAssocGroups()[groupId];
++	if (grp->numAssociations <= 0) {
++		fprintf(stderr, "VCMOD refusing group %d, nothing built\n", groupId);
++		return false;
++	}
 +	for (int32 i = 0; i < grp->numAssociations; i++) {
 +		CAnimBlendHierarchy *h = grp->assocList[i].hierarchy;
 +		if (h == nil || h->sequences == nil || h->numSequences <= 0) {
 +			fprintf(stderr, "VCMOD refusing group %d, assoc %d (%s)\n",
 +				groupId, i, h ? h->name : "nil hierarchy");
++			return false;
++		}
++	}
++
++	for (int32 i = 0; i < ARRAY_SIZE(aVCModMoveAnims); i++) {
++		CAnimBlendAssociation *anim = CAnimManager::GetAnimAssociation(groupId, aVCModMoveAnims[i]);
++		if (anim == nil || anim->hierarchy == nil) {
++			fprintf(stderr, "VCMOD refusing group %d, no slot %d\n", groupId, aVCModMoveAnims[i]);
 +			return false;
 +		}
 +	}
@@ -204,11 +336,211 @@ index 0000000..440edb1
 +	return true;
 +}
 +
++static const char *aVCModPedCategoryNames[] = { "cops", "gangs", "civilians", "mission" };
++
++int32
++VCModPedCategoryOf(int32 pedType)
++{
++	switch (pedType) {
++	case PEDTYPE_COP:
++	case PEDTYPE_EMERGENCY:
++	case PEDTYPE_FIREMAN:
++		return VCMOD_PEDCAT_COPS;
++	case PEDTYPE_GANG1:
++	case PEDTYPE_GANG2:
++	case PEDTYPE_GANG3:
++	case PEDTYPE_GANG4:
++	case PEDTYPE_GANG5:
++	case PEDTYPE_GANG6:
++	case PEDTYPE_GANG7:
++	case PEDTYPE_GANG8:
++	case PEDTYPE_GANG9:
++		return VCMOD_PEDCAT_GANGS;
++	// the player shelves are Tommy's own, and he is already on the list. The
++	// story bodies are not a ped type either: default.ide hands those slots to
++	// CIVMALE, and their real models live in the cutscene table
++	case PEDTYPE_SPECIAL:
++	case PEDTYPE_PLAYER1:
++	case PEDTYPE_PLAYER2:
++	case PEDTYPE_PLAYER3:
++	case PEDTYPE_PLAYER4:
++		return -1;
++	}
++	return VCMOD_PEDCAT_CIVILIANS;
++}
++
++// read from the model table the game loaded, so every ped it actually ships
++// appears without a hand-kept list going stale
++static bool
++VCModRosterPed(int32 modelIndex, int32 category, int16 *outIndex, const char **outName)
++{
++	if (modelIndex >= MI_SPECIAL01 && modelIndex <= MI_LAST_PED)
++		return false;
++	CBaseModelInfo *mi = CModelInfo::GetModelInfo(modelIndex);
++	if (mi == nil || mi->GetModelType() != MITYPE_PED)
++		return false;
++	if (VCModPedCategoryOf(((CPedModelInfo *) mi)->m_pedType) != category)
++		return false;
++	if (outIndex)
++		*outIndex = modelIndex;
++	if (outName)
++		*outName = mi->GetModelName();
++	return true;
++}
++
++// a special slot only has a body once the archive actually holds the file the
++// cutscene table names for it; asking for the placeholder streams nothing
++static bool
++VCModRosterSpecial(int32 entry, int16 *outIndex, const char **outName)
++{
++	if (entry < 0 || entry > MI_LAST_PED - MI_SPECIAL01)
++		return false;
++
++	const char *name = CStreaming::GetSpecialCharModelName(entry);
++	if (name == nil)
++		return false;
++
++	uint32 pos, size;
++	if (CStreaming::ms_pExtraObjectsDir == nil ||
++			!CStreaming::ms_pExtraObjectsDir->FindItem(name, pos, size))
++		return false;
++
++	if (outIndex)
++		*outIndex = (int16) (MI_SPECIAL01 + entry);
++	if (outName)
++		*outName = name;
++	return true;
++}
++
++int32
++VCModPedModelCount(int32 category)
++{
++	// entry 0 is always Tommy: the way back from any character
++	int32 n = 1;
++	if (category == VCMOD_PEDCAT_MISSION) {
++		for (int32 i = 0; i <= MI_LAST_PED - MI_SPECIAL01; i++)
++			if (VCModRosterSpecial(i, nil, nil))
++				n++;
++		return n;
++	}
++	for (int32 i = MI_COP; i <= MI_LAST_PED; i++)
++		if (VCModRosterPed(i, category, nil, nil))
++			n++;
++	return n;
++}
++
++bool
++VCModPedModelAt(int32 category, int32 entry, int16 *outIndex, const char **outName)
++{
++	if (entry < 0)
++		return false;
++	if (entry == 0) {
++		*outIndex = MI_PLAYER;
++		*outName = "player (Tommy)";
++		return true;
++	}
++	if (category == VCMOD_PEDCAT_MISSION) {
++		for (int32 i = 0; i <= MI_LAST_PED - MI_SPECIAL01; i++) {
++			if (!VCModRosterSpecial(i, outIndex, outName))
++				continue;
++			if (--entry == 0)
++				return true;
++		}
++		return false;
++	}
++	for (int32 i = MI_COP; i <= MI_LAST_PED; i++) {
++		if (!VCModRosterPed(i, category, outIndex, outName))
++			continue;
++		if (--entry == 0)
++			return true;
++	}
++	return false;
++}
++
++// gxt names are 16 bit and the panel charset fonts take bytes, so the zone label
++// has to be narrowed before it can be drawn
++static char aVCModZoneLabel[32];
++
++static const char *
++VCModZoneLabel(CZone *zone)
++{
++	wchar *name = zone->GetTranslatedName();
++	int32 i;
++	for (i = 0; i < (int32) sizeof(aVCModZoneLabel) - 1 && name != nil && name[i] != 0; i++)
++		aVCModZoneLabel[i] = (char) name[i];
++	aVCModZoneLabel[i] = '\0';
++	return aVCModZoneLabel;
++}
++
++int32
++VCModRideZoneCount(void)
++{
++	// entry 0 is cruise with traffic, then every map zone but the whole-map box
++	if (CTheZones::GetNumberOfMapZones() <= 1)
++		return 1;
++	return 1 + (int32) CTheZones::GetNumberOfMapZones() - 1;
++}
++
++bool
++VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos)
++{
++	if (entry < 0 || entry >= VCModRideZoneCount())
++		return false;
++
++	if (entry == 0) {
++		if (outZoneIndex != nil)
++			*outZoneIndex = -1;
++		if (outName != nil)
++			*outName = "traffic (cruise)";
++		return true;
++	}
++
++	// zone 0 is "THEMAP", so the list is offset by one
++	CZone *zone = CTheZones::GetMapZone((uint16) entry);
++	if (zone == nil)
++		return false;
++
++	if (outZoneIndex != nil)
++		*outZoneIndex = entry;
++	if (outName != nil)
++		*outName = VCModZoneLabel(zone);
++	if (outPos != nil) {
++		outPos->x = (zone->minx + zone->maxx) * 0.5f;
++		outPos->y = (zone->miny + zone->maxy) * 0.5f;
++		outPos->z = 0.0f;
++	}
++	return true;
++}
++
++bool
++VCModPedAnimGroupFor(int16 modelIndex, AssocGroupId *out)
++{
++	// Tommy's stock logic picks a different group per weapon and per strafe, so
++	// pinning him to one group would take those away
++	if (modelIndex == MI_PLAYER)
++		return false;
++
++	CBaseModelInfo *mi = CModelInfo::GetModelInfo(modelIndex);
++	if (mi == nil || mi->GetModelType() != MITYPE_PED)
++		return false;
++
++	AssocGroupId grp = (AssocGroupId) ((CPedModelInfo *) mi)->m_animGroup;
++	if (!VCModGroupPlayable(grp))
++		return false;
++
++	*out = grp;
++	return true;
++}
++
 +#ifdef DEBUGMENU
 +#include "rtcharse.h"
 +#include "re3_inttypes.h"
 +#include "ControllerConfig.h"
++#include "PlayerPed.h"
++#include "World.h"
 +#include "debugmenu.h"
++
++static void VCModToggleAll(void);
 +
 +// one row per group: activating a row applies it immediately, which a cycling
 +// value cannot. Row order must match aVCModAnimGroups / aVCModAnimGroupNames.
@@ -243,6 +575,17 @@ index 0000000..440edb1
 +TWEAKBOOL(bVCModLockOnVehicles);
 +TWEAKBOOL(bVCModNeverWanted);
 +TWEAKBOOL(bVCModLockOnLatch);
++TWEAKBOOLN(bVCModAdrenaline, "adrenaline");
++TWEAKBOOLN(bVCModAdrenalineSlowMo, "adrenaline slow-mo");
++TWEAKBOOL(bVCModCopPistol);
++TWEAKINT32(nVCModCopHoldFrame, 0, 29, 1);
++TWEAKINT32(nVCModPedCategory, 0, NUM_VCMOD_PEDCATS-1, 1);
++// the debug menu cycles the index, the panel picks a name: both end up here and
++// ProcessControl does the swap, so there is one apply path
++TWEAKINT32(nVCModPedModel, -1, MI_LAST_PED, 1);
++TWEAKBOOL(bVCModPassengerMode);
++TWEAKINT32(nVCModRideZone, -1, NUMMAPZONES - 1, 1);
++TWEAKFUNCN(VCModToggleAll, "all on/off (not walk)");
 +
 +// Colour comes from the charset, the same way the debug menu highlights a selected
 +// row: an opaque background on every glyph is what makes a row read as a panel.
@@ -262,31 +605,98 @@ index 0000000..440edb1
 +static RtCharset *aVCModFonts[NUM_VCFONTS];
 +static int32 nVCModCharW, nVCModCharH;
 +static bool bVCModPanelOpen;
-+static bool bVCModAnimListOpen;
 +static float fVCModCursorX, fVCModCursorY;
++
++// one list is open at a time, and any list longer than the window scrolls
++enum eVCModList
++{
++	VCMOD_LIST_NONE,
++	VCMOD_LIST_ANIM,
++	VCMOD_LIST_PEDCAT,
++	VCMOD_LIST_PEDCHAR,
++	VCMOD_LIST_RIDEZONE,
++	NUM_VCMOD_LISTS
++};
++
++static int32 nVCModOpenList;
++static int32 nVCModListScroll;
 +
 +#define VCMOD_PANEL_X		20
 +#define VCMOD_PANEL_Y		60
 +#define VCMOD_NAME_COLS		18
 +#define VCMOD_VALUE_COLS	28
++#define VCMOD_LIST_ROWS		16
++
++enum eVCModRowKind
++{
++	VCMOD_ROW_FLAG,		// flips the flag it points at
++	VCMOD_ROW_ANIMSET,	// opens the animation list
++	VCMOD_ROW_MASTER,
++	VCMOD_ROW_ADRENALINE_MODE,
++	VCMOD_ROW_PEDCAT,	// opens the category list
++	VCMOD_ROW_PEDCHAR,	// opens that category's roster
++	VCMOD_ROW_RIDEZONE	// opens the ride destination list
++};
 +
 +struct VCModRowDef
 +{
 +	const char *name;
-+	bool *state;	// nil means the row cycles the anim set instead
++	eVCModRowKind kind;
++	bool *state;
 +};
 +
++// WALK MODE is left out on purpose: it says how Tommy moves, not which mods are
++// running, and losing it every time the combat switches get flipped together is
++// the annoying version of a convenience button
++static bool *aVCModSwitched[] = {
++	&bVCModPlayerNpcAnims,
++	&bVCModMouseAimLockOn,
++	&bVCModAimAllWeapons,
++	&bVCModPlayerDoomAim,
++	&bVCModNoScopedAim,
++	&bVCModLockOnVehicles,
++	&bVCModNeverWanted,
++	&bVCModLockOnLatch,
++	&bVCModAdrenaline
++};
++
++static int32
++VCModCountOn(void)
++{
++	int32 n = 0;
++	for (uint32 i = 0; i < ARRAY_SIZE(aVCModSwitched); i++)
++		if (*aVCModSwitched[i])
++			n++;
++	return n;
++}
++
++static void
++VCModToggleAll(void)
++{
++	bool on = VCModCountOn() != (int32) ARRAY_SIZE(aVCModSwitched);
++	for (uint32 i = 0; i < ARRAY_SIZE(aVCModSwitched); i++)
++		*aVCModSwitched[i] = on;
++}
++
 +static const VCModRowDef aVCModRows[] = {
-+	{ "NPC ANIMATION",   &bVCModPlayerNpcAnims  },
-+	{ "ANIM SET",        nil                    },
-+	{ "FREEAIM+LOCKON",  &bVCModMouseAimLockOn  },
-+	{ "AIM ALL WEAPONS", &bVCModAimAllWeapons   },
-+	{ "NPC DOOM AIM",    &bVCModPlayerDoomAim   },
-+	{ "NO SCOPE CAMERA", &bVCModNoScopedAim     },
-+	{ "WALK MODE",       &bVCModWalkMode        },
-+	{ "LOCKON VEHICLES", &bVCModLockOnVehicles  },
-+	{ "NEVER WANTED",    &bVCModNeverWanted     },
-+	{ "LOCKON LATCH",    &bVCModLockOnLatch     },
++	{ "ALL ON/OFF",      VCMOD_ROW_MASTER,  nil                   },
++	{ "NPC ANIMATION",   VCMOD_ROW_FLAG,    &bVCModPlayerNpcAnims },
++	{ "ANIM SET",        VCMOD_ROW_ANIMSET, nil                   },
++	{ "PED CATEGORY",    VCMOD_ROW_PEDCAT,  nil                   },
++	{ "CHARACTER",       VCMOD_ROW_PEDCHAR, nil                   },
++	{ "FREEAIM+LOCKON",  VCMOD_ROW_FLAG,    &bVCModMouseAimLockOn },
++	{ "AIM ALL WEAPONS", VCMOD_ROW_FLAG,    &bVCModAimAllWeapons  },
++	{ "NPC DOOM AIM",    VCMOD_ROW_FLAG,    &bVCModPlayerDoomAim  },
++	{ "NO SCOPE CAMERA", VCMOD_ROW_FLAG,    &bVCModNoScopedAim    },
++	{ "COLT TWO-HAND",   VCMOD_ROW_FLAG,    &bVCModCopPistol      },
++	{ "WALK MODE",       VCMOD_ROW_FLAG,    &bVCModWalkMode       },
++	{ "LOCKON VEHICLES", VCMOD_ROW_FLAG,    &bVCModLockOnVehicles },
++	{ "NEVER WANTED",    VCMOD_ROW_FLAG,    &bVCModNeverWanted    },
++	{ "LOCKON LATCH",    VCMOD_ROW_FLAG,    &bVCModLockOnLatch    },
++	{ "ADRENALINE",      VCMOD_ROW_FLAG,    &bVCModAdrenaline     },
++	{ "ADRENALINE MODE", VCMOD_ROW_ADRENALINE_MODE, &bVCModAdrenalineSlowMo },
++	{ "PASSENGER MODE",  VCMOD_ROW_FLAG,    &bVCModPassengerMode  },
++	{ "RIDE TO",         VCMOD_ROW_RIDEZONE, nil },
 +};
 +
 +static void
@@ -375,10 +785,12 @@ index 0000000..440edb1
 +	return VCMOD_PANEL_Y + nVCModCharH * (row + 1);
 +}
 +
-+#define VCMOD_ANIM_SET_ROW	1
++#define VCMOD_ANIM_SET_ROW	2
++#define VCMOD_PEDCAT_ROW	3
++#define VCMOD_PEDCHAR_ROW	4
 +
-+// the anim list opens beside the panel instead of pushing the rows down, so the
-+// panel keeps one shape while choosing
++// lists open beside the panel instead of pushing the rows down, so the panel
++// keeps one shape while choosing
 +static int32
 +VCModListX(void)
 +{
@@ -386,9 +798,147 @@ index 0000000..440edb1
 +}
 +
 +static int32
-+VCModListRowY(int32 entry)
++VCModListRowY(int32 anchorRow, int32 visible)
 +{
-+	return VCModRowY(VCMOD_ANIM_SET_ROW) + nVCModCharH * entry;
++	return VCModRowY(anchorRow) + nVCModCharH * visible;
++}
++
++static int32
++VCModRowList(int32 kind)
++{
++	switch (kind) {
++	case VCMOD_ROW_ANIMSET:	return VCMOD_LIST_ANIM;
++	case VCMOD_ROW_PEDCAT:	return VCMOD_LIST_PEDCAT;
++	case VCMOD_ROW_PEDCHAR:	return VCMOD_LIST_PEDCHAR;
++	case VCMOD_ROW_RIDEZONE:	return VCMOD_LIST_RIDEZONE;
++	}
++	return VCMOD_LIST_NONE;
++}
++
++static int32
++VCModListAnchorRow(int32 list)
++{
++	switch (list) {
++	case VCMOD_LIST_ANIM:	return VCMOD_ANIM_SET_ROW;
++	case VCMOD_LIST_PEDCAT:	return VCMOD_PEDCAT_ROW;
++	}
++	return VCMOD_PEDCHAR_ROW;
++}
++
++static int32
++VCModListCount(int32 list)
++{
++	switch (list) {
++	case VCMOD_LIST_ANIM:	return ARRAY_SIZE(aVCModAnimGroupNames);
++	case VCMOD_LIST_PEDCAT:	return NUM_VCMOD_PEDCATS;
++	case VCMOD_LIST_RIDEZONE:	return VCModRideZoneCount();
++	}
++	return VCModPedModelCount(nVCModPedCategory);
++}
++
++// the first entry drawn: lists that fit show everything, longer ones scroll
++static int32
++VCModListFirst(int32 list)
++{
++	int32 max = VCModListCount(list) - VCMOD_LIST_ROWS;
++	if (max < 0)
++		max = 0;
++	if (nVCModListScroll > max)
++		nVCModListScroll = max;
++	return nVCModListScroll;
++}
++
++// the character being worn right now is the whole state, so the panel reads it
++// off the ped instead of keeping a second copy of the choice
++static int16
++VCModCurrentPedModel(void)
++{
++	CPlayerPed *player = FindPlayerPed();
++	if (player == nil)
++		return MI_PLAYER;
++	return player->GetModelIndex();
++}
++
++static const char *
++VCModCurrentPedLabel(void)
++{
++	int16 modelIndex = VCModCurrentPedModel();
++	if (modelIndex == MI_PLAYER)
++		return "player (Tommy)";
++
++	CBaseModelInfo *mi = CModelInfo::GetModelInfo(modelIndex);
++	if (mi == nil)
++		return "unknown";
++	return mi->GetModelName();
++}
++
++static const char *
++VCModListLabel(int32 list, int32 entry, bool *selected)
++{
++	static char missing[24];
++
++	switch (list) {
++	case VCMOD_LIST_ANIM:
++		*selected = entry == nVCModAnimChoice;
++		return aVCModAnimGroupNames[entry];
++	case VCMOD_LIST_PEDCAT:
++		*selected = entry == nVCModPedCategory;
++		return aVCModPedCategoryNames[entry];
++
++	case VCMOD_LIST_RIDEZONE: {
++		int32 zoneIndex;
++		const char *name;
++		if (!VCModRideZoneAt(entry, &zoneIndex, &name, nil))
++			return "unknown";
++		// the stored value is the zone index, and cruise is -1 rather than entry 0
++		*selected = zoneIndex == nVCModRideZone;
++		return name;
++	}
++	}
++
++	int16 modelIndex = MI_PLAYER;
++	const char *name = nil;
++	if (!VCModPedModelAt(nVCModPedCategory, entry, &modelIndex, &name) || name == nil) {
++		snprintf(missing, sizeof(missing), "model %d", (int) entry);
++		*selected = false;
++		return missing;
++	}
++	*selected = modelIndex == VCModCurrentPedModel();
++	return name;
++}
++
++static void
++VCModListPick(int32 list, int32 entry)
++{
++	switch (list) {
++	case VCMOD_LIST_ANIM:
++		nVCModAnimChoice = entry;
++		bVCModPlayerNpcAnims = true;
++		break;
++
++	case VCMOD_LIST_PEDCAT:
++		nVCModPedCategory = entry;
++		nVCModListScroll = 0;
++		break;
++
++	case VCMOD_LIST_RIDEZONE: {
++		int32 zoneIndex;
++		if (VCModRideZoneAt(entry, &zoneIndex, nil, nil))
++			nVCModRideZone = zoneIndex;
++		break;
++	}
++
++	default: {
++		// the swap streams models and destroys clumps, so it waits for the update
++		// pass rather than running inside the render
++		int16 modelIndex;
++		const char *name;
++		if (VCModPedModelAt(nVCModPedCategory, entry, &modelIndex, &name))
++			nVCModPedModel = modelIndex;
++		break;
++	}
++	}
++	nVCModOpenList = VCMOD_LIST_NONE;
 +}
 +
 +static void
@@ -436,21 +986,51 @@ index 0000000..440edb1
 +	VCModTriangle(cam, (float) x, (float) y, (float) x, y + 19.0f, x + 14.0f, y + 10.0f, 255, 255, 255);
 +}
 +
++// the two-finger scroll is the only gesture the trackpad has left once aiming
++// owns the hold, so it is what moves through a list
++static void
++VCModScroll(CPad *pad)
++{
++	if (nVCModOpenList == VCMOD_LIST_NONE)
++		return;
++
++	int32 max = VCModListCount(nVCModOpenList) - VCMOD_LIST_ROWS;
++	if (max < 0)
++		max = 0;
++
++	if (pad->GetMouseWheelUpJustDown())
++		nVCModListScroll--;
++	if (pad->GetMouseWheelDownJustDown())
++		nVCModListScroll++;
++	if (nVCModListScroll < 0)
++		nVCModListScroll = 0;
++	if (nVCModListScroll > max)
++		nVCModListScroll = max;
++
++	// browsing the roster must not cycle weapons underneath the cursor
++	pad->NewMouseControllerState.WHEELUP = false;
++	pad->NewMouseControllerState.WHEELDN = false;
++}
++
 +static void
 +VCModClick(CPad *pad)
 +{
 +	if (!(pad->NewMouseControllerState.LMB && !pad->OldMouseControllerState.LMB))
 +		return;
 +
-+	if (bVCModAnimListOpen) {
-+		for (uint32 k = 0; k < ARRAY_SIZE(aVCModAnimGroupNames); k++) {
-+			if (!VCModCursorInRect(fVCModCursorX, fVCModCursorY, VCModListX(), VCModListRowY(k),
-+					VCMOD_VALUE_COLS * nVCModCharW, nVCModCharH))
++	if (nVCModOpenList != VCMOD_LIST_NONE) {
++		int32 anchor = VCModListAnchorRow(nVCModOpenList);
++		int32 first = VCModListFirst(nVCModOpenList);
++		int32 count = VCModListCount(nVCModOpenList);
++		if (count > first + VCMOD_LIST_ROWS)
++			count = first + VCMOD_LIST_ROWS;
++
++		for (int32 entry = first; entry < count; entry++) {
++			if (!VCModCursorInRect(fVCModCursorX, fVCModCursorY, VCModListX(),
++					VCModListRowY(anchor, entry - first), VCMOD_VALUE_COLS * nVCModCharW, nVCModCharH))
 +				continue;
 +
-+			nVCModAnimChoice = k;
-+			bVCModPlayerNpcAnims = true;
-+			bVCModAnimListOpen = false;
++			VCModListPick(nVCModOpenList, entry);
 +			return;
 +		}
 +	}
@@ -460,14 +1040,30 @@ index 0000000..440edb1
 +		if (!VCModCursorInRect(fVCModCursorX, fVCModCursorY, VCMOD_PANEL_X, VCModRowY(i), rowW, nVCModCharH))
 +			continue;
 +
-+		if (aVCModRows[i].state)
++		switch (aVCModRows[i].kind) {
++		case VCMOD_ROW_FLAG:
++		case VCMOD_ROW_ADRENALINE_MODE:
 +			*aVCModRows[i].state = !*aVCModRows[i].state;
-+		else
-+			bVCModAnimListOpen = !bVCModAnimListOpen;
++			break;
++		case VCMOD_ROW_ANIMSET:
++		case VCMOD_ROW_PEDCAT:
++		case VCMOD_ROW_PEDCHAR:
++		case VCMOD_ROW_RIDEZONE: {
++			int32 want = VCModRowList(aVCModRows[i].kind);
++			nVCModOpenList = nVCModOpenList == want ? VCMOD_LIST_NONE : want;
++			nVCModListScroll = 0;
++			break;
++		}
++		case VCMOD_ROW_MASTER:
++			VCModToggleAll();
++			break;
++		default:
++			break;
++		}
 +		return;
 +	}
 +
-+	bVCModAnimListOpen = false;
++	nVCModOpenList = VCMOD_LIST_NONE;
 +}
 +
 +void
@@ -484,7 +1080,7 @@ index 0000000..440edb1
 +	if (ControlsManager.GetIsKeyboardKeyJustDown((RsKeyCodes)'\\'))
 +		bVCModPanelOpen = !bVCModPanelOpen;
 +	if (!bVCModPanelOpen) {
-+		bVCModAnimListOpen = false;
++		nVCModOpenList = VCMOD_LIST_NONE;
 +		return;
 +	}
 +
@@ -509,6 +1105,7 @@ index 0000000..440edb1
 +	}
 +
 +	VCModUpdateMouse(pad, screenW, screenH);
++	VCModScroll(pad);
 +	VCModClick(pad);
 +
 +	int32 rowW = (VCMOD_NAME_COLS + VCMOD_VALUE_COLS) * nVCModCharW;
@@ -519,33 +1116,97 @@ index 0000000..440edb1
 +		int32 y = VCModRowY(i);
 +		int32 style = VCFONT_OFF;
 +		const char *value = "[--]";
++		char holdCell[16];
 +
-+		if (aVCModRows[i].state) {
++		switch (aVCModRows[i].kind) {
++		case VCMOD_ROW_FLAG:
 +			if (*aVCModRows[i].state) {
 +				style = VCFONT_ON;
 +				value = "[ON]";
++				if (aVCModRows[i].state == &bVCModCopPistol) {
++					snprintf(holdCell, sizeof(holdCell), "[ON  f%d]", nVCModCopHoldFrame);
++					value = holdCell;
++				}
 +			}
-+		} else {
++			break;
++
++		case VCMOD_ROW_ANIMSET:
 +			style = VCFONT_SET;
 +			value = aVCModAnimGroupNames[nVCModAnimChoice];
++			break;
++
++		case VCMOD_ROW_PEDCAT:
++			style = VCFONT_SET;
++			value = aVCModPedCategoryNames[nVCModPedCategory];
++			break;
++
++		case VCMOD_ROW_PEDCHAR:
++			style = VCFONT_SET;
++			value = VCModCurrentPedLabel();
++			break;
++
++		case VCMOD_ROW_RIDEZONE: {
++			const char *name;
++			style = VCFONT_SET;
++			value = VCModRideZoneAt(nVCModRideZone < 0 ? 0 : nVCModRideZone, nil, &name, nil) ?
++				name : "traffic (cruise)";
++			break;
++		}
++
++		case VCMOD_ROW_ADRENALINE_MODE:
++			style = VCFONT_SET;
++			value = bVCModAdrenalineSlowMo ? "[SLOW-MO]  click to switch" : "[NORMAL]   click to switch";
++			break;
++
++		case VCMOD_ROW_MASTER: {
++			int32 n = VCModCountOn();
++			if (n == (int32) ARRAY_SIZE(aVCModSwitched)) {
++				style = VCFONT_ON;
++				value = "[ALL ON]";
++			} else if (n == 0) {
++				value = "[ALL OFF]";
++			} else {
++				style = VCFONT_WARN;
++				value = "[MIXED]";
++			}
++			break;
++		}
 +		}
 +
 +		VCModCell(VCFONT_LABEL, aVCModRows[i].name, VCMOD_PANEL_X, y, VCMOD_NAME_COLS);
 +		VCModCell(style, value, VCMOD_PANEL_X + VCMOD_NAME_COLS*nVCModCharW, y, VCMOD_VALUE_COLS);
 +
 +		// the affordance that this row opens a list rather than flipping anything
-+		if (aVCModRows[i].state == nil)
-+			VCModPrint(VCFONT_MARK, bVCModAnimListOpen ? "-" : "+",
++		int32 rowList = VCModRowList(aVCModRows[i].kind);
++		if (rowList != VCMOD_LIST_NONE)
++			VCModPrint(VCFONT_MARK, nVCModOpenList == rowList ? "-" : "+",
 +				VCMOD_PANEL_X + rowW + nVCModCharW, y);
 +	}
 +
-+	if (bVCModAnimListOpen) {
-+		for (uint32 k = 0; k < ARRAY_SIZE(aVCModAnimGroupNames); k++) {
-+			bool selected = (int32) k == nVCModAnimChoice;
-+			VCModCell(selected ? VCFONT_ON : VCFONT_SET, aVCModAnimGroupNames[k],
-+				VCModListX(), VCModListRowY(k), VCMOD_VALUE_COLS);
++	if (nVCModOpenList != VCMOD_LIST_NONE) {
++		int32 anchor = VCModListAnchorRow(nVCModOpenList);
++		int32 first = VCModListFirst(nVCModOpenList);
++		int32 count = VCModListCount(nVCModOpenList);
++		int32 last = count;
++		if (last > first + VCMOD_LIST_ROWS)
++			last = first + VCMOD_LIST_ROWS;
++
++		for (int32 entry = first; entry < last; entry++) {
++			bool selected = false;
++			const char *label = VCModListLabel(nVCModOpenList, entry, &selected);
++			int32 listY = VCModListRowY(anchor, entry - first);
++			VCModCell(selected ? VCFONT_ON : VCFONT_SET, label, VCModListX(), listY, VCMOD_VALUE_COLS);
 +			if (selected)
-+				VCModPrint(VCFONT_ON, ">", VCModListX() - nVCModCharW, VCModListRowY(k));
++				VCModPrint(VCFONT_ON, ">", VCModListX() - nVCModCharW, listY);
++		}
++
++		// the roster is longer than one list, so mark the directions scroll has left
++		if (count > VCMOD_LIST_ROWS) {
++			int32 markX = VCModListX() + VCMOD_VALUE_COLS * nVCModCharW;
++			if (first > 0)
++				VCModPrint(VCFONT_MARK, "^", markX, VCModListRowY(anchor, 0));
++			if (last < count)
++				VCModPrint(VCFONT_MARK, "v", markX, VCModListRowY(anchor, last - first - 1));
 +		}
 +	}
 +
@@ -555,7 +1216,7 @@ index 0000000..440edb1
 +	if (!bVCModMouseAimLockOn && CCamera::m_bUseMouse3rdPerson)
 +		VCModCell(VCFONT_WARN, "! two-finger hold does nothing", VCMOD_PANEL_X, y++, fullCols);
 +
-+	VCModCell(VCFONT_HINT, "fire G   walk B   close backslash", VCMOD_PANEL_X, y, fullCols);
++	VCModCell(VCFONT_HINT, "fire G   walk B   panel backslash   cheats ctrl-M", VCMOD_PANEL_X, y, fullCols);
 +
 +	// charset glyphs go through the buffered path, so flush them before the cursor
 +	// geometry or the pointer ends up underneath the panel
@@ -565,14 +1226,17 @@ index 0000000..440edb1
 +#endif
 diff --git a/src/extras/vcmodpanel.h b/src/extras/vcmodpanel.h
 new file mode 100644
-index 0000000..8ab32c4
+index 0000000..bb770f9
 --- /dev/null
 +++ b/src/extras/vcmodpanel.h
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,67 @@
 +#ifndef VCMODPANEL_H
 +#define VCMODPANEL_H
 +
 +#include "AnimManager.h"
++#include "Vector.h"
++
++class CVehicle;
 +
 +// Every mod switch lives in vcmodpanel.cpp. The debug menu's "VC Mods" page and the
 +// on-screen panel write these same variables, so the two can never disagree.
@@ -586,20 +1250,170 @@ index 0000000..8ab32c4
 +extern bool bVCModLockOnVehicles;
 +extern bool bVCModNeverWanted;
 +extern bool bVCModLockOnLatch;
++extern bool bVCModAdrenaline;
++extern bool bVCModAdrenalineSlowMo;
++extern bool bVCModCopPistol;
++extern int32 nVCModCopHoldFrame;
++// pending model from the ini, -1 until a character is asked for
++extern int32 nVCModPedModel;
++extern int32 nVCModPedCategory;
++// ride as a passenger while an NPC drives
++extern bool bVCModPassengerMode;
++// -1 rides with traffic, otherwise the index of the zone to drive to
++extern int32 nVCModRideZone;
++
++enum eVCModPedCategory
++{
++	VCMOD_PEDCAT_COPS,
++	VCMOD_PEDCAT_GANGS,
++	VCMOD_PEDCAT_CIVILIANS,
++	VCMOD_PEDCAT_MISSION,
++	NUM_VCMOD_PEDCATS
++};
 +
 +// the group the anim swap wants, false when the swap must stand down
 +bool VCModPickAnimGroup(AssocGroupId *out);
++void VCModSuspendAdrenaline(void);
++
++// the roster: which shelf a ped type sits on, what is on that shelf, and the
++// anim group a model brings with it (false for Tommy and unusable groups)
++int32 VCModPedCategoryOf(int32 pedType);
++int32 VCModPedModelCount(int32 category);
++bool VCModPedModelAt(int32 category, int32 entry, int16 *outIndex, const char **outName);
++bool VCModPedAnimGroupFor(int16 modelIndex, AssocGroupId *out);
++// becomes that model, false when it cannot be done right now
++bool VCModApplyPedModel(int16 modelIndex);
++
++// ride destinations: entry 0 lets traffic drive, the rest are the map zones the
++// game loaded (zone 0 is the whole-map box, so it is never offered)
++int32 VCModRideZoneCount(void);
++bool VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos);
++// takes over an enter-vehicle press so Tommy rides as a passenger; false means
++// the press is not ours and the stock driver entry should happen
++bool VCModPassengerEntry(CVehicle *vehicle);
 +
 +#ifdef DEBUGMENU
 +void VCModPanelRender(void);
 +#endif
 +
 +#endif
+diff --git a/src/peds/PedFight.cpp b/src/peds/PedFight.cpp
+index 8a3b971..456e1d2 100644
+--- a/src/peds/PedFight.cpp
++++ b/src/peds/PedFight.cpp
+@@ -25,6 +25,8 @@
+ #include "Bike.h"
+ #include "Glass.h"
+ #include "SpecialFX.h"
++#include "WeaponInfo.h"
++#include "vcmodpanel.h"
+ 
+ uint16 nPlayerInComboMove;
+ RpClump* flyingClumpTemp;
+@@ -157,6 +159,27 @@ CheckForPedsOnGroundToAttack(CPed *attacker, CPed **pedOnGround)
+ 	return stateToReturn;
+ }
+ 
++// The colt's two-hand pose is the fifth animation of its group (colt45_cop), which
++// upstream gives only to PEDTYPE_COP. WEAPON.DAT sets WEAPONFLAG_COP3_RD on Colt45
++// and on nothing else that owns the anim, so the flag alone decides coverage.
++static AnimationId
++VCModCopFireAnim(CPed *ped, CWeaponInfo *info)
++{
++	if (bVCModCopPistol && ped->IsPlayer() && info->IsFlagSet(WEAPONFLAG_COP3_RD))
++		return CPed::Get3rdFireAnim(info);
++	return ped->GetFireAnimNotDucking(info);
++}
++
++// Holding the cop pose is the same animation, parked at a frame the player picks
++// instead of the loop start weapon.dat only defines for colt45_fire
++static AnimationId
++VCModCopAimAnim(CPed *ped, CWeaponInfo *info)
++{
++	if (bVCModCopPistol && ped->IsPlayer() && info->IsFlagSet(WEAPONFLAG_COP3_RD))
++		return ANIM_WEAPON_FIRE_3RD;
++	return ANIM_WEAPON_FIRE;
++}
++
+ void
+ CPed::SetPointGunAt(CEntity *to)
+ {
+@@ -178,18 +201,19 @@ CPed::SetPointGunAt(CEntity *to)
+ 	SetMoveState(PEDMOVE_STILL);
+ 
+ 	CAnimBlendAssociation *aimAssoc;
++	AnimationId aimAnim = VCModCopAimAnim(this, curWeapon);
+ 
+ 	if (bCrouchWhenShooting && bIsDucking && GetCrouchFireAnim(curWeapon)) {
+ 		aimAssoc = RpAnimBlendClumpGetAssociation(GetClump(), GetCrouchFireAnim(curWeapon));
+ 	} else {
+-		aimAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_WEAPON_FIRE);
++		aimAssoc = RpAnimBlendClumpGetAssociation(GetClump(), aimAnim);
+ 	}
+ 
+ 	if (!aimAssoc || aimAssoc->blendDelta < 0.0f) {
+ 		if (bCrouchWhenShooting && bIsDucking && GetCrouchFireAnim(curWeapon)) {
+ 			aimAssoc = CAnimManager::BlendAnimation(GetClump(), curWeapon->m_AnimToPlay, GetCrouchFireAnim(curWeapon), 4.0f);
+ 		} else {
+-			aimAssoc = CAnimManager::AddAnimation(GetClump(), curWeapon->m_AnimToPlay, ANIM_WEAPON_FIRE);
++			aimAssoc = CAnimManager::AddAnimation(GetClump(), curWeapon->m_AnimToPlay, aimAnim);
+ 		}
+ 
+ 		aimAssoc->blendAmount = 0.0f;
+@@ -203,8 +227,11 @@ void
+ CPed::PointGunAt(void)
+ {
+ 	CWeaponInfo *weaponInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
+-	float animLoopStart = weaponInfo->m_fAnimLoopStart;
+-	CAnimBlendAssociation *weaponAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_WEAPON_FIRE);
++	AnimationId aimAnim = VCModCopAimAnim(this, weaponInfo);
++	// the cop pose parks at the player's frame: weapon.dat's loop start is defined
++	// for colt45_fire and lands mid-recoil on the cop animation
++	float animLoopStart = aimAnim == ANIM_WEAPON_FIRE_3RD ? nVCModCopHoldFrame / 30.0f : weaponInfo->m_fAnimLoopStart;
++	CAnimBlendAssociation *weaponAssoc = RpAnimBlendClumpGetAssociation(GetClump(), aimAnim);
+ 	if (!weaponAssoc || weaponAssoc->blendDelta < 0.0f) {
+ 		if (weaponInfo->IsFlagSet(WEAPONFLAG_CROUCHFIRE)) {
+ 			weaponAssoc = RpAnimBlendClumpGetAssociation(GetClump(), GetCrouchFireAnim(weaponInfo));
+@@ -240,7 +267,7 @@ CPed::ClearPointGunAt(void)
+ 		RestorePreviousState();
+ 	}
+ 	weaponInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
+-	animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_WEAPON_FIRE);
++	animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), VCModCopAimAnim(this, weaponInfo));
+ 	if (!animAssoc || animAssoc->blendDelta < 0.0f) {
+ 		if (weaponInfo->IsFlagSet(WEAPONFLAG_CROUCHFIRE)) {
+ 			animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), GetCrouchFireAnim(weaponInfo));
+@@ -417,10 +444,10 @@ CPed::SetAttack(CEntity *victim)
+ 					if (pedOnGround > PED_IN_FRONT_OF_ATTACKER || pedOnGround == NO_PED && bIsStanding && m_pCurSurface && m_pCurSurface->IsVehicle()) {
+ 						fireAnim = GetFireAnimGround(curWeapon, false);
+ 					} else {
+-						fireAnim = GetFireAnimNotDucking(curWeapon);
++						fireAnim = VCModCopFireAnim(this, curWeapon);
+ 					}
+ 				} else {
+-					fireAnim = GetFireAnimNotDucking(curWeapon);
++					fireAnim = VCModCopFireAnim(this, curWeapon);
+ 				}
+ 
+ 				CAnimBlendAssociation* curFireAssoc = RpAnimBlendClumpGetAssociation(GetClump(), fireAnim);
+@@ -788,7 +815,7 @@ CPed::Attack(void)
+ 					          !GetFireAnimGround(ourWeapon, false) || 
+ 						 CheckForPedsOnGroundToAttack(this, nil) < PED_ON_THE_FLOOR) {
+ 
+-						weaponAnimAssoc = CAnimManager::BlendAnimation(GetClump(), ourWeapon->m_AnimToPlay, GetFireAnimNotDucking(ourWeapon), 8.0f);
++						weaponAnimAssoc = CAnimManager::BlendAnimation(GetClump(), ourWeapon->m_AnimToPlay, VCModCopFireAnim(this, ourWeapon), 8.0f);
+ 
+ 					} else {
+ 						weaponAnimAssoc = CAnimManager::BlendAnimation(GetClump(), ourWeapon->m_AnimToPlay, GetFireAnimGround(ourWeapon, false), 8.0f);
 diff --git a/src/peds/PlayerPed.cpp b/src/peds/PlayerPed.cpp
-index cd8da42..6d111f9 100644
+index cd8da42..5e0ebf5 100644
 --- a/src/peds/PlayerPed.cpp
 +++ b/src/peds/PlayerPed.cpp
-@@ -12,6 +12,8 @@
+@@ -9,9 +9,12 @@
+ #include "Camera.h"
+ #include "WeaponEffects.h"
+ #include "ModelIndices.h"
++#include "ModelInfo.h"
  #include "World.h"
  #include "RpAnimBlend.h"
  #include "AnimBlendAssociation.h"
@@ -608,7 +1422,13 @@ index cd8da42..6d111f9 100644
  #include "General.h"
  #include "Pools.h"
  #include "Darkel.h"
-@@ -24,9 +26,22 @@
+@@ -21,12 +24,37 @@
+ #include "Population.h"
+ #include "Script.h"
+ #include "Replay.h"
++#include "CutsceneMgr.h"
++#include "Vehicle.h"
++#include "Hud.h"
  #include "PedPlacement.h"
  #include "VarConsole.h"
  #include "SaveBuf.h"
@@ -619,6 +1439,15 @@ index cd8da42..6d111f9 100644
  
 +// whether the aim button is currently latched down
 +static bool bVCModLockOnHeld;
++
++// Keep runtime ownership outside the saved player layout.
++static CPlayerPed *pVCModAdrenalinePlayer;
++static float fVCModAdrenalineRestoreScale;
++static bool bVCModAdrenalineSlowing;
++
++// the model index this mod asked streaming to keep, so a swap or a replaced ped
++// can hand it back
++static int32 nVCModHeldModelRequest;
 +
 +#define KEYDOWN(k)     ControlsManager.GetIsKeyboardKeyDown((RsKeyCodes)k)
 +#define KEYJUSTDOWN(k) ControlsManager.GetIsKeyboardKeyJustDown((RsKeyCodes)k)
@@ -631,7 +1460,379 @@ index cd8da42..6d111f9 100644
  bool CPlayerPed::bDontAllowWeaponChange;
  #ifndef MASTER
  bool CPlayerPed::bDebugPlayerInfo;
-@@ -255,7 +270,11 @@ CPlayerPed::ReApplyMoveAnims(void)
+@@ -49,6 +77,8 @@ GetPadFromPlayer(CPlayerPed*)
+ 
+ CPlayerPed::~CPlayerPed()
+ {
++	if (pVCModAdrenalinePlayer == this)
++		ClearAdrenaline();
+ 	delete m_pWanted;
+ }
+ 
+@@ -153,12 +183,362 @@ CPlayerPed::AnnoyPlayerPed(bool annoyedByPassingEntity)
+ void
+ CPlayerPed::ClearAdrenaline(void)
+ {
++	if (pVCModAdrenalinePlayer == this) {
++		if (bVCModAdrenalineSlowing && CTimer::GetTimeScale() == 1.0f / 3)
++			CTimer::SetTimeScale(fVCModAdrenalineRestoreScale);
++		pVCModAdrenalinePlayer = nil;
++		bVCModAdrenalineSlowing = false;
++		m_bAdrenalineActive = false;
++		m_nAdrenalineTime = 0;
++
++		const AnimationId moveAnims[] = { ANIM_STD_STARTWALK, ANIM_STD_WALK, ANIM_STD_RUN, ANIM_STD_RUNFAST };
++		for (uint32 i = 0; i < ARRAY_SIZE(moveAnims); i++) {
++			CAnimBlendAssociation *assoc = RpAnimBlendClumpGetAssociation(GetClump(), moveAnims[i]);
++			if (assoc)
++				assoc->speed = 1.0f;
++		}
++		return;
++	}
+ 	if (m_bAdrenalineActive && m_nAdrenalineTime != 0) {
+ 		m_nAdrenalineTime = 0;
+ 		CTimer::SetTimeScale(1.0f);
+ 	}
+ }
+ 
++void
++VCModSuspendAdrenaline(void)
++{
++	if (pVCModAdrenalinePlayer)
++		pVCModAdrenalinePlayer->ClearAdrenaline();
++}
++
++static void
++VCModUpdateAdrenaline(CPlayerPed *player)
++{
++	CPad *pad = GetPadFromPlayer(player);
++	bool allowed = player == FindPlayerPed() && bVCModAdrenaline && pad && !pad->ArePlayerControlsDisabled() &&
++		!player->bInVehicle && !player->DyingOrDead() && player->m_nPedState != PED_ARRESTED &&
++		!CCutsceneMgr::IsRunning() && !CReplay::IsPlayingBack();
++	if (!allowed) {
++		if (pVCModAdrenalinePlayer == player)
++			player->ClearAdrenaline();
++		return;
++	}
++
++	if (pVCModAdrenalinePlayer != player) {
++		if (pVCModAdrenalinePlayer)
++			pVCModAdrenalinePlayer->ClearAdrenaline();
++		pVCModAdrenalinePlayer = player;
++		bVCModAdrenalineSlowing = player->m_bAdrenalineActive && CTimer::GetTimeScale() == 1.0f / 3;
++		fVCModAdrenalineRestoreScale = bVCModAdrenalineSlowing ? 1.0f : CTimer::GetTimeScale();
++		player->m_bAdrenalineActive = true;
++		player->m_nAdrenalineTime = CTimer::GetTimeInMilliseconds() + 20000;
++		player->m_fCurrentStamina = player->m_fMaxStamina;
++	}
++
++	if (bVCModAdrenalineSlowMo) {
++		if (!bVCModAdrenalineSlowing || CTimer::GetTimeScale() != 1.0f / 3)
++			fVCModAdrenalineRestoreScale = CTimer::GetTimeScale();
++		CTimer::SetTimeScale(1.0f / 3);
++	} else if (bVCModAdrenalineSlowing && CTimer::GetTimeScale() == 1.0f / 3) {
++		CTimer::SetTimeScale(fVCModAdrenalineRestoreScale);
++	}
++	bVCModAdrenalineSlowing = bVCModAdrenalineSlowMo;
++}
++
++// the engine's own way of wearing another model, from ChangePlayerCheat: the ped
++// keeps its identity and only the clump underneath it is replaced
++bool
++VCModApplyPedModel(int16 modelIndex)
++{
++	CPlayerPed *player = FindPlayerPed();
++	if (player == nil || !player->IsPedInControl())
++		return false;
++
++	int32 oldIndex = player->GetModelIndex();
++	if (modelIndex == oldIndex)
++		return true;
++	if (modelIndex < 0)
++		return false;
++
++	CBaseModelInfo *mi = CModelInfo::GetModelInfo(modelIndex);
++	if (mi == nil || mi->GetModelType() != MITYPE_PED)
++		return false;
++
++	if (modelIndex == MI_PLAYER) {
++		if (!CStreaming::HasModelLoaded(MI_PLAYER)) {
++			CStreaming::RequestSpecialModel(MI_PLAYER, "player", STREAMFLAGS_DEPENDENCY | STREAMFLAGS_DONT_REMOVE);
++			CStreaming::LoadAllRequestedModels(false);
++		}
++	} else if (modelIndex >= MI_SPECIAL01 && modelIndex <= MI_LAST_PED) {
++		// default.ide calls these slots special01..21 and no file answers to that;
++		// the body has to be named before the slot has anything to stream
++		const char *name = CStreaming::GetSpecialCharModelName(modelIndex - MI_SPECIAL01);
++		if (name == nil)
++			return false;
++		CStreaming::RequestSpecialModel(modelIndex, name, STREAMFLAGS_DEPENDENCY | STREAMFLAGS_DONT_REMOVE);
++		CStreaming::LoadAllRequestedModels(false);
++	} else {
++		CStreaming::RequestModel(modelIndex, STREAMFLAGS_DEPENDENCY | STREAMFLAGS_DONT_REMOVE);
++		CStreaming::LoadAllRequestedModels(false);
++	}
++	// a slot can report itself loaded while streaming nothing, and SetModelIndex
++	// then hands a nil clump to the anim blend
++	if (!CStreaming::HasModelLoaded(modelIndex) || mi->GetRwObject() == nil) {
++		// nothing was rebuilt, so only the request that failed is worth dropping
++		CStreaming::SetModelIsDeletable(modelIndex);
++		return false;
++	}
++
++	AssocGroupId animGroup;
++	if (!VCModPedAnimGroupFor(modelIndex, &animGroup))
++		animGroup = ASSOCGRP_PLAYER;
++
++	player->DeleteRwObject();
++	player->m_modelIndex = -1;
++	player->SetModelIndex(modelIndex);
++	// SetModelIndex takes both of these from the model, and Tommy is still Tommy
++	player->SetPedStats(PEDSTAT_PLAYER);
++	player->m_headingRate = player->m_pedStats->m_headingChangeRate;
++	player->m_animGroup = animGroup;
++	player->ReApplyMoveAnims();
++
++	// the held weapon is its own atomic parented to the hand each frame, so it
++	// outlived the clump and has to be freed before the new one is attached
++	if (player->m_wepModelID >= 0) {
++		int32 w = player->m_wepModelID;
++		player->RemoveWeaponModel(-1);
++		player->AddWeaponModel(w);
++	}
++
++	// only release what this mod pinned: a model a save or a script put on the
++	// player was never ours to hand back
++	if (nVCModHeldModelRequest >= 0 && nVCModHeldModelRequest != modelIndex) {
++		CStreaming::SetModelIsDeletable(nVCModHeldModelRequest);
++		nVCModHeldModelRequest = -1;
++	}
++	if (modelIndex != MI_PLAYER)
++		nVCModHeldModelRequest = modelIndex;
++
++	return true;
++}
++
++static void
++VCModApplyPedModelDefault(void)
++{
++	if (nVCModPedModel < 0)
++		return;
++
++	CPlayerPed *player = FindPlayerPed();
++	if (player == nil || !player->IsPedInControl())
++		return;
++
++	// one try per start: a model that cannot be worn is not worth requesting
++	// again on every frame
++	int32 want = nVCModPedModel;
++	nVCModPedModel = -1;
++	VCModApplyPedModel((int16) want);
++}
++
++// respawn rebuilds the ped through Undress/Dress, which takes stats and group
++// from whatever model is worn, and a save can swap the ped out entirely, so the
++// mod's own bookkeeping has to be re-checked rather than trusted
++static void
++VCModReconcilePedModel(CPlayerPed *player)
++{
++	int32 worn = player->GetModelIndex();
++
++	if (nVCModHeldModelRequest >= 0 && nVCModHeldModelRequest != worn) {
++		CStreaming::SetModelIsDeletable(nVCModHeldModelRequest);
++		nVCModHeldModelRequest = -1;
++	}
++
++	if (worn == MI_PLAYER)
++		return;
++
++	if (player->m_pedStats->m_type != PEDSTAT_PLAYER) {
++		player->SetPedStats(PEDSTAT_PLAYER);
++		player->m_headingRate = player->m_pedStats->m_headingChangeRate;
++	}
++}
++
++// ---- passenger mode: an NPC drives, Tommy rides along ---------------------
++// the ride is tracked by pool index because the car can be destroyed or blown up
++// between the enter press and actually sitting down
++static int32 nVCModRideHandle = -1;
++static bool bVCModRideWaiting;
++static bool bVCModRideSpawnedDriver;
++static bool bVCModRideHasDestination;
++static CVector vecVCModRideDestination;
++
++static void
++VCModRideNotice(const char *text)
++{
++	static wchar notice[64];
++	int32 i;
++	for (i = 0; i < (int32) ARRAY_SIZE(notice) - 1 && text[i] != '\0'; i++)
++		notice[i] = (wchar) text[i];
++	notice[i] = 0;
++	CHud::SetHelpMessage(notice, false);
++}
++
++static void
++VCModRideStandDown(void)
++{
++	nVCModRideHandle = -1;
++	bVCModRideWaiting = false;
++	bVCModRideSpawnedDriver = false;
++	bVCModRideHasDestination = false;
++}
++
++static CVehicle *
++VCModRideVehicle(void)
++{
++	if (nVCModRideHandle < 0)
++		return nil;
++	// a handle, not an index: GetAt drops it once the slot has been recycled
++	return CPools::GetVehiclePool()->GetAt(nVCModRideHandle);
++}
++
++static bool
++VCModPassengerSeatFree(CVehicle *veh)
++{
++	for (int32 i = 0; i < veh->m_nNumMaxPassengers; i++)
++		if (veh->pPassengers[i] == nil)
++			return true;
++	return false;
++}
++
++bool
++VCModPassengerEntry(CVehicle *vehicle)
++{
++	if (!bVCModPassengerMode)
++		return false;
++
++	CPlayerPed *player = FindPlayerPed();
++	if (player == nil || !player->IsPedInControl() || player->bInVehicle || vehicle == nil)
++		return false;
++
++	// planes and helis have no passenger seat at all, trains are not rideable here
++	if (vehicle->IsPlane() || vehicle->IsHeli() || vehicle->IsTrain()) {
++		VCModRideNotice("passenger mode: no seat in this");
++		return true;
++	}
++	if (!VCModPassengerSeatFree(vehicle)) {
++		VCModRideNotice("passenger mode: every seat taken");
++		return true;
++	}
++
++	bVCModRideSpawnedDriver = false;
++	if (vehicle->pDriver == nil) {
++		// a parked car has nowhere to put a driver until the traffic counts move it
++		if (vehicle->VehicleCreatedBy == PARKED_VEHICLE) {
++			vehicle->VehicleCreatedBy = RANDOM_VEHICLE;
++			CCarCtrl::NumRandomCars++;
++			CCarCtrl::NumParkedCars--;
++		}
++		// script and mission cars are not ours to crew
++		if (vehicle->VehicleCreatedBy != RANDOM_VEHICLE) {
++			VCModRideNotice("passenger mode: nobody to drive this");
++			return true;
++		}
++		if (vehicle->SetUpDriver() == nil) {
++			VCModRideNotice("passenger mode: nobody to drive this");
++			return true;
++		}
++		bVCModRideSpawnedDriver = true;
++	}
++
++	// hold the car until Tommy is aboard, the way the shortcut taxi waits
++	vehicle->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
++	vehicle->AutoPilot.m_nCruiseSpeed = 0;
++
++	player->SetObjective(OBJECTIVE_ENTER_CAR_AS_PASSENGER, vehicle);
++
++	nVCModRideHandle = CPools::GetVehiclePool()->GetIndex(vehicle);
++	bVCModRideWaiting = true;
++	return true;
++}
++
++// traffic driving for the driver we are riding with
++static void
++VCModRideStartCruise(CVehicle *veh)
++{
++	CCarCtrl::JoinCarWithRoadSystem(veh);
++	veh->AutoPilot.m_nCarMission = MISSION_CRUISE;
++	veh->AutoPilot.m_nTempAction = TEMPACT_NONE;
++	veh->AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_AVOID_CARS;
++	veh->AutoPilot.m_nCruiseSpeed = 25;
++}
++
++static void
++VCModUpdateRide(CPlayerPed *player)
++{
++	if (nVCModRideHandle < 0)
++		return;
++
++	CVehicle *veh = VCModRideVehicle();
++	if (veh == nil) {
++		VCModRideStandDown();
++		return;
++	}
++
++	if (bVCModRideWaiting) {
++		// still walking to the door, or the objective was taken away by something else
++		if (!player->InVehicle() || player->m_pMyVehicle != veh) {
++			if (player->m_objective != OBJECTIVE_ENTER_CAR_AS_PASSENGER || player->m_carInObjective != veh)
++				VCModRideStandDown();
++			return;
++		}
++		bVCModRideWaiting = false;
++
++		// a boat with a driver we conjured up has no route to follow, so it waits
++		// with someone at the wheel instead of guessing at water pathfinding
++		if (veh->IsBoat() && bVCModRideSpawnedDriver)
++			return;
++
++		int32 zoneIndex;
++		CVector dest;
++		if (VCModRideZoneAt(nVCModRideZone, &zoneIndex, nil, &dest) && zoneIndex >= 0) {
++			CCarCtrl::JoinCarWithRoadSystemGotoCoors(veh, dest, false);
++			veh->AutoPilot.m_nCarMission = MISSION_GOTOCOORDS;
++			veh->AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_AVOID_CARS;
++			veh->AutoPilot.m_nCruiseSpeed = 40;
++			vecVCModRideDestination = dest;
++			bVCModRideHasDestination = true;
++		} else {
++			VCModRideStartCruise(veh);
++		}
++		return;
++	}
++
++	// out of the car, or it went away: the ride is over either way
++	if (!player->InVehicle() || player->m_pMyVehicle != veh) {
++		VCModRideStandDown();
++		return;
++	}
++
++	if (bVCModRideHasDestination &&
++			(veh->GetPosition() - vecVCModRideDestination).Magnitude2D() < 20.0f) {
++		veh->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
++		veh->AutoPilot.m_nCruiseSpeed = 0;
++		VCModRideStandDown();
++		VCModRideNotice("passenger mode: arrived");
++	}
++}
++
++// which group the player wears: the picker when it is on, otherwise whatever the
++// character model brought, and neither while the stock logic needs its own
++static bool
++VCModPlayerAnimGroup(CPlayerPed *player, bool strafing, AssocGroupId *out)
++{
++	if (strafing)
++		return false;
++	if (bVCModPlayerNpcAnims)
++		return VCModPickAnimGroup(out);
++	return VCModPedAnimGroupFor(player->GetModelIndex(), out);
++}
++
+ CPlayerInfo *
+ CPlayerPed::GetPlayerInfoForThisPlayerPed()
+ {
+@@ -255,7 +635,11 @@ CPlayerPed::ReApplyMoveAnims(void)
  	for(int i = 0; i < ARRAY_SIZE(moveAnims); i++) {
  		CAnimBlendAssociation *curMoveAssoc = RpAnimBlendClumpGetAssociation(GetClump(), moveAnims[i]);
  		if (curMoveAssoc) {
@@ -644,7 +1845,50 @@ index cd8da42..6d111f9 100644
  				CAnimBlendAssociation *newMoveAssoc = CAnimManager::AddAnimation(GetClump(), m_animGroup, moveAnims[i]);
  				newMoveAssoc->blendDelta = curMoveAssoc->blendDelta;
  				newMoveAssoc->blendAmount = curMoveAssoc->blendAmount;
-@@ -908,6 +927,11 @@ CPlayerPed::PlayerControl1stPersonRunAround(CPad *padUsed)
+@@ -269,6 +653,8 @@ CPlayerPed::ReApplyMoveAnims(void)
+ void
+ CPlayerPed::SetInitialState(void)
+ {
++	if (pVCModAdrenalinePlayer == this)
++		ClearAdrenaline();
+ 	m_nDrunkenness = 0;
+ 	m_nFadeDrunkenness = 0;
+ 	CMBlur::ClearDrunkBlur();
+@@ -525,7 +911,7 @@ CPlayerPed::SetRealMoveAnim(void)
+ 		}
+ 	}
+ 	if (m_bAdrenalineActive) {
+-		if (CTimer::GetTimeInMilliseconds() > m_nAdrenalineTime) {
++		if (pVCModAdrenalinePlayer != this && CTimer::GetTimeInMilliseconds() > m_nAdrenalineTime) {
+ 			m_bAdrenalineActive = false;
+ 			CTimer::SetTimeScale(1.0f);
+ 			if (curWalkStartAssoc)
+@@ -537,15 +923,19 @@ CPlayerPed::SetRealMoveAnim(void)
+ 			if (curSprintAssoc)
+ 				curSprintAssoc->speed = 1.0f;
+ 		} else {
+-			CTimer::SetTimeScale(1.0f / 3);
++			// the pill's own 2x is the compensation for its slowdown; the mod keeps
++			// the flag-driven perks and leaves the legs at their normal rate
++			float moveAnimSpeed = pVCModAdrenalinePlayer == this ? 1.0f : 2.0f;
++			if (pVCModAdrenalinePlayer != this)
++				CTimer::SetTimeScale(1.0f / 3);
+ 			if (curWalkStartAssoc)
+-				curWalkStartAssoc->speed = 2.0f;
++				curWalkStartAssoc->speed = moveAnimSpeed;
+ 			if (curWalkAssoc)
+-				curWalkAssoc->speed = 2.0f;
++				curWalkAssoc->speed = moveAnimSpeed;
+ 			if (curRunAssoc)
+-				curRunAssoc->speed = 2.0f;
++				curRunAssoc->speed = moveAnimSpeed;
+ 			if (curSprintAssoc)
+-				curSprintAssoc->speed = 2.0f;
++				curSprintAssoc->speed = moveAnimSpeed;
+ 		}
+ 	} else if (curSprintAssoc) {
+ 		if (TheCamera.Cams[TheCamera.ActiveCam].Mode == CCam::MODE_FIXED) {
+@@ -908,6 +1298,11 @@ CPlayerPed::PlayerControl1stPersonRunAround(CPad *padUsed)
  	if (!CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->IsFlagSet(WEAPONFLAG_HEAVY) && padUsed->GetSprint()) {
  		m_nMoveState = PEDMOVE_SPRINT;
  	}
@@ -656,7 +1900,7 @@ index cd8da42..6d111f9 100644
  	if (m_nPedState != PED_FIGHT)
  		SetRealMoveAnim();
  
-@@ -1094,6 +1118,16 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
+@@ -1094,6 +1489,16 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
  		if (obj && !obj->bHasBeenDamaged && CanIKReachThisTarget(obj->GetPosition(), GetWeapon(), true))
  			EvaluateNeighbouringTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, lookToLeft, true);
  	}
@@ -673,7 +1917,7 @@ index cd8da42..6d111f9 100644
  	if (!nextTarget)
  		return false;
  
-@@ -1144,6 +1178,16 @@ CPlayerPed::FindWeaponLockOnTarget(void)
+@@ -1144,6 +1549,16 @@ CPlayerPed::FindWeaponLockOnTarget(void)
  		if (obj && !obj->bHasBeenDamaged && CanIKReachThisTarget(obj->GetPosition(), GetWeapon(), true))
  			EvaluateTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, true);
  	}
@@ -690,33 +1934,31 @@ index cd8da42..6d111f9 100644
  	if (!nextTarget)
  		return false;
  
-@@ -1158,6 +1202,25 @@ void
+@@ -1158,6 +1573,23 @@ void
  CPlayerPed::ProcessAnimGroups(void)
  {
  	AssocGroupId groupToSet;
-+	if (bVCModPlayerNpcAnims) {
-+		// feeding the engine's own re-apply path instead of fighting it each frame
-+		bool strafing = false;
++	// feeding the engine's own re-apply path instead of fighting it each frame
++	bool strafing = false;
 +#ifdef PC_PLAYER_CONTROLS
-+		// an NPC group has no side-step clips, so A and D would play a forward walk;
-+		// leave the stock strafe groups alone while strafing is active
-+		strafing = (m_fWalkAngle <= -DEGTORAD(50.0f) || m_fWalkAngle >= DEGTORAD(50.0f))
-+			&& TheCamera.Cams[TheCamera.ActiveCam].Using3rdPersonMouseCam()
-+			&& CanStrafeOrMouseControl();
++	// an NPC group has no side-step clips, so A and D would play a forward walk;
++	// leave the stock strafe groups alone while strafing is active
++	strafing = (m_fWalkAngle <= -DEGTORAD(50.0f) || m_fWalkAngle >= DEGTORAD(50.0f))
++		&& TheCamera.Cams[TheCamera.ActiveCam].Using3rdPersonMouseCam()
++		&& CanStrafeOrMouseControl();
 +#endif
-+		AssocGroupId want;
-+		if (!strafing && VCModPickAnimGroup(&want)) {
-+			if (m_animGroup != want) {
-+				m_animGroup = want;
-+				ReApplyMoveAnims();
-+			}
-+			return;
++	AssocGroupId want;
++	if (VCModPlayerAnimGroup(this, strafing, &want)) {
++		if (m_animGroup != want) {
++			m_animGroup = want;
++			ReApplyMoveAnims();
 +		}
++		return;
 +	}
  #ifdef PC_PLAYER_CONTROLS
  	if ((m_fWalkAngle <= -DEGTORAD(50.0f) || m_fWalkAngle >= DEGTORAD(50.0f))
  		&& TheCamera.Cams[TheCamera.ActiveCam].Using3rdPersonMouseCam()
-@@ -1263,15 +1326,24 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1263,15 +1695,24 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  		m_wepAccuracy = 95;
  	else
  		m_wepAccuracy = 100;
@@ -742,7 +1984,7 @@ index cd8da42..6d111f9 100644
  #ifdef FREE_CAM
  				if (CCamera::bFreeCam && TheCamera.Cams[0].Using3rdPersonMouseCam()) {
  					m_fRotationCur = CGeneral::LimitRadianAngle(-TheCamera.Orientation);
-@@ -1292,7 +1364,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1292,7 +1733,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				SetPedState(PED_SNIPER_MODE);
  				return;
  			}
@@ -751,7 +1993,7 @@ index cd8da42..6d111f9 100644
  				if (weapon == WEAPONTYPE_ROCKETLAUNCHER || weapon == WEAPONTYPE_SNIPERRIFLE || weapon == WEAPONTYPE_LASERSCOPE || weapon == WEAPONTYPE_CAMERA)
  					return;
  		}
-@@ -1416,14 +1488,14 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1416,14 +1857,14 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  	}
  #endif
  
@@ -769,7 +2011,7 @@ index cd8da42..6d111f9 100644
  #endif		
  			) {
  				ClearWeaponTarget();
-@@ -1457,7 +1529,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1457,7 +1898,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  			TheCamera.SetNewPlayerWeaponMode(CCam::MODE_SYPHON, 0, 0);
  			TheCamera.UpdateAimingCoors(m_pPointGunAt->GetPosition());
  
@@ -778,7 +2020,7 @@ index cd8da42..6d111f9 100644
  			if (padUsed->TargetJustDown() || TheCamera.m_bJustJumpedOutOf1stPersonBecauseOfTarget)
  				FindWeaponLockOnTarget();
  		}
-@@ -1556,6 +1628,12 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
+@@ -1556,6 +1997,12 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
  			m_nMoveState = PEDMOVE_SPRINT;
  	}
  
@@ -791,7 +2033,18 @@ index cd8da42..6d111f9 100644
  	if (m_nPedState != PED_FIGHT)
  		SetRealMoveAnim();
  
-@@ -1705,7 +1783,25 @@ CPlayerPed::ProcessControl(void)
+@@ -1663,6 +2110,10 @@ CPlayerPed::FindNewAttackPoints(void)
+ void
+ CPlayerPed::ProcessControl(void)
+ {
++	VCModUpdateAdrenaline(this);
++	VCModReconcilePedModel(this);
++	VCModApplyPedModelDefault();
++	VCModUpdateRide(this);
+ 	// Mobile has some debug/abandoned cheat thing in here: "gbFrankenTommy"
+ 
+ 	if (m_nEvadeAmount != 0)
+@@ -1705,7 +2156,25 @@ CPlayerPed::ProcessControl(void)
  		return;
  
  	CPad *padUsed = GetPadFromPlayer(this);
@@ -817,7 +2070,7 @@ index cd8da42..6d111f9 100644
  	PruneReferences();
  
  	if (GetWeapon()->m_eWeaponType == WEAPONTYPE_MINIGUN) {
-@@ -1783,7 +1879,9 @@ CPlayerPed::ProcessControl(void)
+@@ -1783,7 +2252,9 @@ CPlayerPed::ProcessControl(void)
  	if (bIsLanding)
  		RunningLand(padUsed);
  
@@ -888,3 +2141,1862 @@ index cada168..ce2fb4c 100644
  			{
  				CWeapon::DoDoomAiming(shooter, fireSource, &target);
  			}
+diff --git a/utils/test_vc_adrenaline.py b/utils/test_vc_adrenaline.py
+new file mode 100644
+index 0000000..457d8dd
+--- /dev/null
++++ b/utils/test_vc_adrenaline.py
+@@ -0,0 +1,459 @@
++#!/usr/bin/env python3
++import re
++import subprocess
++import tempfile
++import unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def braced(source, marker):
++    start = source.index(marker)
++    opening = source.index("{", start)
++    depth = 1
++    end = opening + 1
++    while depth:
++        depth += (source[end] == "{") - (source[end] == "}")
++        end += 1
++    return source[start:end]
++
++
++def run_cpp(source):
++    with tempfile.TemporaryDirectory(prefix="vc-adrenaline-test-") as directory:
++        cpp = Path(directory) / "test.cpp"
++        binary = Path(directory) / "test"
++        cpp.write_text(source)
++        subprocess.run(["c++", "-std=c++98", "-Wall", "-Wextra", str(cpp), "-o", str(binary)], check=True)
++        subprocess.run([str(binary)], check=True)
++
++
++class AdrenalineTests(unittest.TestCase):
++    def test_native_adrenaline_lifecycle(self):
++        source = (ROOT / "src/peds/PlayerPed.cpp").read_text()
++        panel = (ROOT / "src/extras/vcmodpanel.cpp").read_text()
++        self.assertIn("VCModUpdateAdrenaline(CPlayerPed *player)", source)
++        definitions = "\n".join(re.findall(r"^bool bVCModAdrenaline\w*[^;]*;", panel, re.M))
++        state = "\n".join(re.findall(r"^static [^\n;]*VCModAdrenaline[^\n;]*;", source, re.M))
++        clear = braced(source, "void\nCPlayerPed::ClearAdrenaline(void)")
++        update = braced(source, "static void\nVCModUpdateAdrenaline(CPlayerPed *player)")
++        stamina = braced(source, "void\nCPlayerPed::UseSprintEnergy(void)")
++        replay = (ROOT / "src/control/Replay.cpp").read_text()
++        store = braced(replay, "void CReplay::StoreStuffInMem(void)")
++        replay_hook = "\n".join(line for line in store.splitlines() if "VCModSuspendAdrenaline();" in line)
++        suspend_marker = "void\nVCModSuspendAdrenaline(void)"
++        suspend = braced(source, suspend_marker) if suspend_marker in source else ""
++        movement = braced(source, "void\nCPlayerPed::SetRealMoveAnim(void)")
++        movement = movement[movement.index("\tif (m_bAdrenalineActive) {"):]
++        run_cpp(r'''
++#include <cstdio>
++#include <cstdlib>
++#include <stdint.h>
++#define nil NULL
++#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
++typedef uint32_t uint32;
++enum AnimationId { ANIM_STD_STARTWALK, ANIM_STD_WALK, ANIM_STD_RUN, ANIM_STD_RUNFAST };
++enum PedState { PED_IDLE, PED_DIE, PED_DEAD, PED_ARRESTED, PED_DRIVING };
++struct CAnimBlendAssociation { float speed; };
++struct CTimer {
++    static float scale;
++    static uint32 now;
++    static float GetTimeScale() { return scale; }
++    static void SetTimeScale(float value) { scale = value; }
++    static uint32 GetTimeInMilliseconds() { return now; }
++    static float GetTimeStep() { return 1.0f; }
++};
++float CTimer::scale = 1.0f;
++uint32 CTimer::now = 1000;
++struct CPad {
++    bool disabled;
++    bool ArePlayerControlsDisabled() { return disabled; }
++};
++CPad pad = { false };
++struct CCutsceneMgr {
++    static bool running;
++    static bool IsRunning() { return running; }
++};
++bool CCutsceneMgr::running = false;
++struct CReplay {
++    static bool playing;
++    static bool IsPlayingBack() { return playing; }
++};
++bool CReplay::playing = false;
++struct CCam { enum { MODE_FIXED }; int Mode; };
++struct CCamera { CCam Cams[1]; int ActiveCam; } TheCamera = { { { 1 } }, 0 };
++struct CPlayerInfo { bool m_bInfiniteSprint; };
++struct CWorld { static CPlayerInfo Players[1]; static int PlayerInFocus; };
++CPlayerInfo CWorld::Players[1] = { { false } };
++int CWorld::PlayerInFocus = 0;
++struct CPlayerPed {
++    bool bInVehicle, m_bAdrenalineActive;
++    uint32 m_nAdrenalineTime;
++    float m_fCurrentStamina, m_fMaxStamina, m_fStaminaProgress, m_fHealth;
++    PedState m_nPedState;
++    CAnimBlendAssociation animations[4];
++    bool missingAnimations;
++    bool DyingOrDead() { return m_nPedState == PED_DIE || m_nPedState == PED_DEAD; }
++    CPlayerPed *GetClump() { return this; }
++    void ClearAdrenaline();
++    void UseSprintEnergy();
++    void ApplyMovement();
++};
++CPlayerPed *focusedPlayer;
++CPlayerPed *FindPlayerPed() { return focusedPlayer; }
++CPad *GetPadFromPlayer(CPlayerPed*) { return &pad; }
++CAnimBlendAssociation *RpAnimBlendClumpGetAssociation(CPlayerPed *player, AnimationId id) {
++    return player->missingAnimations ? nil : &player->animations[id];
++}
++''' + definitions + "\n" + state + "\n" + clear + "\n" + update + "\n" + stamina + "\n" + suspend +
++            "\nvoid BeforeReplaySnapshot() {\n" + replay_hook + "\n}\n" + r'''
++void CPlayerPed::ApplyMovement() {
++    CAnimBlendAssociation *curWalkStartAssoc = RpAnimBlendClumpGetAssociation(this, ANIM_STD_STARTWALK);
++    CAnimBlendAssociation *curWalkAssoc = RpAnimBlendClumpGetAssociation(this, ANIM_STD_WALK);
++    CAnimBlendAssociation *curRunAssoc = RpAnimBlendClumpGetAssociation(this, ANIM_STD_RUN);
++    CAnimBlendAssociation *curSprintAssoc = RpAnimBlendClumpGetAssociation(this, ANIM_STD_RUNFAST);
++''' + movement + r'''
++static int checks;
++void check(bool condition, const char *name) {
++    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
++    ++checks;
++}
++void reset(CPlayerPed &player) {
++    player.ClearAdrenaline();
++    player.bInVehicle = player.m_bAdrenalineActive = player.missingAnimations = false;
++    player.m_nAdrenalineTime = 0;
++    player.m_nPedState = PED_IDLE;
++    player.m_fHealth = 100.0f;
++    player.m_fCurrentStamina = -100.0f;
++    player.m_fMaxStamina = 150.0f;
++    player.m_fStaminaProgress = 0.0f;
++    for (int i = 0; i < 4; ++i) player.animations[i].speed = 1.0f;
++    bVCModAdrenaline = false;
++    bVCModAdrenalineSlowMo = true;
++    pad.disabled = CCutsceneMgr::running = CReplay::playing = false;
++    CTimer::scale = 1.0f;
++    CTimer::now = 1000;
++    focusedPlayer = &player;
++}
++int main() {
++    CPlayerPed player = {};
++    check(!bVCModAdrenaline && bVCModAdrenalineSlowMo, "defaults are off / slow-mo");
++    reset(player);
++    bVCModAdrenaline = true;
++    VCModUpdateAdrenaline(&player);
++    player.ApplyMovement();
++    check(player.m_bAdrenalineActive, "toggle activates native gameplay flag");
++    check(CTimer::scale == 1.0f / 3, "slow-mo uses native world speed");
++    check(player.m_fCurrentStamina == 150.0f, "activation refills exhausted stamina");
++    for (int i = 0; i < 4; ++i) check(player.animations[i].speed == 1.0f, "mod adrenaline does not double locomotion speed");
++    player.UseSprintEnergy();
++    check(player.m_fCurrentStamina == 150.0f, "native sprint remains unlimited");
++    CTimer::now += 100000;
++    VCModUpdateAdrenaline(&player);
++    player.ApplyMovement();
++    check(player.m_bAdrenalineActive, "toggle outlasts the pill timer");
++    bVCModAdrenalineSlowMo = false;
++    VCModUpdateAdrenaline(&player);
++    player.ApplyMovement();
++    check(CTimer::scale == 1.0f, "switching to normal removes slowdown");
++    check(player.m_bAdrenalineActive && player.animations[1].speed == 1.0f, "normal keeps native flag effects without doubled movement");
++    bVCModAdrenalineSlowMo = true;
++    VCModUpdateAdrenaline(&player);
++    check(CTimer::scale == 1.0f / 3, "normal switches back to slow-mo");
++    bVCModAdrenaline = false;
++    VCModUpdateAdrenaline(&player);
++    check(!player.m_bAdrenalineActive && player.m_nAdrenalineTime == 0, "off clears native flag and timer");
++    check(CTimer::scale == 1.0f, "off restores world speed without a movement update");
++    for (int i = 0; i < 4; ++i) check(player.animations[i].speed == 1.0f, "off resets all locomotion speeds");
++    player.UseSprintEnergy();
++    check(player.m_fCurrentStamina == 149.0f, "off restores stamina drain");
++
++    reset(player);
++    bVCModAdrenaline = true;
++    bVCModAdrenalineSlowMo = false;
++    CTimer::scale = 0.5f;
++    VCModUpdateAdrenaline(&player);
++    player.ApplyMovement();
++    check(CTimer::scale == 0.5f, "normal mode leaves other time-scale effects alone");
++    bVCModAdrenalineSlowMo = true;
++    VCModUpdateAdrenaline(&player);
++    bVCModAdrenalineSlowMo = false;
++    VCModUpdateAdrenaline(&player);
++    check(CTimer::scale == 0.5f, "mode change restores previous time scale");
++    CTimer::scale = 0.75f;
++    bVCModAdrenalineSlowMo = true;
++    VCModUpdateAdrenaline(&player);
++    bVCModAdrenaline = false;
++    VCModUpdateAdrenaline(&player);
++    check(CTimer::scale == 0.75f, "later slow-mo captures current baseline");
++
++    for (int turnOff = 0; turnOff < 2; ++turnOff) {
++        reset(player);
++        bVCModAdrenaline = true;
++        VCModUpdateAdrenaline(&player);
++        CTimer::scale = 0.4f;
++        VCModUpdateAdrenaline(&player);
++        if (turnOff) bVCModAdrenaline = false;
++        else bVCModAdrenalineSlowMo = false;
++        VCModUpdateAdrenaline(&player);
++        check(CTimer::scale == 0.4f, "external time-scale write survives a slow-mo update then off/normal");
++    }
++
++    for (int state = 0; state < 8; ++state) {
++        reset(player);
++        bVCModAdrenaline = true;
++        VCModUpdateAdrenaline(&player);
++        player.ApplyMovement();
++        if (state == 0) { player.bInVehicle = true; player.m_nPedState = PED_DRIVING; }
++        if (state == 1) player.m_nPedState = PED_DIE;
++        if (state == 2) player.m_nPedState = PED_DEAD;
++        if (state == 3) player.m_nPedState = PED_ARRESTED;
++        if (state == 4) pad.disabled = true;
++        if (state == 5) CCutsceneMgr::running = true;
++        if (state == 6) CReplay::playing = true;
++        if (state == 7) focusedPlayer = nil;
++        VCModUpdateAdrenaline(&player);
++        check(!player.m_bAdrenalineActive && CTimer::scale == 1.0f, "suspended states clear effects");
++        VCModUpdateAdrenaline(&player);
++        check(!player.m_bAdrenalineActive, "suspended state does not reactivate");
++        player.bInVehicle = pad.disabled = CCutsceneMgr::running = CReplay::playing = false;
++        player.m_nPedState = PED_IDLE;
++        focusedPlayer = &player;
++        VCModUpdateAdrenaline(&player);
++        check(player.m_bAdrenalineActive, "toggle reapplies on returning to play");
++    }
++    reset(player);
++    bVCModAdrenaline = true;
++    VCModUpdateAdrenaline(&player);
++    player.ApplyMovement();
++    CTimer::scale = 0.2f;
++    player.ClearAdrenaline();
++    check(CTimer::scale == 0.2f, "cleanup preserves a newer scripted time scale");
++    check(!player.m_bAdrenalineActive && player.animations[1].speed == 1.0f, "native clear immediately removes mod effects");
++    player.ClearAdrenaline();
++    check(CTimer::scale == 0.2f, "repeated cleanup is harmless");
++    player.missingAnimations = true;
++    VCModUpdateAdrenaline(&player);
++    player.ClearAdrenaline();
++    check(!player.m_bAdrenalineActive, "cleanup handles absent locomotion associations");
++
++    reset(player);
++    player.m_bAdrenalineActive = true;
++    player.m_nAdrenalineTime = CTimer::now + 20000;
++    VCModUpdateAdrenaline(&player);
++    player.ApplyMovement();
++    check(player.m_bAdrenalineActive && CTimer::scale == 1.0f / 3, "disabled mod leaves native pickup functional");
++    check(player.animations[1].speed == 2.0f, "native pill keeps its own doubled movement when mod is off");
++    CTimer::now += 20001;
++    player.ApplyMovement();
++    check(!player.m_bAdrenalineActive && CTimer::scale == 1.0f, "native pickup still expires");
++    reset(player);
++    player.m_bAdrenalineActive = true;
++    player.m_nAdrenalineTime = CTimer::now + 20000;
++    player.ApplyMovement();
++    bVCModAdrenaline = true;
++    bVCModAdrenalineSlowMo = false;
++    VCModUpdateAdrenaline(&player);
++    player.ApplyMovement();
++    check(player.m_bAdrenalineActive && CTimer::scale == 1.0f, "normal mode takes over an active pill without keeping slowdown");
++    check(player.animations[1].speed == 1.0f, "takeover drops the pill's doubled movement");
++    bVCModAdrenaline = false;
++    VCModUpdateAdrenaline(&player);
++    check(CTimer::scale == 1.0f, "takeover does not restore expired pill slowdown");
++    for (int slow = 0; slow < 2; ++slow) {
++        reset(player);
++        bVCModAdrenaline = true;
++        bVCModAdrenalineSlowMo = slow != 0;
++        VCModUpdateAdrenaline(&player);
++        player.ApplyMovement();
++        CReplay::playing = true;
++        BeforeReplaySnapshot();
++        CPlayerPed snapshot = player;
++        float savedScale = CTimer::scale;
++        player.ClearAdrenaline();
++        bVCModAdrenaline = false;
++        player = snapshot;
++        CTimer::scale = savedScale;
++        CReplay::playing = false;
++        VCModUpdateAdrenaline(&player);
++        player.ApplyMovement();
++        check(!player.m_bAdrenalineActive && CTimer::scale == 1.0f, "replay snapshot cannot resurrect a disabled mod");
++        check(player.animations[1].speed == 1.0f, "replay restores normal locomotion when mod is disabled");
++        bVCModAdrenaline = true;
++        VCModUpdateAdrenaline(&player);
++        check(player.m_bAdrenalineActive, "mod can reactivate after replay restoration");
++    }
++    reset(player);
++    player.m_bAdrenalineActive = true;
++    player.m_nAdrenalineTime = CTimer::now + 20000;
++    BeforeReplaySnapshot();
++    check(player.m_bAdrenalineActive && player.m_nAdrenalineTime > CTimer::now, "replay suspension preserves genuine native pickups");
++    std::printf("PASS: %d native adrenaline checks\n", checks);
++}
++''')
++
++    def test_panel_clicks_and_master_switch(self):
++        panel = (ROOT / "src/extras/vcmodpanel.cpp").read_text()
++        header = (ROOT / "src/extras/vcmodpanel.h").read_text()
++        categoryEnum = re.search(r"enum eVCModPedCategory\s*\{.*?\}", header, re.S).group(0) + ";"
++        self.assertIn("VCMOD_ROW_ADRENALINE_MODE", panel)
++        definitions = "\n".join(re.findall(r"^(?:bool|int32) [bn]VCMod[^;\n]*;", panel, re.M))
++        defines = "\n".join(re.findall(r"^#define VCMOD_[A-Z_]+\s+\d+", panel, re.M))
++        declarations = "\n".join(braced(panel, marker) + ";" for marker in (
++            "static const char *aVCModAnimGroupNames[]", "static const char *aVCModPedCategoryNames[]",
++            "enum eVCModFont", "enum eVCModList", "enum eVCModRowKind", "struct VCModRowDef",
++            "static bool *aVCModSwitched[]", "static const VCModRowDef aVCModRows[]"))
++        functions = "\n".join(braced(panel, marker) for marker in (
++            "static int32\nVCModCountOn(void)", "static void\nVCModToggleAll(void)",
++            "static bool\nVCModCursorInRect(", "static int32\nVCModRowY(int32 row)",
++            "static int32\nVCModListX(void)",
++            "static int32\nVCModListRowY(int32 anchorRow, int32 visible)",
++            "static int32\nVCModRowList(int32 kind)", "static int32\nVCModListAnchorRow(int32 list)",
++            "static int32\nVCModListCount(int32 list)", "static int32\nVCModListFirst(int32 list)",
++            "static int16\nVCModCurrentPedModel(void)", "static const char *\nVCModCurrentPedLabel(void)",
++            "static const char *\nVCModListLabel(int32 list, int32 entry, bool *selected)",
++            "static void\nVCModListPick(int32 list, int32 entry)",
++            "static void\nVCModClick(CPad *pad)"))
++        render = braced(panel, "void\nVCModPanelRender(void)")
++        rows = braced(render, "\tfor (uint32 i = 0; i < ARRAY_SIZE(aVCModRows); i++)")
++        run_cpp(r'''
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <string>
++#include <vector>
++#include <stdint.h>
++#define nil NULL
++#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
++typedef int32_t int32;
++typedef uint32_t uint32;
++typedef int16_t int16;
++typedef uint8_t uint8;
++enum { MI_PLAYER = 0, MI_COP = 1 };
++struct MouseState { bool LMB; };
++struct CPad { MouseState NewMouseControllerState, OldMouseControllerState; };
++struct CBaseModelInfo { uint8 type; char name[24];
++    uint8 GetModelType() { return type; } char *GetModelName() { return name; } };
++CBaseModelInfo pedInfo = { 3, "cop" };
++struct CModelInfo { static CBaseModelInfo *GetModelInfo(int32) { return &pedInfo; } };
++struct CPlayerPed { int32 m_modelIndex; int32 GetModelIndex() { return m_modelIndex; } };
++CPlayerPed ped = { MI_COP };
++CPlayerPed *FindPlayerPed() { return &ped; }
++struct CVector { float x, y, z; };
++int32 VCModRideZoneCount(void) { return 1; }
++bool VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos) {
++    if (entry != 0) return false;
++    if (outZoneIndex) *outZoneIndex = -1;
++    if (outName) *outName = "traffic (cruise)";
++    return true;
++}
++int32 VCModPedModelCount(int32) { return 1; }
++bool VCModPedModelAt(int32, int32, int16 *, const char **) { return false; }
++bool VCModApplyPedModel(int16) { return true; }
++static int32 nVCModOpenList;
++static int32 nVCModListScroll;
++static float fVCModCursorX, fVCModCursorY;
++static int32 nVCModCharW = 8, nVCModCharH = 14;
++struct Cell { int style, x, y, cols; std::string text; };
++std::vector<Cell> cells;
++void VCModCell(int style, const char *text, int x, int y, int cols) {
++    Cell cell = { style, x, y, cols, text };
++    cells.push_back(cell);
++}
++void VCModPrint(int, const char*, int, int) {}
++''' + categoryEnum + "\n" + defines + "\n" + definitions + "\n" + declarations + "\n" + functions + r'''
++void DrawRows() {
++    int32 rowW = (VCMOD_NAME_COLS + VCMOD_VALUE_COLS) * nVCModCharW;
++    cells.clear();
++''' + rows + r'''
++}
++static int checks;
++void check(bool condition, const char *name) {
++    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
++    ++checks;
++}
++int rowNamed(const char *name) {
++    for (uint32 i = 0; i < ARRAY_SIZE(aVCModRows); ++i)
++        if (std::strcmp(name, aVCModRows[i].name) == 0) return i;
++    check(false, "requested panel row exists");
++    return -1;
++}
++void click(int row) {
++    CPad pad = { { true }, { false } };
++    fVCModCursorX = VCMOD_PANEL_X + 10;
++    fVCModCursorY = VCModRowY(row) + nVCModCharH / 2;
++    VCModClick(&pad);
++}
++int main() {
++    int adrenaline = rowNamed("ADRENALINE");
++    int mode = rowNamed("ADRENALINE MODE");
++    DrawRows();
++    check(cells[adrenaline * 2 + 1].text == "[--]", "adrenaline initially renders off");
++    check(cells[mode * 2 + 1].text.find("[SLOW-MO]") == 0, "mode initially renders slow-mo");
++    click(mode);
++    check(!bVCModAdrenalineSlowMo && !bVCModAdrenaline, "mode can change without activating adrenaline");
++    click(adrenaline);
++    check(bVCModAdrenaline && !bVCModAdrenalineSlowMo, "on uses the selected normal-speed mode");
++    DrawRows();
++    check(cells[adrenaline * 2 + 1].text == "[ON]", "adrenaline renders on");
++    check(cells[mode * 2 + 1].text.find("[NORMAL]") == 0, "mode renders normal speed");
++    check(cells[mode * 2 + 1].style == VCFONT_SET, "mode uses choice color");
++    CPad held = { { true }, { true } };
++    VCModClick(&held);
++    check(bVCModAdrenaline, "holding click does not toggle repeatedly");
++    click(mode);
++    check(bVCModAdrenaline && bVCModAdrenalineSlowMo, "mode switches while adrenaline stays on");
++    click(adrenaline);
++    check(!bVCModAdrenaline, "adrenaline switches off");
++    for (uint32 i = 0; i < ARRAY_SIZE(aVCModSwitched); ++i) *aVCModSwitched[i] = false;
++    for (int walk = 0; walk < 2; ++walk) {
++        bVCModWalkMode = walk != 0;
++        bVCModAdrenalineSlowMo = false;
++        click(rowNamed("ALL ON/OFF"));
++        check(bVCModAdrenaline && VCModCountOn() == (int)ARRAY_SIZE(aVCModSwitched), "master enables adrenaline");
++        check(bVCModWalkMode == (walk != 0) && !bVCModAdrenalineSlowMo, "master preserves walk and mode");
++        DrawRows();
++        check(cells[1].text == "[ALL ON]", "master renders all on");
++        click(rowNamed("ALL ON/OFF"));
++        check(!bVCModAdrenaline && VCModCountOn() == 0, "master disables adrenaline");
++        check(bVCModWalkMode == (walk != 0) && !bVCModAdrenalineSlowMo, "master off preserves walk and mode");
++    }
++    click(adrenaline);
++    DrawRows();
++    check(cells[1].text == "[MIXED]", "adrenaline alone counts toward mixed state");
++    click(rowNamed("ANIM SET"));
++    check(nVCModOpenList == VCMOD_LIST_ANIM, "existing animation dropdown still opens");
++    CPad pad = { { true }, { false } };
++    fVCModCursorX = VCModListX() + 10;
++    fVCModCursorY = VCModListRowY(VCMOD_ANIM_SET_ROW, 2) + nVCModCharH / 2;
++    VCModClick(&pad);
++    check(nVCModAnimChoice == 2 && nVCModOpenList == VCMOD_LIST_NONE, "existing animation choice still works");
++    DrawRows();
++    for (uint32 i = 0; i < cells.size(); ++i)
++        check(cells[i].text.size() <= (uint32)cells[i].cols, "row text fits its panel column");
++    std::printf("PASS: %d panel interaction checks\n", checks);
++}
++''')
++
++    def test_controls_and_lifecycle_hooks(self):
++        panel = (ROOT / "src/extras/vcmodpanel.cpp").read_text()
++        header = (ROOT / "src/extras/vcmodpanel.h").read_text()
++        ini = (ROOT / "src/core/re3.cpp").read_text()
++        player = (ROOT / "src/peds/PlayerPed.cpp").read_text()
++        for name in ("bVCModAdrenaline", "bVCModAdrenalineSlowMo"):
++            self.assertIn(f"extern bool {name};", header)
++            self.assertRegex(panel, rf"TWEAKBOOLN?\({name}[,)]")
++        self.assertIn('ReadIniIfExists("VC Mods", "Adrenaline", &bVCModAdrenaline);', ini)
++        self.assertIn('ReadIniIfExists("VC Mods", "AdrenalineSlowMo", &bVCModAdrenalineSlowMo);', ini)
++        switched = braced(panel, "static bool *aVCModSwitched[]")
++        self.assertIn("&bVCModAdrenaline", switched)
++        self.assertNotIn("&bVCModWalkMode", switched)
++        self.assertNotIn("&bVCModAdrenalineSlowMo", switched)
++        control = braced(player, "void\nCPlayerPed::ProcessControl(void)")
++        self.assertLess(control.index("VCModUpdateAdrenaline(this);"), control.index("CPed::ProcessControl();"))
++        for marker in ("CPlayerPed::~CPlayerPed()", "void\nCPlayerPed::SetInitialState(void)"):
++            self.assertIn("ClearAdrenaline();", braced(player, marker))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/utils/test_vc_character.py b/utils/test_vc_character.py
+new file mode 100644
+index 0000000..d372750
+--- /dev/null
++++ b/utils/test_vc_character.py
+@@ -0,0 +1,847 @@
++#!/usr/bin/env python3
++import re
++import subprocess
++import tempfile
++import unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++PANEL = (ROOT / "src/extras/vcmodpanel.cpp").read_text()
++PLAYER = (ROOT / "src/peds/PlayerPed.cpp").read_text()
++HEAD = (ROOT / "src/extras/vcmodpanel.h").read_text()
++INI = (ROOT / "src/core/re3.cpp").read_text()
++STREAMING_HEAD = (ROOT / "src/core/Streaming.h").read_text()
++STREAM = (ROOT / "src/core/Streaming.cpp").read_text()
++
++ENGINE_STUBS = r'''
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <sstream>
++#include <string>
++#include <vector>
++#include <stdint.h>
++#define nil NULL
++#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
++typedef int8_t int8;
++typedef uint8_t uint8;
++typedef int16_t int16;
++typedef uint16_t uint16;
++typedef int32_t int32;
++typedef uint32_t uint32;
++static std::string to_string(int value) {
++    std::ostringstream out;
++    out << value;
++    return out.str();
++}
++'''
++
++
++def braced(source, marker):
++    start = source.index(marker)
++    opening = source.index("{", start)
++    depth = 1
++    end = opening + 1
++    while depth:
++        depth += (source[end] == "{") - (source[end] == "}")
++        end += 1
++    return source[start:end]
++
++
++def run_cpp(source):
++    with tempfile.TemporaryDirectory(prefix="vc-character-test-") as directory:
++        cpp = Path(directory) / "test.cpp"
++        binary = Path(directory) / "test"
++        cpp.write_text(source)
++        build = subprocess.run(["c++", "-std=c++98", "-Wall", "-Wextra", str(cpp), "-o", str(binary)],
++                               capture_output=True, text=True)
++        if build.returncode:
++            print(build.stderr)
++            numbered = "".join(f"{n}: {line}\n" for n, line in enumerate(source.splitlines(), 1))
++            raise RuntimeError("compile failed\n" + numbered)
++        if build.stderr:
++            print(build.stderr)
++        run = subprocess.run([str(binary)], capture_output=True, text=True)
++        if run.returncode:
++            print(run.stdout, run.stderr)
++            raise RuntimeError("test binary failed")
++
++
++class CharacterTests(unittest.TestCase):
++    def test_categories_roster_and_anim_group(self):
++        categories = braced(PANEL, "int32\nVCModPedCategoryOf(int32 pedType)")
++        roster = braced(PANEL, "static bool\nVCModRosterPed(int32 modelIndex, int32 category, int16 *outIndex, const char **outName)")
++        special = braced(PANEL, "static bool\nVCModRosterSpecial(int32 entry, int16 *outIndex, const char **outName)")
++        count = braced(PANEL, "int32\nVCModPedModelCount(int32 category)")
++        at = braced(PANEL, "bool\nVCModPedModelAt(int32 category, int32 entry, int16 *outIndex, const char **outName)")
++        group = braced(PANEL, "bool\nVCModPedAnimGroupFor(int16 modelIndex, AssocGroupId *out)")
++        names = "\n".join(re.findall(r"^static const char \*aVCModPedCategoryNames\[\][^;]*;", PANEL, re.M))
++        moveAnims = "\n".join(re.findall(r"^static const AnimationId aVCModMoveAnims\[\][^;]*;", PANEL, re.M))
++        categoryEnum = re.search(r"enum eVCModPedCategory\s*\{.*?\}", HEAD, re.S).group(0) + ";"
++        playable = braced(PANEL, "static bool\nVCModGroupPlayable(AssocGroupId groupId)")
++        specialNames = re.search(r"static char \*IGnames\[\] = \{.*?\};", STREAM, re.S).group(0)
++        getSpecialName = braced(STREAM, "const char *\nCStreaming::GetSpecialCharModelName(int32 charId)"
++                                  ).replace("CStreaming::", "")
++        run_cpp(ENGINE_STUBS + r'''
++enum ePedType { PEDTYPE_PLAYER1, PEDTYPE_PLAYER2, PEDTYPE_PLAYER3, PEDTYPE_PLAYER4,
++	PEDTYPE_CIVMALE, PEDTYPE_CIVFEMALE, PEDTYPE_COP,
++	PEDTYPE_GANG1, PEDTYPE_GANG2, PEDTYPE_GANG3, PEDTYPE_GANG4, PEDTYPE_GANG5,
++	PEDTYPE_GANG6, PEDTYPE_GANG7, PEDTYPE_GANG8, PEDTYPE_GANG9,
++	PEDTYPE_EMERGENCY, PEDTYPE_FIREMAN, PEDTYPE_CRIMINAL, PEDTYPE_UNUSED1,
++	PEDTYPE_PROSTITUTE, PEDTYPE_SPECIAL, PEDTYPE_UNUSED2, NUM_PEDTYPES };
++enum AssocGroupId { ASSOCGRP_STD, ASSOCGRP_PLAYER, ASSOCGRP_GANG1, ASSOCGRP_OLD, NUM_ANIM_ASSOC_GROUPS };
++enum { MI_PLAYER = 0, MI_COP = 1, MI_SWAT, MI_FBI, MI_ARMY, MI_MEDIC, MI_FIREMAN, MI_MALE01,
++	MI_HFYST = 9, MI_HFOST, MI_CBA, MI_CBB, MI_HNA, MI_HNB, MI_VICE1, MI_WFYG2 = 106,
++	MI_SPECIAL01 = 109, MI_LAST_PED = 129 };
++#define MITYPE_PED 3
++''' + categoryEnum + r'''
++struct CAnimBlendHierarchy { char name[32]; int32 numSequences; void *sequences; };
++CAnimBlendHierarchy goodHierarchy;
++CAnimBlendHierarchy emptyHierarchy;
++struct CAnimBlendAssocEntry { CAnimBlendHierarchy *hierarchy; };
++struct CAnimBlendAssocGroup { int32 numAssociations; CAnimBlendAssocEntry assocList[2]; };
++CAnimBlendAssocGroup groups[NUM_ANIM_ASSOC_GROUPS];
++enum AnimationId { ANIM_STD_IDLE = 0, ANIM_STD_STARTWALK, ANIM_STD_WALK, ANIM_STD_RUN, ANIM_STD_RUNFAST, ANIM_DIE };
++struct CAnimBlendAssociation { CAnimBlendHierarchy *hierarchy; AnimationId animId; };
++CAnimBlendAssociation moveAssocs[5];
++int32 moveAssocCount = 5;
++struct CAnimManager {
++    static CAnimBlendAssocGroup *GetAnimAssocGroups() { return groups; }
++    static CAnimBlendAssociation *GetAnimAssociation(AssocGroupId, AnimationId id) {
++        return (int32) id < moveAssocCount ? &moveAssocs[id] : nil;
++    }
++};
++struct CBaseModelInfo {
++	uint8 type; char name[24];
++	uint8 GetModelType() { return type; }
++	char *GetModelName() { return name; }
++};
++struct CPedModelInfo {
++	uint8 type; char name[24];
++	int32 m_pedType; uint32 m_animGroup;
++	uint8 GetModelType() { return type; }
++	char *GetModelName() { return name; }
++};
++CPedModelInfo models[MI_LAST_PED + 1];
++bool modelUsed[MI_LAST_PED + 1];
++struct CModelInfo { static CBaseModelInfo *GetModelInfo(int32 id) { return modelUsed[id] ? (CBaseModelInfo *) &models[id] : nil; } };
++/* MI_SPECIAL01..21 hold no file of their own: the body is the name the game's
++   cutscene table gives the slot, and only files in the archive can be loaded */
++''' + specialNames + r'''
++struct CDirectory {
++	bool FindItem(const char *name, uint32 &pos, uint32 &size);
++};
++const char *inArchive[8];
++bool CDirectory::FindItem(const char *name, uint32 &pos, uint32 &size) {
++    for (int i = 0; i < 8; ++i) {
++        if (inArchive[i] == nil) break;
++        if (std::strcmp(name, inArchive[i]) == 0) { pos = i; size = 8; return true; }
++    }
++    return false;
++}
++CDirectory extraObjectsDir;
++struct CStreaming {
++    static CDirectory *ms_pExtraObjectsDir;
++    static ''' + getSpecialName + r''';
++};
++CDirectory *CStreaming::ms_pExtraObjectsDir = &extraObjectsDir;
++''' + names + "\n" + moveAnims + "\n" + playable + "\n" + categories + "\n" + special + "\n" + roster + "\n" + count + "\n" + at + "\n" + group + r'''
++static int checks;
++void check(bool condition, const char *name) {
++    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
++    ++checks;
++}
++void addPed(int32 index, const char *name, int32 pedType, int32 animGroup) {
++    modelUsed[index] = true;
++    models[index].type = MITYPE_PED;
++    std::strcpy(models[index].name, name);
++    models[index].m_pedType = pedType;
++    models[index].m_animGroup = animGroup;
++}
++void archive(const char *first, const char *second, const char *third) {
++    for (int i = 0; i < 8; ++i) inArchive[i] = nil;
++    inArchive[0] = first; inArchive[1] = second; inArchive[2] = third;
++}
++int main() {
++    goodHierarchy.numSequences = 1;
++    goodHierarchy.sequences = &goodHierarchy;
++    for (int i = 0; i < 5; ++i) moveAssocs[i].hierarchy = &goodHierarchy;
++    emptyHierarchy.numSequences = 0;
++    emptyHierarchy.sequences = nil;
++    for (int i = 0; i < NUM_ANIM_ASSOC_GROUPS; ++i) {
++        groups[i].numAssociations = 1;
++        groups[i].assocList[0].hierarchy = &goodHierarchy;
++    }
++    check(VCModPedCategoryOf(PEDTYPE_COP) == VCMOD_PEDCAT_COPS, "cop is a cop category");
++    check(VCModPedCategoryOf(PEDTYPE_EMERGENCY) == VCMOD_PEDCAT_COPS, "emergency is a cop category");
++    check(VCModPedCategoryOf(PEDTYPE_FIREMAN) == VCMOD_PEDCAT_COPS, "fireman is a cop category");
++    check(VCModPedCategoryOf(PEDTYPE_GANG1) == VCMOD_PEDCAT_GANGS &&
++          VCModPedCategoryOf(PEDTYPE_GANG9) == VCMOD_PEDCAT_GANGS, "gang types share the gang category");
++    check(VCModPedCategoryOf(PEDTYPE_CIVMALE) == VCMOD_PEDCAT_CIVILIANS &&
++          VCModPedCategoryOf(PEDTYPE_CIVFEMALE) == VCMOD_PEDCAT_CIVILIANS &&
++          VCModPedCategoryOf(PEDTYPE_PROSTITUTE) == VCMOD_PEDCAT_CIVILIANS &&
++          VCModPedCategoryOf(PEDTYPE_CRIMINAL) == VCMOD_PEDCAT_CIVILIANS, "civilians group together");
++    check(VCModPedCategoryOf(PEDTYPE_SPECIAL) == -1, "story bodies do not come from a ped type");
++    for (int t = PEDTYPE_PLAYER1; t <= PEDTYPE_PLAYER4; ++t)
++        check(VCModPedCategoryOf(t) == -1, "player types belong to no category");
++    check(NUM_VCMOD_PEDCATS == 4 && std::strlen(aVCModPedCategoryNames[VCMOD_PEDCAT_COPS]) &&
++          std::strlen(aVCModPedCategoryNames[VCMOD_PEDCAT_MISSION]), "four named categories");
++
++    int16 index; const char *name;
++    check(VCModPedModelAt(VCMOD_PEDCAT_COPS, 0, &index, &name) && index == MI_PLAYER,
++          "Tommy is the first entry of every category");
++    check(VCModPedModelCount(VCMOD_PEDCAT_COPS) == 1, "empty roster is Tommy alone");
++    addPed(MI_COP, "cop", PEDTYPE_COP, ASSOCGRP_PLAYER);
++    addPed(MI_FIREMAN, "fireman", PEDTYPE_FIREMAN, ASSOCGRP_PLAYER);
++    addPed(MI_HFYST, "hfyst", PEDTYPE_CIVFEMALE, ASSOCGRP_OLD);
++    addPed(MI_CBA, "cba", PEDTYPE_GANG1, ASSOCGRP_GANG1);
++    /* default.ide types the placeholder rows as CIVMALE with a generic txd */
++    addPed(MI_SPECIAL01, "special01", PEDTYPE_CIVMALE, ASSOCGRP_STD);
++    addPed(MI_LAST_PED, "special21", PEDTYPE_CIVMALE, ASSOCGRP_STD);
++    modelUsed[MI_SWAT] = true;
++    models[MI_SWAT].type = 7;                 /* not a ped model */
++    std::strcpy(models[MI_SWAT].name, "car");
++    check(VCModPedModelCount(VCMOD_PEDCAT_COPS) == 3, "roster counts Tommy plus that category");
++    check(VCModPedModelCount(VCMOD_PEDCAT_GANGS) == 2, "each category sees only its own peds");
++    check(VCModPedModelCount(VCMOD_PEDCAT_CIVILIANS) == 2, "placeholder special slots are not civilians");
++    check(!VCModPedModelAt(VCMOD_PEDCAT_CIVILIANS, 1, &index, &name) || index != MI_SPECIAL01,
++          "no placeholder special slot is offered as a civilian");
++    check(VCModPedModelCount(VCMOD_PEDCAT_MISSION) == 1, "nothing offered until the archive is read");
++    int32 slots = 0;
++    for (int32 i = 0; i < 64; ++i)
++        if (CStreaming::GetSpecialCharModelName(i) != nil) slots++;
++    check(slots == 21, "the story body table covers every special slot");
++    check(CStreaming::GetSpecialCharModelName(-1) == nil && CStreaming::GetSpecialCharModelName(21) == nil,
++          "story body table refuses out of range slots");
++    check(std::strcmp(CStreaming::GetSpecialCharModelName(12), "igcandy") == 0 &&
++          std::strcmp(CStreaming::GetSpecialCharModelName(20), "igdiaz") == 0,
++          "story bodies come from the game's own table");
++    archive("nobody", "igcandy", "igdiaz");
++    check(VCModPedModelCount(VCMOD_PEDCAT_MISSION) == 3, "only bodies the archive holds are offered");
++    check(VCModPedModelAt(VCMOD_PEDCAT_MISSION, 1, &index, &name) && index == MI_SPECIAL01 + 12 &&
++          std::strcmp(name, "igcandy") == 0, "mission entry names the real body, not special01");
++    check(VCModPedModelAt(VCMOD_PEDCAT_MISSION, 2, &index, &name) && index == MI_LAST_PED &&
++          std::strcmp(name, "igdiaz") == 0, "a slot with no file in the archive is skipped");
++    check(!VCModPedModelAt(VCMOD_PEDCAT_MISSION, 3, &index, &name), "mission entry past the shelf is refused");
++    check(VCModPedModelAt(VCMOD_PEDCAT_COPS, 1, &index, &name) && index == MI_COP &&
++          std::strcmp(name, "cop") == 0, "roster entry uses the model name");
++    check(VCModPedModelAt(VCMOD_PEDCAT_COPS, 2, &index, &name) && index == MI_FIREMAN,
++          "roster walks in model index order");
++    check(!VCModPedModelAt(VCMOD_PEDCAT_COPS, 3, &index, &name), "entry past the roster is refused");
++    check(!VCModPedModelAt(VCMOD_PEDCAT_COPS, -1, &index, &name), "negative entry is refused");
++
++    AssocGroupId groupOut;
++    check(!VCModPedAnimGroupFor(MI_PLAYER, &groupOut), "Tommy keeps the stock weapon groups");
++    check(VCModPedAnimGroupFor(MI_CBA, &groupOut) && groupOut == ASSOCGRP_GANG1,
++          "character brings its own anim group");
++    groups[ASSOCGRP_GANG1].assocList[0].hierarchy = &emptyHierarchy;
++    check(!VCModPedAnimGroupFor(MI_CBA, &groupOut), "unplayable character group falls back");
++    groups[ASSOCGRP_GANG1].assocList[0].hierarchy = nil;
++    check(!VCModPedAnimGroupFor(MI_CBA, &groupOut), "missing hierarchy falls back");
++    groups[ASSOCGRP_GANG1].assocList[0].hierarchy = &goodHierarchy;
++    groups[ASSOCGRP_GANG1].numAssociations = 0;
++    check(!VCModPedAnimGroupFor(MI_CBA, &groupOut), "a group with no associations is refused");
++    groups[ASSOCGRP_GANG1].numAssociations = 1;
++    moveAssocCount = 4;
++    check(!VCModPedAnimGroupFor(MI_CBA, &groupOut), "a group missing a locomotion slot is refused");
++    moveAssocCount = 5;
++    models[MI_CBA].m_animGroup = NUM_ANIM_ASSOC_GROUPS;
++    check(!VCModPedAnimGroupFor(MI_CBA, &groupOut), "an out of range group id is refused");
++    models[MI_CBA].m_animGroup = ASSOCGRP_GANG1;
++    check(VCModPedAnimGroupFor(MI_CBA, &groupOut), "a complete group is still accepted");
++    check(!VCModPedAnimGroupFor(MI_SWAT, &groupOut), "non-ped model has no character group");
++    check(!VCModPedAnimGroupFor(MI_WFYG2 + 1, &groupOut), "unknown model index is refused");
++    std::printf("PASS: %d roster and anim group checks\n", checks);
++}
++''')
++
++    def test_model_swap_recipe(self):
++        swap = braced(PLAYER, "bool\nVCModApplyPedModel(int16 modelIndex)")
++        default = braced(PLAYER, "static void\nVCModApplyPedModelDefault(void)")
++        run_cpp(ENGINE_STUBS + r'''
++enum { MI_PLAYER = 0, MI_COP = 1, MI_SPECIAL01 = 109, MI_SPECIAL13 = 121, MI_LAST_PED = 129 };
++#define MITYPE_PED 3
++#define STREAMFLAGS_DEPENDENCY 1
++#define STREAMFLAGS_DONT_REMOVE 2
++enum ePedStats { PEDSTAT_PLAYER, PEDSTAT_COP };
++enum AssocGroupId { ASSOCGRP_PLAYER, ASSOCGRP_COP };
++std::vector<std::string> events;
++bool clumpPresent = true;
++struct CBaseModelInfo {
++    uint8 type; uint8 GetModelType() { return type; }
++    /* what SetModelIndex dereferences: nil when the slot streamed nothing */
++    void *GetRwObject() { return clumpPresent ? (void *) 1 : nil; }
++};
++CBaseModelInfo pedModel = { MITYPE_PED };
++CBaseModelInfo carModel = { 7 };
++bool modelExists = true;
++struct CModelInfo {
++    static CBaseModelInfo *GetModelInfo(int32 id) {
++        if (id < 0 || id > MI_LAST_PED || !modelExists) return nil;
++        if (id == MI_COP || id == MI_PLAYER || id == MI_SPECIAL13 || id == MI_SPECIAL01) return &pedModel;
++        return id == 5 ? &carModel : nil;
++    }
++};
++struct CStreaming {
++    static bool loaded;
++    static const char *GetSpecialCharModelName(int32 charId) {
++        return charId == MI_SPECIAL13 - MI_SPECIAL01 ? "igsonny" : nil;
++    }
++    static bool HasModelLoaded(int32) { return loaded; }
++    static void RequestModel(int32 id, int32) { events.push_back("request:" + to_string(id)); }
++    static void RequestSpecialModel(int32 id, const char *name, int32) {
++        events.push_back("special:" + to_string(id) + ":" + name);
++    }
++    static void LoadAllRequestedModels(bool) { events.push_back("load"); }
++    static void SetModelIsDeletable(int32 id) { events.push_back("release:" + to_string(id)); }
++};
++bool CStreaming::loaded = true;
++struct CPlayerPed;
++struct CPedStats { float m_headingChangeRate; };
++CPedStats playerStats = { 3.0f };
++struct CPlayerPed {
++    int32 m_modelIndex; bool controlsOn; int32 statsSeen; AssocGroupId m_animGroup; float m_headingRate;
++    int32 m_wepModelID; void *m_pWeaponModel; void *m_pMinigunTopAtomic; CPedStats *m_pedStats;
++    bool IsPedInControl() { return controlsOn; }
++    int32 GetModelIndex() { return m_modelIndex; }
++    void DeleteRwObject() { events.push_back("delete"); }
++    void SetModelIndex(int32 id) {
++        events.push_back("setmodel:" + to_string(id));
++        m_modelIndex = id; statsSeen = PEDSTAT_COP; m_animGroup = ASSOCGRP_COP; m_headingRate = 9.0f;
++    }
++    void SetPedStats(ePedStats s) { events.push_back("stats:" + to_string(s)); statsSeen = s; }
++    void ReApplyMoveAnims() { events.push_back("reapply"); }
++    void AddWeaponModel(int32 id) { events.push_back("weapon:" + to_string(id)); }
++    void RemoveWeaponModel(int32 id) {
++        events.push_back("removewep:" + to_string(id));
++        m_pWeaponModel = nil; m_pMinigunTopAtomic = nil; m_wepModelID = -1;
++    }
++};
++CPlayerPed player = { MI_PLAYER, true, PEDSTAT_PLAYER, ASSOCGRP_PLAYER, 3.0f, -1, nil, nil, &playerStats };
++CPlayerPed *FindPlayerPed() { return &player; }
++int32 nVCModPedModel = -1;
++int32 nVCModHeldModelRequest;
++bool VCModPedAnimGroupFor(int16 model, AssocGroupId *out) {
++    if (model != MI_COP) return false;
++    *out = ASSOCGRP_COP;
++    return true;
++}
++''' + swap + "\n" + default + r'''
++static int checks;
++void check(bool condition, const char *name) {
++    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
++    ++checks;
++}
++void reset(int32 model, bool inControl, bool loaded) {
++    player.m_modelIndex = model; player.controlsOn = inControl; player.statsSeen = PEDSTAT_PLAYER;
++    player.m_animGroup = ASSOCGRP_PLAYER; player.m_headingRate = 3.0f;
++    player.m_wepModelID = -1; player.m_pWeaponModel = nil; player.m_pMinigunTopAtomic = nil;
++    CStreaming::loaded = loaded; modelExists = true; nVCModPedModel = -1;
++    nVCModHeldModelRequest = model == MI_PLAYER ? -1 : model; events.clear();
++}
++bool saw(const char *event) {
++    for (size_t i = 0; i < events.size(); ++i) if (events[i] == event) return true;
++    return false;
++}
++int at(const char *event) {
++    for (size_t i = 0; i < events.size(); ++i) if (events[i] == event) return (int)i;
++    return -1;
++}
++int main() {
++    reset(MI_PLAYER, true, true);
++    check(VCModApplyPedModel(MI_PLAYER), "same model is a no-op success");
++    check(events.empty(), "same model touches nothing");
++
++    reset(MI_PLAYER, false, true);
++    check(!VCModApplyPedModel(MI_COP), "swap refused while not in control");
++    check(events.empty(), "refused swap requests nothing");
++
++    reset(MI_PLAYER, true, true);
++    check(!VCModApplyPedModel(99), "unknown model refused");
++    check(!VCModApplyPedModel(5), "non-ped model refused");
++    check(!VCModApplyPedModel(-1), "negative index refused");
++    check(events.empty() && player.m_modelIndex == MI_PLAYER, "refused swap leaves the model alone");
++
++    modelExists = false;
++    check(!VCModApplyPedModel(MI_COP), "missing model info refused");
++    modelExists = true;
++    reset(MI_PLAYER, true, false);
++    check(!VCModApplyPedModel(MI_COP), "unloadable model refused");
++    check(player.m_modelIndex == MI_PLAYER && saw("release:1"), "failed load releases its request");
++    check(!saw("setmodel:1"), "failed load never rebuilds the ped");
++
++    reset(MI_PLAYER, true, true);
++    clumpPresent = false;
++    check(!VCModApplyPedModel(MI_COP), "a model that streamed no clump is refused");
++    check(!saw("setmodel:1"), "no ped rebuild without a clump");
++    check(saw("release:1"), "the empty request is handed back");
++    check(player.m_modelIndex == MI_PLAYER, "player keeps his own body");
++    clumpPresent = true;
++
++    reset(MI_PLAYER, true, true);
++    check(!VCModApplyPedModel(MI_SPECIAL01), "a special slot with no story body is refused");
++    check(events.empty(), "nothing requested for a slot with no story body");
++    check(player.m_modelIndex == MI_PLAYER, "unresolvable slot leaves the model alone");
++
++    reset(MI_PLAYER, true, true);
++    check(VCModApplyPedModel(MI_SPECIAL13), "story character swap succeeds");
++    check(saw("special:121:igsonny"), "the slot is requested by its real body name");
++    check(!saw("request:121"), "a special slot is never requested under the placeholder name");
++    check(at("load") > at("special:121:igsonny"), "story body loads before the swap");
++    check(player.m_modelIndex == MI_SPECIAL13, "model index now the story character");
++    check(nVCModHeldModelRequest == MI_SPECIAL13, "the story body stays pinned");
++
++    reset(MI_PLAYER, true, true);
++    check(VCModApplyPedModel(MI_COP), "swap to a ped model succeeds");
++    check(player.m_modelIndex == MI_COP, "model index now the character");
++    check(player.statsSeen == PEDSTAT_PLAYER, "Tommy keeps his own ped stats");
++    check(player.m_headingRate == 3.0f, "heading rate follows the restored stats");
++    check(player.m_animGroup == ASSOCGRP_COP, "character brings its own anim group");
++    check(saw("reapply"), "locomotion anims re-applied");
++    check(at("delete") >= 0 && at("delete") < at("setmodel:1"), "old clump dropped before the new model");
++    check(at("request:1") < at("load") && at("load") < at("delete"), "model loaded before the swap");
++    check(at("reapply") > at("setmodel:1"), "anims applied after the clump exists");
++    check(!saw("release:0"), "Tommy's model stays resident");
++    check(nVCModHeldModelRequest == MI_COP, "the worn character is the pinned request");
++
++    reset(MI_COP, true, true);
++    player.m_wepModelID = 42; player.m_pWeaponModel = (void *) 1; player.m_pMinigunTopAtomic = (void *) 2;
++    check(VCModApplyPedModel(MI_PLAYER), "switching back to Tommy succeeds");
++    check(player.m_modelIndex == MI_PLAYER, "Tommy restored");
++    check(player.m_animGroup == ASSOCGRP_PLAYER, "Tommy keeps the stock groups");
++    check(saw("release:1"), "the character model becomes removable again");
++    check(nVCModHeldModelRequest == -1, "no request is pinned once back with Tommy");
++    check(saw("removewep:-1"), "old weapon atomic destroyed and its model dereferenced");
++    check(at("removewep:-1") >= 0 && at("removewep:-1") < at("weapon:42"),
++          "held weapon re-attached only after the old one was freed");
++
++    reset(MI_COP, true, true);
++    CStreaming::loaded = false;
++    check(!VCModApplyPedModel(MI_PLAYER), "failed Tommy restore keeps the character");
++    check(player.m_modelIndex == MI_COP, "player model unchanged after failed restore");
++
++    reset(MI_PLAYER, false, true);
++    nVCModPedModel = MI_COP;
++    VCModApplyPedModelDefault();
++    check(nVCModPedModel == MI_COP, "default waits while not in control");
++    player.controlsOn = true;
++    VCModApplyPedModelDefault();
++    check(nVCModPedModel == -1 && player.m_modelIndex == MI_COP, "default applies once then clears");
++    size_t applied = events.size();
++    VCModApplyPedModelDefault();
++    check(player.m_modelIndex == MI_COP && events.size() == applied, "cleared default does nothing more");
++    reset(MI_PLAYER, true, false);
++    nVCModPedModel = MI_COP;
++    VCModApplyPedModelDefault();
++    check(nVCModPedModel == -1, "unusable default is not retried every frame");
++    std::printf("PASS: %d model swap checks\n", checks);
++}
++''')
++
++    def test_model_bookkeeping_survives_engine_rebuild(self):
++        reconcile = braced(PLAYER, "static void\nVCModReconcilePedModel(CPlayerPed *player)")
++        run_cpp(ENGINE_STUBS + r'''
++enum { MI_PLAYER = 0, MI_COP = 1 };
++enum ePedStats { PEDSTAT_PLAYER, PEDSTAT_COP };
++std::vector<std::string> events;
++struct CPedStats { ePedStats m_type; float m_headingChangeRate; };
++CPedStats playerStats = { PEDSTAT_PLAYER, 3.0f };
++CPedStats copStats = { PEDSTAT_COP, 9.0f };
++struct CStreaming { static void SetModelIsDeletable(int32 id) { events.push_back("release:" + to_string(id)); } };
++struct CPlayerPed {
++    int32 m_modelIndex; CPedStats *m_pedStats; float m_headingRate;
++    int32 GetModelIndex() { return m_modelIndex; }
++    void SetPedStats(ePedStats s) {
++        events.push_back("stats:" + to_string(s));
++        m_pedStats = s == PEDSTAT_PLAYER ? &playerStats : &copStats;
++    }
++};
++CPlayerPed player = { MI_COP, &copStats, 9.0f };
++int32 nVCModHeldModelRequest;
++''' + reconcile + r'''
++static int checks;
++void check(bool condition, const char *name) {
++    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
++    ++checks;
++}
++bool saw(const char *event) {
++    for (size_t i = 0; i < events.size(); ++i) if (events[i] == event) return true;
++    return false;
++}
++int main() {
++    // respawn rebuilt the ped through Undress/Dress, which takes stats from the model
++    events.clear(); player.m_modelIndex = MI_COP; player.m_pedStats = &copStats; player.m_headingRate = 9.0f;
++    nVCModHeldModelRequest = MI_COP;
++    VCModReconcilePedModel(&player);
++    check(player.m_pedStats->m_type == PEDSTAT_PLAYER, "Tommy's ped stats survive an engine rebuild");
++    check(player.m_headingRate == 3.0f, "heading rate follows the restored stats");
++    check(!saw("release:1"), "the request for the model being worn stays pinned");
++
++    // a save put us back in Tommy's body while our request still pinned the cop
++    events.clear(); player.m_modelIndex = MI_PLAYER; player.m_pedStats = &playerStats;
++    nVCModHeldModelRequest = MI_COP;
++    VCModReconcilePedModel(&player);
++    check(saw("release:1") && nVCModHeldModelRequest == -1, "a stale pin is released when the body changes");
++
++    // a save loaded an NPC we never asked for: fix the stats, do not release it
++    events.clear(); player.m_modelIndex = MI_COP; player.m_pedStats = &copStats;
++    nVCModHeldModelRequest = -1;
++    VCModReconcilePedModel(&player);
++    check(player.m_pedStats->m_type == PEDSTAT_PLAYER, "a saved character still plays as Tommy");
++    check(!saw("release:1"), "a model the mod never requested is not released");
++
++    events.clear(); player.m_modelIndex = MI_PLAYER; player.m_pedStats = &playerStats;
++    nVCModHeldModelRequest = -1;
++    VCModReconcilePedModel(&player);
++    check(events.empty(), "plain Tommy costs nothing");
++    std::printf("PASS: %d model bookkeeping checks\n", checks);
++}
++''')
++
++    def test_anim_group_precedence(self):
++        chooser = braced(PLAYER, "static bool\nVCModPlayerAnimGroup(CPlayerPed *player, bool strafing, AssocGroupId *out)")
++        run_cpp(ENGINE_STUBS + r'''
++enum AssocGroupId { ASSOCGRP_PLAYER, ASSOCGRP_PICKED, ASSOCGRP_CHARACTER };
++enum { MI_PLAYER = 0, MI_COP = 1 };
++bool bVCModPlayerNpcAnims;
++int32 pickCalls;
++int32 characterCalls;
++bool pickResult;
++bool characterResult;
++struct CPlayerPed { int32 model; int32 GetModelIndex() { return model; } };
++CPlayerPed player = { MI_COP };
++bool VCModPickAnimGroup(AssocGroupId *out) { ++pickCalls; if (pickResult) *out = ASSOCGRP_PICKED; return pickResult; }
++bool VCModPedAnimGroupFor(int32, AssocGroupId *out) {
++    ++characterCalls;
++    if (characterResult) *out = ASSOCGRP_CHARACTER;
++    return characterResult;
++}
++''' + chooser + r'''
++static int checks;
++void check(bool condition, const char *name) {
++    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
++    ++checks;
++}
++int main() {
++    AssocGroupId out;
++    bVCModPlayerNpcAnims = true; pickResult = true; characterResult = true;
++    pickCalls = characterCalls = 0;
++    check(VCModPlayerAnimGroup(&player, false, &out) && out == ASSOCGRP_PICKED,
++          "animation picker wins over the character group");
++    check(pickCalls == 1 && characterCalls == 0, "picker turns off the character path when enabled");
++
++    bVCModPlayerNpcAnims = true; pickResult = false;
++    check(!VCModPlayerAnimGroup(&player, false, &out), "unplayable picker falls back to stock groups");
++
++    bVCModPlayerNpcAnims = false; characterResult = true;
++    check(VCModPlayerAnimGroup(&player, false, &out) && out == ASSOCGRP_CHARACTER,
++          "character group applies when the picker is off");
++    check(pickCalls == 2 && characterCalls == 1, "only the needed chooser runs");
++
++    check(!VCModPlayerAnimGroup(&player, true, &out), "strafing stands down for the player strafe groups");
++    characterResult = false;
++    check(!VCModPlayerAnimGroup(&player, false, &out), "no character group falls back to stock groups");
++    std::printf("PASS: %d anim group precedence checks\n", checks);
++}
++''')
++
++    def test_panel_lists_scroll_and_pick(self):
++        definitions = "\n".join(re.findall(r"^(?:bool|int32) [bn]VCMod[^;\n]*;", PANEL, re.M))
++        defines = "\n".join(re.findall(r"^#define VCMOD_[A-Z_]+\s+\d+", PANEL, re.M))
++        categoryEnum = re.search(r"enum eVCModPedCategory\s*\{.*?\}", HEAD, re.S).group(0) + ";"
++        blocks = "\n".join(braced(PANEL, marker) + ";" for marker in (
++            "static const char *aVCModAnimGroupNames[]", "static const char *aVCModPedCategoryNames[]",
++            "enum eVCModFont", "enum eVCModList", "enum eVCModRowKind", "struct VCModRowDef",
++            "static bool *aVCModSwitched[]", "static const VCModRowDef aVCModRows[]"))
++        functions = "\n".join(braced(PANEL, marker) for marker in (
++            "static int32\nVCModCountOn(void)", "static void\nVCModToggleAll(void)",
++            "static bool\nVCModCursorInRect(", "static int32\nVCModRowY(int32 row)",
++            "static int32\nVCModListX(void)", "static int32\nVCModListRowY(int32 anchorRow, int32 visible)",
++            "static int32\nVCModRowList(int32 kind)", "static int32\nVCModListAnchorRow(int32 list)",
++            "static int32\nVCModListCount(int32 list)", "static int32\nVCModListFirst(int32 list)",
++            "static int16\nVCModCurrentPedModel(void)", "static const char *\nVCModCurrentPedLabel(void)",
++            "static const char *\nVCModListLabel(int32 list, int32 entry, bool *selected)",
++            "static void\nVCModListPick(int32 list, int32 entry)",
++            "static void\nVCModScroll(CPad *pad)", "static void\nVCModClick(CPad *pad)"))
++        # the click block opens with the same line, so anchor on what only the
++        # drawing has: the visible-window tail
++        draw = braced(PANEL[PANEL.rindex("\tif (nVCModOpenList != VCMOD_LIST_NONE) {",
++                0, PANEL.index("int32 last = count;")):], "\tif (nVCModOpenList != VCMOD_LIST_NONE) {")
++        run_cpp(ENGINE_STUBS + r'''
++#include <algorithm>
++typedef unsigned char uint8;
++typedef signed char int8;
++enum { MI_PLAYER = 0, MI_COP = 1, MI_LAST_PED = 129 };
++#define MITYPE_PED 3
++struct MouseState { bool LMB, WHEELUP, WHEELDN; };
++struct CPad { MouseState NewMouseControllerState, OldMouseControllerState;
++    bool GetMouseWheelUpJustDown() { return NewMouseControllerState.WHEELUP && !OldMouseControllerState.WHEELUP; }
++    bool GetMouseWheelDownJustDown() { return NewMouseControllerState.WHEELDN && !OldMouseControllerState.WHEELDN; } };
++struct CBaseModelInfo { uint8 type; char name[24];
++    uint8 GetModelType() { return type; } char *GetModelName() { return name; } };
++CBaseModelInfo copInfo = { MITYPE_PED, "cop" };
++CBaseModelInfo *modelForInfo = &copInfo;
++struct CModelInfo { static CBaseModelInfo *GetModelInfo(int32) { return modelForInfo; } };
++struct CPlayerPed { int32 m_modelIndex; int32 GetModelIndex() { return m_modelIndex; } };
++CPlayerPed playerPed = { MI_COP };
++CPlayerPed *FindPlayerPed() { return &playerPed; }
++struct CVector { float x, y, z; };
++struct Cell { int style, x, y, cols; std::string text; };
++std::vector<Cell> cells;
++std::vector<std::string> printed;
++void VCModCell(int style, const char *text, int x, int y, int cols) {
++    Cell cell = { style, x, y, cols, text }; cells.push_back(cell);
++}
++void VCModPrint(int, const char *text, int, int) { printed.push_back(text); }
++static int32 nVCModCharW = 8, nVCModCharH = 14;
++static float fVCModCursorX, fVCModCursorY;
++static int32 nVCModOpenList;
++static int32 nVCModListScroll;
++std::vector<int> applied;
++int32 rosterCount = 1;
++const char *rosterName(int32 index) {
++    static char buf[24][24];
++    static const char *firstThree[3] = { "cop", "swat", "fbi" };
++    if (index < 0) return "?";
++    if (index < 3) return firstThree[index];
++    std::snprintf(buf[index % 24], sizeof(buf[0]), "ped%d", (int) index);
++    return buf[index % 24];
++}
++bool VCModApplyPedModel(int16 modelIndex) { applied.push_back(modelIndex); return true; }
++int32 zoneCount = 4;
++int32 VCModRideZoneCount(void) { return zoneCount; }
++bool VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos) {
++    if (entry < 0 || entry >= zoneCount) return false;
++    if (outZoneIndex) *outZoneIndex = entry == 0 ? -1 : entry;
++    if (outName) *outName = rosterName(entry);
++    return true;
++}
++int32 VCModPedModelCount(int32) { return rosterCount; }
++bool VCModPedModelAt(int32, int32 entry, int16 *outIndex, const char **outName) {
++    if (entry < 0 || entry >= rosterCount) return false;
++    if (entry == 0) { *outIndex = MI_PLAYER; *outName = "player (Tommy)"; return true; }
++    *outIndex = (int16) (MI_COP + entry - 1);
++    *outName = rosterName(entry - 1);
++    return true;
++}
++''' + categoryEnum + "\n" + defines + "\n" + definitions + "\n" + blocks + "\n" + functions + r'''
++void DrawList() {
++    cells.clear(); printed.clear();
++''' + draw + r'''}
++static int checks;
++void check(bool condition, const char *name) {
++    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
++    ++checks;
++}
++int rowNamed(const char *name) {
++    for (uint32 i = 0; i < ARRAY_SIZE(aVCModRows); ++i)
++        if (std::strcmp(name, aVCModRows[i].name) == 0) return (int) i;
++    check(false, "requested panel row exists");
++    return -1;
++}
++void clickRow(int row) {
++    CPad pad = { { true, false, false }, { false, false, false } };
++    fVCModCursorX = VCMOD_PANEL_X + 10;
++    fVCModCursorY = VCModRowY(row) + nVCModCharH / 2;
++    VCModClick(&pad);
++}
++void clickList(int visible) {
++    CPad pad = { { true, false, false }, { false, false, false } };
++    fVCModCursorX = VCModListX() + 10;
++    fVCModCursorY = VCModListRowY(VCModListAnchorRow(nVCModOpenList), visible) + nVCModCharH / 2;
++    VCModClick(&pad);
++}
++void wheel(bool up, bool down) {
++    CPad pad = { { false, up, down }, { false, false, false } };
++    VCModScroll(&pad);
++}
++void reset() {
++    nVCModPedModel = -1;
++    nVCModOpenList = VCMOD_LIST_NONE;
++    nVCModListScroll = 0;
++    nVCModPedCategory = VCMOD_PEDCAT_COPS;
++    nVCModRideZone = -1;
++    zoneCount = 4;
++    rosterCount = 1;
++    applied.clear();
++    playerPed.m_modelIndex = MI_COP;
++}
++int main() {
++    reset();
++    check(rowNamed("PED CATEGORY") == VCMOD_PEDCAT_ROW && rowNamed("CHARACTER") == VCMOD_PEDCHAR_ROW,
++          "the two new rows sit where the panel geometry expects");
++
++    clickRow(VCMOD_PEDCHAR_ROW);
++    check(nVCModOpenList == VCMOD_LIST_PEDCHAR, "character row opens the roster");
++    clickRow(VCMOD_PEDCHAR_ROW);
++    check(nVCModOpenList == VCMOD_LIST_NONE, "clicking it again closes the roster");
++
++    clickRow(VCMOD_PEDCHAR_ROW);
++    rosterCount = 4;
++    DrawList();
++    check(cells.size() == 4 && cells[0].text == "player (Tommy)", "roster starts with Tommy");
++    check(cells[1].text == "cop" && cells[1].style == VCFONT_ON, "the worn model is the selected one");
++    check(cells[2].text == "swat" && cells[2].style == VCFONT_SET, "the rest read as choices");
++
++    clickList(2);
++    check(applied.empty(), "clicking a name does not swap inside the render pass");
++    check(nVCModPedModel == MI_COP + 1, "clicking a name queues that model for ProcessControl");
++    check(nVCModOpenList == VCMOD_LIST_NONE, "picking closes the roster");
++
++    clickRow(VCMOD_PEDCHAR_ROW);
++    clickList(0);
++    check(applied.empty() && nVCModPedModel == MI_PLAYER, "Tommy entry queues the player model");
++
++    clickRow(VCMOD_PEDCAT_ROW);
++    check(nVCModOpenList == VCMOD_LIST_PEDCAT, "category row opens its own list");
++    DrawList();
++    check(cells.size() == NUM_VCMOD_PEDCATS, "category list shows every shelf");
++    clickList(VCMOD_PEDCAT_MISSION);
++    check(nVCModPedCategory == VCMOD_PEDCAT_MISSION && nVCModOpenList == VCMOD_LIST_NONE,
++          "picking a category closes the list and retargets the roster");
++
++    clickRow(VCMOD_ANIM_SET_ROW);
++    check(nVCModOpenList == VCMOD_LIST_ANIM, "the animation list still opens");
++    clickRow(VCMOD_PEDCHAR_ROW);
++    check(nVCModOpenList == VCMOD_LIST_PEDCHAR, "opening the roster replaces the animation list");
++
++    reset();
++    rosterCount = VCMOD_LIST_ROWS + 6;
++    clickRow(VCMOD_PEDCHAR_ROW);
++    DrawList();
++    check(cells.size() == VCMOD_LIST_ROWS, "a long roster is cut to one screen");
++    check(std::find(printed.begin(), printed.end(), "^") == printed.end(),
++          "top of the roster shows no scroll-up mark");
++    check(std::find(printed.begin(), printed.end(), "v") != printed.end(),
++          "top of the roster marks that more names are below");
++    wheel(true, false);
++    check(nVCModListScroll == 0, "scrolling up at the top stays put");
++    wheel(false, true);
++    check(nVCModListScroll == 1, "one notch moves one row");
++    for (int i = 0; i < 40; ++i) wheel(false, true);
++    check(nVCModListScroll == rosterCount - VCMOD_LIST_ROWS, "scroll clamps at the last page");
++    DrawList();
++    check(std::find(printed.begin(), printed.end(), "v") == printed.end(),
++          "bottom of the roster shows no scroll-down mark");
++    wheel(true, false);
++    check(nVCModListScroll == rosterCount - VCMOD_LIST_ROWS - 1, "scrolling back up from the end");
++
++    CPad held = { { false, true, true }, { false, true, true } };
++    VCModScroll(&held);
++    check(nVCModListScroll == rosterCount - VCMOD_LIST_ROWS - 1, "held wheel does not repeat the step");
++
++    reset();
++    rosterCount = VCMOD_LIST_ROWS + 6;
++    clickRow(VCMOD_PEDCHAR_ROW);
++    CPad pad = { { false, true, false }, { false, false, false } };
++    VCModScroll(&pad);
++    check(!pad.NewMouseControllerState.WHEELUP && !pad.NewMouseControllerState.WHEELDN,
++          "the roster eats the wheel so weapons do not cycle");
++
++    reset();
++    rosterCount = VCMOD_LIST_ROWS + 6;
++    clickRow(VCMOD_PEDCHAR_ROW);
++    nVCModListScroll = 5;
++    DrawList();
++    check(!cells.empty() && cells[0].text == rosterName(4), "scrolled list draws the window it is on");
++    check(std::find(printed.begin(), printed.end(), "^") != printed.end(),
++          "a scrolled roster marks the direction still available");
++
++    clickRow((int) ARRAY_SIZE(aVCModRows) - 1);
++    check(nVCModOpenList == VCMOD_LIST_RIDEZONE, "the ride row opens its own list");
++    check(VCModListAnchorRow(VCMOD_LIST_RIDEZONE) == VCMOD_PEDCHAR_ROW,
++          "the long ride list anchors high enough to fit on screen");
++    DrawList();
++    check(cells.size() == 4 && cells[0].text == rosterName(0), "the ride list shows cruise first");
++    clickList(2);
++    check(nVCModRideZone == 2, "picking a zone stores that zone");
++    check(nVCModOpenList == VCMOD_LIST_NONE, "picking a zone closes the list");
++    clickRow((int) ARRAY_SIZE(aVCModRows) - 1);
++    clickList(0);
++    check(nVCModRideZone == -1, "the cruise entry stores no zone at all");
++
++    reset();
++    for (uint32 i = 0; i < ARRAY_SIZE(aVCModSwitched); ++i) *aVCModSwitched[i] = false;
++    bVCModCopPistol = false;
++    VCModToggleAll();
++    check(!bVCModCopPistol, "the master row does not switch the two-hand colt on");
++    check(VCModCountOn() == (int) ARRAY_SIZE(aVCModSwitched), "every listed switch still comes on");
++    VCModToggleAll();
++    check(!bVCModCopPistol && VCModCountOn() == 0, "the master row still turns everything else off");
++
++    reset();
++    clickRow(VCMOD_ANIM_SET_ROW);
++    DrawList();
++    check((int) cells.size() == (int) ARRAY_SIZE(aVCModAnimGroupNames), "animation list still shows all groups");
++    wheel(false, true);
++    check(nVCModListScroll == 0, "a list that fits does not scroll");
++    clickRow(VCMOD_PEDCAT_ROW);
++    wheel(false, true);
++    check(nVCModListScroll == 0, "the short category list does not scroll");
++    check(cells[nVCModAnimChoice].style == VCFONT_ON, "animation list marks the current group");
++
++    reset();
++    modelForInfo = nil;
++    clickRow(VCMOD_PEDCHAR_ROW);
++    DrawList();
++    check(cells.empty() || !cells[0].text.empty(), "missing model info still draws a label");
++    std::printf("PASS: %d panel list checks\n", checks);
++}
++''')
++
++    def test_panel_rows_and_ini_wiring(self):
++        rows = braced(PANEL, "static const VCModRowDef aVCModRows[]")
++        click = braced(PANEL, "static void\nVCModClick(CPad *pad)")
++        draw = braced(PANEL, "void\nVCModPanelRender(void)")
++        switched = braced(PANEL, "static bool *aVCModSwitched[]")
++        swap = braced(PLAYER, "bool\nVCModApplyPedModel(int16 modelIndex)")
++
++        self.assertIn('extern int32 nVCModPedModel;', HEAD)
++        self.assertIn('bool VCModApplyPedModel(int16 modelIndex);', HEAD)
++        self.assertIn('int32 VCModPedCategoryOf(int32 pedType);', HEAD)
++        self.assertIn('bool VCModPedAnimGroupFor(int16 modelIndex, AssocGroupId *out);', HEAD)
++        self.assertIn('int32 VCModPedModelCount(int32 category);', HEAD)
++        self.assertIn('bool VCModPedModelAt(int32 category, int32 entry, int16 *outIndex, const char **outName);', HEAD)
++        self.assertIn('VCMOD_PEDCAT_COPS', HEAD)
++        self.assertIn('ReadIniIfExists("VC Mods", "PedModel", &nVCModPedModel);', INI)
++        self.assertIn("int32 nVCModPedModel = -1;", PANEL)
++        self.assertIn('TWEAKINT32(nVCModPedModel, -1, MI_LAST_PED, 1);', PANEL)
++
++        self.assertIn('"PED CATEGORY"', rows)
++        self.assertIn('"PASSENGER MODE"', rows)
++        self.assertIn('"RIDE TO"', rows)
++        self.assertIn('"CHARACTER"', rows)
++        self.assertLess(rows.index('"ANIM SET"'), rows.index('"PED CATEGORY"'))
++        self.assertIn("&bVCModAdrenaline", switched)
++        self.assertNotIn("bVCModCopPistol", switched)
++        self.assertIn("&bVCModCopPistol", rows)
++        self.assertNotIn("bool bVCModCopPistol = true", PANEL)
++        self.assertIn("static const char *GetSpecialCharModelName(int32 charId);", STREAMING_HEAD)
++        self.assertIn("CStreaming::GetSpecialCharModelName(modelIndex - MI_SPECIAL01)", swap)
++        self.assertNotIn("nVCModPedModel", switched)
++        self.assertIn("VCMOD_ROW_PEDCAT", click)
++        self.assertIn("VCMOD_ROW_PEDCHAR", click)
++        pick = braced(PANEL, "static void\nVCModListPick(int32 list, int32 entry)")
++        self.assertIn("nVCModPedModel = modelIndex", pick)
++        self.assertNotIn("VCModApplyPedModel", pick)
++        self.assertIn("VCModListPick", click)
++        self.assertIn("GetMouseWheelUpJustDown", PANEL)
++        self.assertIn("GetMouseWheelDownJustDown", PANEL)
++        self.assertIn("WHEELUP", PANEL)
++        self.assertIn("VCMOD_LIST_ROWS", PANEL)
++        self.assertIn("VCModListLabel", draw)
++
++        # the animation picker keeps working through the shared list code
++        self.assertIn("VCMOD_LIST_ANIM", PANEL)
++        self.assertNotIn("bVCModAnimListOpen", PANEL)
++        chooser = braced(PLAYER, "static bool\nVCModPlayerAnimGroup(CPlayerPed *player, bool strafing, AssocGroupId *out)")
++        process = braced(PLAYER, "void\nCPlayerPed::ProcessAnimGroups(void)")
++        self.assertIn("VCModPlayerAnimGroup(this, strafing, &want)", process)
++        self.assertIn("ReApplyMoveAnims();", process)
++        self.assertIn("VCModApplyPedModelDefault();", braced(PLAYER, "void\nCPlayerPed::ProcessControl(void)"))
++        self.assertIn("VCModReconcilePedModel(this);", braced(PLAYER, "void\nCPlayerPed::ProcessControl(void)"))
++        self.assertTrue(chooser)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/utils/test_vc_passenger.py b/utils/test_vc_passenger.py
+new file mode 100644
+index 0000000..b76234f
+--- /dev/null
++++ b/utils/test_vc_passenger.py
+@@ -0,0 +1,535 @@
++#!/usr/bin/env python3
++"""Passenger-mode tests: the ride state machine out of PlayerPed.cpp and the
++destination list out of vcmodpanel.cpp, compiled against small engine stubs."""
++import re
++import subprocess
++import tempfile
++import unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++PANEL = (ROOT / "src/extras/vcmodpanel.cpp").read_text()
++PLAYER = (ROOT / "src/peds/PlayerPed.cpp").read_text()
++HEAD = (ROOT / "src/extras/vcmodpanel.h").read_text()
++INI = (ROOT / "src/core/re3.cpp").read_text()
++ZONES = (ROOT / "src/core/Zones.h").read_text()
++
++ENGINE_STUBS = r'''
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <sstream>
++#include <string>
++#include <vector>
++#include <stdint.h>
++#define nil NULL
++#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
++typedef int8_t int8;
++typedef uint8_t uint8;
++typedef int16_t int16;
++typedef uint16_t uint16;
++typedef int32_t int32;
++typedef uint32_t uint32;
++typedef uint16_t wchar;
++static std::string to_string(int value) {
++    std::ostringstream out;
++    out << value;
++    return out.str();
++}
++'''
++
++
++def braced(source, marker):
++    start = source.index(marker)
++    opening = source.index("{", start)
++    depth = 1
++    end = opening + 1
++    while depth:
++        depth += (source[end] == "{") - (source[end] == "}")
++        end += 1
++    return source[start:end]
++
++
++def run_cpp(source):
++    with tempfile.TemporaryDirectory(prefix="vc-passenger-test-") as directory:
++        cpp = Path(directory) / "test.cpp"
++        binary = Path(directory) / "test"
++        cpp.write_text(source)
++        build = subprocess.run(["c++", "-std=c++98", "-Wall", "-Wextra", str(cpp), "-o", str(binary)],
++                               capture_output=True, text=True)
++        if build.returncode:
++            print(build.stderr)
++            numbered = "".join(f"{n}: {line}\n" for n, line in enumerate(source.splitlines(), 1))
++            raise RuntimeError("compile failed\n" + numbered)
++        if build.stderr:
++            print(build.stderr)
++        run = subprocess.run([str(binary)], capture_output=True, text=True)
++        if run.returncode:
++            print(run.stdout, run.stderr)
++            raise RuntimeError("test binary failed")
++
++
++VEHICLE_STUBS = r'''
++enum eVCModRideVehicleType { VEH_CAR, VEH_BIKE, VEH_BOAT, VEH_PLANE, VEH_HELI, VEH_TRAIN };
++enum { STATUS_SIMPLE, STATUS_PHYSICS, STATUS_PLAYER, STATUS_ABANDONED, STATUS_TRAIN_NOT_MOVING };
++enum { CAR_CREATED_BY_RANDOM, CAR_CREATED_BY_MISSION, CAR_CREATED_BY_SCRIPT, CAR_CREATED_BY_PARKED };
++#define RANDOM_VEHICLE CAR_CREATED_BY_RANDOM
++#define PARKED_VEHICLE CAR_CREATED_BY_PARKED
++#define MISSION_VEHICLE CAR_CREATED_BY_MISSION
++enum eObjective { OBJECTIVE_NONE, OBJECTIVE_ENTER_CAR_AS_DRIVER, OBJECTIVE_ENTER_CAR_AS_PASSENGER, OBJECTIVE_LEAVE_CAR };
++enum ePedState { PED_IDLE, PED_ENTER_CAR, PED_DRIVING, PED_ON_FOOT };
++enum { MISSION_NONE, MISSION_CRUISE, MISSION_GOTOCOORDS, MISSION_STOP_FOREVER };
++enum { TEMPACT_NONE, DRIVINGSTYLE_AVOID_CARS };
++struct CVector {
++    float x, y, z;
++    CVector() : x(0.0f), y(0.0f), z(0.0f) {}
++    CVector(float xx, float yy, float zz) : x(xx), y(yy), z(zz) {}
++    CVector operator-(const CVector &o) const { return CVector(x - o.x, y - o.y, z - o.z); }
++    float Magnitude2D() const { return (float) std::sqrt(x * x + y * y); }
++};
++'''
++
++RIDE_STUBS = r'''
++std::vector<std::string> events;
++struct CAutoPilot {
++    int32 m_nCarMission; int32 m_nTempAction; int32 m_nDrivingStyle; int32 m_nCruiseSpeed;
++    CAutoPilot() : m_nCarMission(MISSION_NONE), m_nTempAction(TEMPACT_NONE),
++                   m_nDrivingStyle(0), m_nCruiseSpeed(0) {}
++};
++struct CPed { int32 dummy; };
++CPed driverPed;
++bool spawnDriverFails = false;
++struct CVehicle {
++    eVCModRideVehicleType kind; int32 handle; CVector pos; CAutoPilot AutoPilot;
++    CPed *pDriver; CPed *pPassengers[8]; int32 m_nNumMaxPassengers; int32 VehicleCreatedBy;
++    int32 status; bool bEngineOn;
++    CVehicle() : kind(VEH_CAR), handle(0), pDriver(nil), m_nNumMaxPassengers(4),
++                 VehicleCreatedBy(RANDOM_VEHICLE), status(STATUS_PHYSICS), bEngineOn(false) {
++        for (int i = 0; i < 8; ++i) pPassengers[i] = nil;
++    }
++    bool IsCar(void) { return kind == VEH_CAR; }
++    bool IsBike(void) { return kind == VEH_BIKE; }
++    bool IsBoat(void) { return kind == VEH_BOAT; }
++    bool IsPlane(void) { return kind == VEH_PLANE; }
++    bool IsHeli(void) { return kind == VEH_HELI; }
++    bool IsTrain(void) { return kind == VEH_TRAIN; }
++    CVector GetPosition(void) { return pos; }
++    int32 GetStatus(void) { return status; }
++    CPed *SetUpDriver(void) {
++        if (spawnDriverFails || VehicleCreatedBy != RANDOM_VEHICLE) return nil;
++        events.push_back("driver");
++        return &driverPed;
++    }
++};
++CVehicle *lookupVehicle = nil;
++struct CPlayerPed;
++struct CPlayerPed {
++    bool controlsOn; bool bInVehicle; CVehicle *m_pMyVehicle;
++    int32 m_objective; CVehicle *m_carInObjective; int32 m_nPedState;
++    bool IsPedInControl(void) { return controlsOn; }
++    bool InVehicle(void) { return bInVehicle && m_pMyVehicle; }
++    void SetObjective(int32 obj, CVehicle *veh) {
++        events.push_back("objective:" + to_string(obj));
++        m_objective = obj; m_carInObjective = veh;
++    }
++};
++CPlayerPed playerPed = { true, false, nil, OBJECTIVE_NONE, nil, PED_ON_FOOT };
++CPlayerPed *FindPlayerPed(void) { return &playerPed; }
++struct CVehiclePool {
++    int32 GetIndex(CVehicle *veh) { return veh->handle; }
++    CVehicle *GetAt(int32 handle) {
++        // only the vehicle parked in the pool resolves, so a recycled handle is nil
++        if (handle < 0 || lookupVehicle == nil || lookupVehicle->handle != handle) return nil;
++        return lookupVehicle;
++    }
++};
++CVehiclePool vehiclePool;
++struct CPools { static CVehiclePool *GetVehiclePool(void) { return &vehiclePool; } };
++struct CCarCtrl {
++    static int32 NumRandomCars, NumParkedCars;
++    static void JoinCarWithRoadSystem(CVehicle *veh) { events.push_back("join:" + to_string(veh->handle)); }
++    static bool JoinCarWithRoadSystemGotoCoors(CVehicle *veh, CVector dest, bool accurate) {
++        events.push_back("goto:" + to_string(veh->handle) + ":" + to_string((int) dest.x) + "," + to_string((int) dest.y));
++        return false;
++    }
++};
++int32 CCarCtrl::NumRandomCars = 0;
++int32 CCarCtrl::NumParkedCars = 0;
++/* the destination list, stubbed with the same cruise-first contract the panel has */
++int32 rideZone = -1;
++static bool VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos) {
++    if (entry < 0 || entry > 3) return false;
++    if (entry == 0) {
++        if (outZoneIndex) *outZoneIndex = -1;
++        if (outName) *outName = "traffic (cruise)";
++        return true;
++    }
++    if (entry == 3) return false;                 /* a zone the list cannot resolve */
++    if (outZoneIndex) *outZoneIndex = entry;
++    if (outName) *outName = "zone";
++    if (outPos) *outPos = CVector((float) (100 * entry), (float) (200 * entry), 0.0f);
++    return true;
++}
++static wchar noticeBuffer[64];
++struct CHud {
++    static void SetHelpMessage(wchar *msg, bool quick) {
++        std::string text;
++        for (int i = 0; i < 63 && msg[i] != 0; ++i) text += (char) msg[i];
++        events.push_back("notice:" + text);
++    }
++};
++'''
++
++
++class PassengerTests(unittest.TestCase):
++    def test_entry_decision_table(self):
++        entry = braced(PLAYER, "bool\nVCModPassengerEntry(CVehicle *vehicle)")
++        notice = braced(PLAYER, "static void\nVCModRideNotice(const char *text)")
++        seatfree = braced(PLAYER, "static bool\nVCModPassengerSeatFree(CVehicle *veh)")
++        rundown = braced(PLAYER, "static void\nVCModRideStandDown(void)")
++        ridevehicle = braced(PLAYER, "static CVehicle *\nVCModRideVehicle(void)")
++        run_cpp(ENGINE_STUBS + VEHICLE_STUBS + RIDE_STUBS + r'''
++bool bVCModPassengerMode = true;
++int32 nVCModRideZone = -1;
++int32 nVCModRideHandle = -1;
++bool bVCModRideWaiting, bVCModRideSpawnedDriver, bVCModRideHasDestination;
++CVector vecVCModRideDestination;
++''' + notice + "\n" + seatfree + "\n" + rundown + "\n" + ridevehicle + "\n" + entry + r'''
++static int checks;
++void check(bool condition, const char *name) {
++    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
++    ++checks;
++}
++void reset(CVehicle &veh) {
++    events.clear();
++    veh = CVehicle(); veh.kind = VEH_CAR; veh.handle = 1; veh.VehicleCreatedBy = RANDOM_VEHICLE;
++    playerPed.controlsOn = true; playerPed.bInVehicle = false; playerPed.m_pMyVehicle = nil;
++    playerPed.m_objective = OBJECTIVE_NONE; playerPed.m_carInObjective = nil;
++    nVCModRideHandle = -1; bVCModRideWaiting = false; bVCModRideSpawnedDriver = false;
++    bVCModRideHasDestination = false; spawnDriverFails = false; lookupVehicle = &veh;
++    bVCModPassengerMode = true; nVCModRideZone = -1;
++}
++bool sawObjective(const char *event) {
++    for (size_t i = 0; i < events.size(); ++i) if (events[i] == event) return true;
++    return false;
++}
++bool sawDriver(void) {
++    for (size_t i = 0; i < events.size(); ++i) if (events[i] == "driver") return true;
++    return false;
++}
++int main() {
++    CVehicle veh;
++    reset(veh);
++    bVCModPassengerMode = false;
++    check(!VCModPassengerEntry(&veh), "mode off leaves the press to the game");
++    check(events.empty(), "mode off touches nothing");
++
++    reset(veh);
++    playerPed.controlsOn = false;
++    check(!VCModPassengerEntry(&veh), "refused while not in control");
++    playerPed.controlsOn = true;
++    playerPed.bInVehicle = true;
++    check(!VCModPassengerEntry(&veh), "refused while already riding");
++    check(events.empty(), "those presses are not ours at all");
++
++    reset(veh);
++    check(!VCModPassengerEntry(nil), "no vehicle under the cursor is not ours");
++
++    reset(veh);
++    for (int kind = VEH_PLANE; kind <= VEH_TRAIN; ++kind) {
++        veh.kind = (eVCModRideVehicleType) kind;
++        check(VCModPassengerEntry(&veh), "no-seat craft still owns the press");
++        veh.kind = VEH_CAR;
++    }
++    check(!sawObjective("objective:2"), "no-seat craft never boards");
++    check(nVCModRideHandle == -1, "no ride starts on a plane or heli");
++
++    reset(veh);
++    for (int i = 0; i < veh.m_nNumMaxPassengers; ++i) veh.pPassengers[i] = &driverPed;
++    check(VCModPassengerEntry(&veh), "a full car owns the press");
++    check(nVCModRideHandle == -1 && playerPed.m_objective == OBJECTIVE_NONE, "a full car never boards");
++
++    reset(veh);
++    veh.VehicleCreatedBy = CAR_CREATED_BY_SCRIPT;
++    check(VCModPassengerEntry(&veh), "a script car owns the press");
++    check(veh.pDriver == nil && nVCModRideHandle == -1, "a script car gets no driver from us");
++
++    reset(veh);
++    veh.VehicleCreatedBy = MISSION_VEHICLE;
++    check(VCModPassengerEntry(&veh), "a mission car owns the press");
++    check(nVCModRideHandle == -1, "a mission car is not ours to crew");
++
++    reset(veh);
++    spawnDriverFails = true;
++    check(VCModPassengerEntry(&veh), "an empty pool still owns the press");
++    check(nVCModRideHandle == -1 && playerPed.m_objective == OBJECTIVE_NONE,
++          "no driver means no ride, but the press is spent");
++    spawnDriverFails = false;
++
++    reset(veh);
++    veh.VehicleCreatedBy = PARKED_VEHICLE;
++    CCarCtrl::NumRandomCars = 3; CCarCtrl::NumParkedCars = 5;
++    check(VCModPassengerEntry(&veh), "a parked car is crewed");
++    check(veh.VehicleCreatedBy == RANDOM_VEHICLE &&
++          CCarCtrl::NumRandomCars == 4 && CCarCtrl::NumParkedCars == 4,
++          "the traffic counts follow the parked car conversion");
++    check(sawObjective("objective:2"), "parked car boards as passenger");
++
++    reset(veh);
++    veh.pDriver = &driverPed;
++    check(VCModPassengerEntry(&veh), "a traffic car with a driver is rideable");
++    check(!sawDriver(), "an existing driver is not replaced");
++    check(sawObjective("objective:2"), "objective is passenger entry");
++    check(veh.AutoPilot.m_nCarMission == MISSION_STOP_FOREVER && veh.AutoPilot.m_nCruiseSpeed == 0,
++          "the car is held until Tommy is seated");
++    check(nVCModRideHandle == veh.handle && bVCModRideWaiting, "the ride waits on the handle");
++
++    reset(veh);
++    veh.kind = VEH_BIKE; veh.m_nNumMaxPassengers = 1;
++    check(VCModPassengerEntry(&veh), "a bike pillion seat is rideable");
++    std::printf("PASS: %d passenger entry checks\n", checks);
++}
++''')
++
++    def test_ride_state_machine(self):
++        update = braced(PLAYER, "static void\nVCModUpdateRide(CPlayerPed *player)")
++        cruise = braced(PLAYER, "static void\nVCModRideStartCruise(CVehicle *veh)")
++        entry = braced(PLAYER, "bool\nVCModPassengerEntry(CVehicle *vehicle)")
++        notice = braced(PLAYER, "static void\nVCModRideNotice(const char *text)")
++        seatfree = braced(PLAYER, "static bool\nVCModPassengerSeatFree(CVehicle *veh)")
++        rundown = braced(PLAYER, "static void\nVCModRideStandDown(void)")
++        ridevehicle = braced(PLAYER, "static CVehicle *\nVCModRideVehicle(void)")
++        run_cpp(ENGINE_STUBS + VEHICLE_STUBS + r'''
++#include <math.h>
++''' + RIDE_STUBS + r'''
++bool bVCModPassengerMode = true;
++int32 nVCModRideZone = -1;
++int32 nVCModRideHandle = -1;
++bool bVCModRideWaiting, bVCModRideSpawnedDriver, bVCModRideHasDestination;
++CVector vecVCModRideDestination;
++''' + notice + "\n" + seatfree + "\n" + rundown + "\n" + ridevehicle + "\n" + cruise + "\n" + entry + "\n" + update + r'''
++static int checks;
++void check(bool condition, const char *name) {
++    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
++    ++checks;
++}
++bool saw(const char *event) {
++    for (size_t i = 0; i < events.size(); ++i) if (events[i] == event) return true;
++    return false;
++}
++void sit(CVehicle &veh) {
++    playerPed.bInVehicle = true; playerPed.m_pMyVehicle = &veh;
++    playerPed.m_objective = OBJECTIVE_NONE; playerPed.m_carInObjective = nil;
++    playerPed.m_nPedState = PED_DRIVING;
++    veh.pDriver = &driverPed;
++}
++void reset(CVehicle &veh) {
++    events.clear();
++    veh = CVehicle(); veh.kind = VEH_CAR; veh.handle = 1; veh.VehicleCreatedBy = RANDOM_VEHICLE;
++    playerPed.controlsOn = true; playerPed.bInVehicle = false; playerPed.m_pMyVehicle = nil;
++    playerPed.m_objective = OBJECTIVE_NONE; playerPed.m_carInObjective = nil;
++    playerPed.m_nPedState = PED_ON_FOOT;
++    nVCModRideHandle = -1; bVCModRideWaiting = false; bVCModRideSpawnedDriver = false;
++    bVCModRideHasDestination = false; spawnDriverFails = false; lookupVehicle = &veh;
++    bVCModPassengerMode = true; nVCModRideZone = -1; vecVCModRideDestination = CVector();
++}
++void beginRide(CVehicle &veh, int32 zone) {
++    reset(veh);
++    nVCModRideZone = zone;
++    check(VCModPassengerEntry(&veh), "ride armed");
++    events.clear();
++}
++int main() {
++    CVehicle veh;
++
++    reset(veh);
++    VCModUpdateRide(&playerPed);
++    check(events.empty(), "no ride means nothing to update");
++
++    beginRide(veh, -1);
++    VCModUpdateRide(&playerPed);
++    check(events.empty(), "walking to the door starts no driving");
++    check(nVCModRideHandle == veh.handle && bVCModRideWaiting, "still waiting for the seat");
++
++    playerPed.m_objective = OBJECTIVE_LEAVE_CAR;
++    VCModUpdateRide(&playerPed);
++    check(nVCModRideHandle == -1 && !bVCModRideWaiting, "an entry given up releases the ride");
++
++    beginRide(veh, -1);
++    veh.AutoPilot.m_nCarMission = MISSION_NONE;
++    sit(veh);
++    VCModUpdateRide(&playerPed);
++    check(!bVCModRideWaiting, "seating releases the wait");
++    check(saw("join:1"), "traffic ride puts the car on the road system");
++    check(veh.AutoPilot.m_nCarMission == MISSION_CRUISE && veh.AutoPilot.m_nCruiseSpeed == 25,
++          "the driver cruises at traffic speed");
++    check(veh.AutoPilot.m_nDrivingStyle == DRIVINGSTYLE_AVOID_CARS, "the driver avoids other cars");
++    check(!bVCModRideHasDestination, "a cruise ride never arrives anywhere");
++
++    beginRide(veh, 1);
++    sit(veh);
++    VCModUpdateRide(&playerPed);
++    check(saw("goto:1:100,200"), "a zone destination routes the driver");
++    check(veh.AutoPilot.m_nCarMission == MISSION_GOTOCOORDS, "the mission is goto coords");
++    check(bVCModRideHasDestination, "arrival is now being watched");
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(events.empty(), "far from the destination keeps driving");
++
++    veh.pos = CVector(105.0f, 205.0f, 0.0f);
++    VCModRideStandDown();
++    check(!bVCModRideWaiting && nVCModRideHandle == -1, "stand down clears the ride");
++    check(!bVCModRideHasDestination, "stand down clears the destination watch");
++
++    beginRide(veh, 2);
++    sit(veh);
++    VCModUpdateRide(&playerPed);
++    check(saw("goto:1:200,400"), "the second zone routes to its own centre");
++    veh.pos = CVector(201.0f, 401.0f, 0.0f);
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(veh.AutoPilot.m_nCarMission == MISSION_STOP_FOREVER && veh.AutoPilot.m_nCruiseSpeed == 0,
++          "arriving parks the car");
++    check(saw("notice:passenger mode: arrived"), "arrival is announced");
++    check(nVCModRideHandle == -1, "the finished ride lets go of the car");
++
++    beginRide(veh, -1);
++    sit(veh);
++    VCModUpdateRide(&playerPed);
++    playerPed.bInVehicle = false; playerPed.m_pMyVehicle = nil;
++    VCModUpdateRide(&playerPed);
++    check(nVCModRideHandle == -1, "getting out ends the ride");
++
++    beginRide(veh, -1);
++    sit(veh);
++    VCModUpdateRide(&playerPed);
++    veh.handle = 999;
++    VCModUpdateRide(&playerPed);
++    check(nVCModRideHandle == -1, "a recycled car handle is dropped");
++
++    beginRide(veh, -1);
++    veh.kind = VEH_BOAT; veh.handle = 2;
++    check(VCModPassengerEntry(&veh), "an empty boat is rideable");
++    check(bVCModRideSpawnedDriver, "we crewed the boat ourselves");
++    sit(veh);
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(events.empty(), "a boat we crewed waits instead of guessing a water route");
++
++    beginRide(veh, -1);
++    veh.kind = VEH_BOAT; veh.pDriver = &driverPed;
++    check(VCModPassengerEntry(&veh), "a boat with a driver is rideable");
++    sit(veh);
++    VCModUpdateRide(&playerPed);
++    check(veh.AutoPilot.m_nCarMission == MISSION_CRUISE, "a crewed traffic boat cruises");
++
++    beginRide(veh, 3);
++    sit(veh);
++    VCModUpdateRide(&playerPed);
++    check(veh.AutoPilot.m_nCarMission == MISSION_CRUISE, "an unresolvable zone falls back to cruise");
++    std::printf("PASS: %d ride state checks\n", checks);
++}
++''')
++
++    def test_destination_list(self):
++        labelBuffer = re.findall(r"^static char aVCModZoneLabel\[32\];$", PANEL, re.M)[0]
++        label = braced(PANEL, "static const char *\nVCModZoneLabel(CZone *zone)")
++        count = braced(PANEL, "int32\nVCModRideZoneCount(void)")
++        at = braced(PANEL, "bool\nVCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos)")
++        run_cpp(ENGINE_STUBS + VEHICLE_STUBS + r'''
++struct CZone {
++    char name[8];
++    float minx, miny, minz, maxx, maxy, maxz;
++    wchar translated[24];
++    wchar *GetTranslatedName(void) { return translated; }
++};
++CZone zones[4];
++int32 numZones = 1;
++struct CTheZones {
++    static uint16 GetNumberOfMapZones(void) { return (uint16) numZones; }
++    static CZone *GetMapZone(uint16 i) { return (int32) i < numZones ? &zones[i] : nil; }
++};
++void makeZone(int32 index, const char *name, float minX, float minY, float maxX, float maxY) {
++    std::strcpy(zones[index].name, name);
++    zones[index].minx = minX; zones[index].miny = minY; zones[index].maxx = maxX; zones[index].maxy = maxY;
++    for (int i = 0; name[i] != '\0'; ++i) zones[index].translated[i] = (wchar) name[i];
++    zones[index].translated[std::strlen(name)] = 0;
++}
++''' + labelBuffer + "\n" + label + "\n" + count + "\n" + at + r'''
++static int checks;
++void check(bool condition, const char *name) {
++    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
++    ++checks;
++}
++int main() {
++    check(VCModRideZoneCount() == 1, "only the whole-map box means cruise alone");
++    int16 ignoreIndex; const char *name;
++    int32 zoneIndex;
++    check(VCModRideZoneAt(0, &zoneIndex, &name, nil) && zoneIndex == -1,
++          "entry 0 is cruise and stores no zone");
++    check(std::strcmp(name, "traffic (cruise)") == 0, "the cruise entry is labelled");
++    check(!VCModRideZoneAt(1, &zoneIndex, &name, nil), "a zone that is not there is refused");
++    check(!VCModRideZoneAt(-1, &zoneIndex, &name, nil), "cruise below zero is refused");
++
++    makeZone(1, "OceanB", -100.0f, -50.0f, 100.0f, 50.0f);
++    makeZone(2, "ViceP", 300.0f, 400.0f, 500.0f, 600.0f);
++    numZones = 3;
++    check(VCModRideZoneCount() == 3, "cruise plus every zone but the map box");
++    CVector pos;
++    check(VCModRideZoneAt(1, &zoneIndex, &name, &pos) && zoneIndex == 1 &&
++          std::strcmp(name, "OceanB") == 0, "list entry one is the first real zone");
++    check(pos.x == 0.0f && pos.y == 0.0f, "the destination is the zone centre");
++    check(VCModRideZoneAt(2, &zoneIndex, &name, &pos) && zoneIndex == 2 && pos.x == 400.0f && pos.y == 500.0f,
++          "entry two is the second zone with its own centre");
++    check(!VCModRideZoneAt(3, &zoneIndex, &name, &pos), "entry past the last zone is refused");
++
++    /* a gxt name longer than the label buffer must not walk past it */
++    wchar longName[64];
++    for (int i = 0; i < 63; ++i) longName[i] = (wchar) ('a' + i % 26);
++    longName[63] = 0;
++    for (int i = 0; i < 23; ++i) zones[1].translated[i] = longName[i];
++    zones[1].translated[23] = 0;
++    check(VCModRideZoneAt(1, &zoneIndex, &name, nil) && std::strlen(name) < 32,
++          "an over-long zone name is truncated into the label buffer");
++    std::printf("PASS: %d destination list checks\n", checks);
++}
++''')
++
++    def test_wiring(self):
++        rows = braced(PANEL, "static const VCModRowDef aVCModRows[]")
++        switched = braced(PANEL, "static bool *aVCModSwitched[]")
++        rowlist = braced(PANEL, "static int32\nVCModRowList(int32 kind)")
++        listcount = braced(PANEL, "static int32\nVCModListCount(int32 list)")
++        pick = braced(PANEL, "static void\nVCModListPick(int32 list, int32 entry)")
++        entry = braced(PLAYER, "bool\nVCModPassengerEntry(CVehicle *vehicle)")
++        process = braced(PLAYER, "void\nCPlayerPed::ProcessControl(void)")
++        playerinfo = (ROOT / "src/core/PlayerInfo.cpp").read_text()
++
++        self.assertIn("extern bool bVCModPassengerMode;", HEAD)
++        self.assertIn("extern int32 nVCModRideZone;", HEAD)
++        self.assertIn("int32 VCModRideZoneCount(void);", HEAD)
++        self.assertIn("bool VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos);", HEAD)
++        self.assertIn("bool VCModPassengerEntry(CVehicle *vehicle);", HEAD)
++        self.assertIn("static uint16 GetNumberOfMapZones(void) { return TotalNumberOfMapZones; }", ZONES)
++
++        self.assertIn('"PASSENGER MODE"', rows)
++        self.assertIn('"RIDE TO"', rows)
++        self.assertLess(rows.index('"ADRENALINE MODE"'), rows.index('"PASSENGER MODE"'))
++        self.assertLess(rows.index('"PASSENGER MODE"'), rows.index('"RIDE TO"'))
++        # a mode that changes how Tommy travels is not part of the master row
++        self.assertNotIn("bVCModPassengerMode", switched)
++        self.assertIn("case VCMOD_ROW_RIDEZONE:\treturn VCMOD_LIST_RIDEZONE;", rowlist)
++        self.assertIn("case VCMOD_LIST_RIDEZONE:\treturn VCModRideZoneCount();", listcount)
++        self.assertIn("nVCModRideZone = zoneIndex", pick)
++        update = braced(PLAYER, "static void\nVCModUpdateRide(CPlayerPed *player)")
++        self.assertIn("VCModRideZoneAt(nVCModRideZone", update)
++        self.assertIn("VCModUpdateRide(this);", process)
++        self.assertIn("!VCModPassengerEntry(carBelow)", playerinfo)
++        self.assertIn('ReadIniIfExists("VC Mods", "PassengerMode", &bVCModPassengerMode);', INI)
++        self.assertIn('ReadIniIfExists("VC Mods", "RideZone", &nVCModRideZone);', INI)
++        self.assertIn("bool bVCModPassengerMode;", PANEL)
++        self.assertIn("TWEAKINT32(nVCModRideZone, -1, NUMMAPZONES - 1, 1);", PANEL)
++
++
++if __name__ == "__main__":
++    unittest.main()

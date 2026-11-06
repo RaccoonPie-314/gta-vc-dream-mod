@@ -137,10 +137,16 @@ WalkMode = 0
 LockOnVehicles = 0
 NeverWanted = 0
 LockOnLatch = 0
+Adrenaline = 0
+AdrenalineSlowMo = 1
+PedModel = -1
+PassengerMode = 0
+RideZone = -1
 ```
 
 `1`/`0`, and `AnimChoice` is the index into `aVCModAnimGroups` (0 = man, 8 = woman,
-15 = panicchunky). Section and key names are case sensitive — `MINI_CASE_SENSITIVE`
+15 = panicchunky). `PedModel` is a model index, `-1` meaning Tommy. `RideZone` is
+an index into the ride destination list, `-1` meaning cruise with traffic. Section and key names are case sensitive — `MINI_CASE_SENSITIVE`
 is on in this build. Precedence is one sentence: **the ini seeds it, the panel owns
 it from then on** — flipping a row in play does not write back to the ini, so the
 file stays a preset rather than a second live state to keep in sync.
@@ -160,6 +166,12 @@ file stays a preset rather than a second live state to keep in sync.
 | `bVCModLockOnVehicles` | off | Lock-on also considers driven vehicles — cars, bikes, boats, helis |
 | `bVCModLockOnLatch` | off | Aim button latches: one two-finger press locks on and stays, the next releases |
 | `bVCModNeverWanted` | off | Wanted level is forced back to 0 every frame |
+| `bVCModAdrenaline` | off | Reproduces the native adrenaline pill without picking it up: the flag-driven perks, sprint without stamina, and the melee damage multipliers |
+| `bVCModAdrenalineSlowMo` | on | With adrenaline on, `SLOW-MO` keeps the native `SetTimeScale(1/3)`; `NORMAL` keeps every other effect and leaves the world at full speed and the legs at their normal rate |
+| `nVCModPedModel` | -1 | Character to wear, as a model index; `-1` is Tommy |
+| `bVCModCopPistol` | off | Two-handed colt hold. **Paused**: it shoots correctly, the arm still tracks the old target. Left out of ALL ON/OFF so it cannot come on during other testing |
+| `bVCModPassengerMode` | off | The enter-vehicle key takes the passenger seat while an NPC drives |
+| `nVCModRideZone` | -1 | Where that NPC goes: `-1` cruises with traffic, otherwise a map zone from the destination list |
 
 Two keys are checked directly in `CPlayerPed::ProcessControl`, on foot only:
 
@@ -203,6 +215,44 @@ number so the current selection is readable.
 While strafing (PC mouse-control mode) the override stands down and the stock
 `playerback/left/right` groups are used, because no NPC group contains side-step
 clips — forcing one makes A and D play a forward walk.
+
+## Characters
+
+Two rows pick who Tommy wears: **PED CATEGORY** (cops / gangs / civilians /
+mission) then **CHARACTER**, Tommy always first so there is a way back. The list
+is read out of the model table the game loaded rather than a hand-kept list, so
+nothing goes stale when the ide changes.
+
+The worn model brings its own animation group, gated by the same playability
+check the animation picker uses, and the swap happens in the update pass, never
+inside the render. Tommy keeps his own ped stats through it, because respawn goes
+through `Undress`/`Dress`, which re-takes stats from whatever model is worn.
+
+The **mission** shelf is a special case: `default.ide` declares slots
+`MI_SPECIAL01..21` as `special01`..`special21` with a generic texture dictionary,
+and no file answers to those names. Selecting one used to stream an empty model
+and hand a nil clump to `CPed::SetModelIndex`, which crashed. The shelf now
+resolves each slot through the game's own cutscene table (`igcandy`, `igdiaz`,
+the `csplay` variants) and only offers a slot whose file is actually in the
+archive. Anything that still cannot be resolved is refused before the ped is
+touched.
+
+## Passenger riding
+
+With **PASSENGER MODE** on, the enter-vehicle key puts Tommy in a passenger seat
+and an NPC in the driver seat. Bikes use the pillion seat; planes, helis and
+trains are refused with a message, because there is no passenger seat to take.
+An empty car gets a driver through the engine's own `SetUpDriver()`, with the
+parked-car counters moved the same way the game moves them; a car a script or a
+mission owns is left alone, and if no driver can be made the press falls back to
+the stock driver entry rather than doing nothing.
+
+The car is held with `MISSION_STOP_FOREVER` until Tommy is actually seated, the
+same trick the shortcut taxi uses, so it cannot drive off without him. **RIDE TO**
+then chooses what the driver does: cruise with traffic indefinitely, or route to a
+named district from the game's zone table and park on arrival. Getting out is the
+normal exit key; the ride state is tracked by vehicle handle, so a car that is
+blown up or recycled mid-ride is dropped rather than followed.
 
 ## Why the group swap crashed, and the actual fix
 
