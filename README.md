@@ -37,7 +37,7 @@ scripts/sync.sh        # vc-mods.patch := git diff miami..vcmods   (run after ev
 scripts/build.sh       # cmake Release
 scripts/install.sh     # bundle -> game folder, re-sign
 scripts/package.sh     # zip the game folder for a flash drive; --public drops Rockstar data
-scripts/publish.sh     # 92 KB folder fit to hand out: patch, docs, scripts, nothing else
+scripts/publish.sh     # small folder fit to hand out: patch, docs, scripts, nothing else
 scripts/bootstrap.sh   # rebuild the whole thing from a clean machine
 ```
 
@@ -49,6 +49,17 @@ The loop while features are still being added: edit in `reVC/`, commit to
 `vcmods`, `sync.sh`, `build.sh`, `install.sh`, play. Half-way states live in
 commits on that branch, never in the patch. When something's finished, update
 `CHANGELOG.md` and run `package.sh` for the stick.
+
+To push that to GitHub, in order:
+
+```
+scripts/sync.sh                                              # branch -> patch
+VC_MODS_OPERATOR=me scripts/publish.sh ./gta-vc-dream-mod    # patch -> handout folder
+cd gta-vc-dream-mod && git commit -am '...' && git push      # folder -> github.com/RaccoonPie-314/gta-vc-dream-mod
+```
+
+`publish.sh` refreshes that folder in place and leaves its `.git` alone, so the
+same directory is both the build product and the working clone.
 
 One hazard worth five seconds: run `git rev-parse --show-toplevel` from this
 folder. If the answer is anything other than `reVC`, a stray repo encloses your
