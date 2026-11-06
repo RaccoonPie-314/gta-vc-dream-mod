@@ -1,0 +1,890 @@
+diff --git a/src/animation/AnimBlendAssocGroup.cpp b/src/animation/AnimBlendAssocGroup.cpp
+index c2ff072..a082ea9 100644
+--- a/src/animation/AnimBlendAssocGroup.cpp
++++ b/src/animation/AnimBlendAssocGroup.cpp
+@@ -46,6 +46,10 @@ CAnimBlendAssocGroup::DestroyAssociations(void)
+ CAnimBlendAssociation*
+ CAnimBlendAssocGroup::GetAnimation(uint32 id)
+ {
++	// assocList is sized by the group's own clip count, so an id outside it must
++	// not index past the allocation
++	if ((int32) id < firstAnimId || (int32) id - firstAnimId >= numAssociations)
++		return nil;
+ 	return &assocList[id - firstAnimId];
+ }
+ 
+diff --git a/src/animation/AnimManager.cpp b/src/animation/AnimManager.cpp
+index f6ac3eb..04b92dd 100644
+--- a/src/animation/AnimManager.cpp
++++ b/src/animation/AnimManager.cpp
+@@ -1128,7 +1128,14 @@ CAnimManager::GetAnimGroupName(AssocGroupId groupId)
+ CAnimBlendAssociation*
+ CAnimManager::CreateAnimAssociation(AssocGroupId groupId, AnimationId animId)
+ {
+-	return ms_aAnimAssocGroups[groupId].CopyAnimation(animId);
++	CAnimBlendAssociation *anim = ms_aAnimAssocGroups[groupId].CopyAnimation(animId);
++	// narrow NPC groups carry only a handful of clips; fall back to the player set,
++	// then to the full std set, rather than handing callers nothing
++	if (anim == nil && groupId != ASSOCGRP_PLAYER)
++		anim = ms_aAnimAssocGroups[ASSOCGRP_PLAYER].CopyAnimation(animId);
++	if (anim == nil)
++		anim = ms_aAnimAssocGroups[ASSOCGRP_STD].CopyAnimation(animId);
++	return anim;
+ }
+ 
+ CAnimBlendAssociation*
+diff --git a/src/core/main.cpp b/src/core/main.cpp
+index a412a98..9c8bcf9 100644
+--- a/src/core/main.cpp
++++ b/src/core/main.cpp
+@@ -68,6 +68,7 @@
+ #include "MemoryHeap.h"
+ #include "SceneEdit.h"
+ #include "debugmenu.h"
++#include "vcmodpanel.h"
+ #include "Clock.h"
+ #include "Occlusion.h"
+ #include "Ropes.h"
+@@ -1500,6 +1501,7 @@ Render2dStuff(void)
+ 
+ #ifdef DEBUGMENU
+ 	DebugMenuRender();
++	VCModPanelRender();
+ #endif
+ 	POP_RENDERGROUP();
+ }
+diff --git a/src/core/re3.cpp b/src/core/re3.cpp
+index d16088f..af65912 100644
+--- a/src/core/re3.cpp
++++ b/src/core/re3.cpp
+@@ -32,6 +32,7 @@
+ #include "PlayerPed.h"
+ #include "Radar.h"
+ #include "debugmenu.h"
++#include "vcmodpanel.h"
+ #include "Frontend.h"
+ #include "WaterLevel.h"
+ #include "main.h"
+@@ -622,6 +623,18 @@ bool LoadINISettings()
+ 	}
+ #endif
+ 
++	// startup defaults only: the panel and the debug menu own these once playing
++	ReadIniIfExists("VC Mods", "NpcAnims", &bVCModPlayerNpcAnims);
++	ReadIniIfExists("VC Mods", "AnimChoice", &nVCModAnimChoice);
++	ReadIniIfExists("VC Mods", "MouseAimLockOn", &bVCModMouseAimLockOn);
++	ReadIniIfExists("VC Mods", "AimAllWeapons", &bVCModAimAllWeapons);
++	ReadIniIfExists("VC Mods", "PlayerDoomAim", &bVCModPlayerDoomAim);
++	ReadIniIfExists("VC Mods", "NoScopedAim", &bVCModNoScopedAim);
++	ReadIniIfExists("VC Mods", "WalkMode", &bVCModWalkMode);
++	ReadIniIfExists("VC Mods", "LockOnVehicles", &bVCModLockOnVehicles);
++	ReadIniIfExists("VC Mods", "NeverWanted", &bVCModNeverWanted);
++	ReadIniIfExists("VC Mods", "LockOnLatch", &bVCModLockOnLatch);
++
+ 	// Fetched in above block, but needs evaluation
+ #ifdef PED_CAR_DENSITY_SLIDERS
+ 	CPopulation::MaxNumberOfPedsInUse = DEFAULT_MAX_NUMBER_OF_PEDS * CIniFile::PedNumberMultiplier;
+diff --git a/src/extras/debugmenu.cpp b/src/extras/debugmenu.cpp
+index da0dbb8..c5cd10d 100644
+--- a/src/extras/debugmenu.cpp
++++ b/src/extras/debugmenu.cpp
+@@ -1009,6 +1009,12 @@ updateMouse(void)
+ 	pad->NewMouseControllerState.y = 0.0f;
+ }
+ 
++bool
++DebugMenuIsActive(void)
++{
++	return menuOn != 0;
++}
++
+ void
+ DebugMenuProcess(void)
+ {
+diff --git a/src/extras/debugmenu.h b/src/extras/debugmenu.h
+index a160c06..e25b3a9 100644
+--- a/src/extras/debugmenu.h
++++ b/src/extras/debugmenu.h
+@@ -80,7 +80,7 @@ public:
+ 	CTweakSwitch(void *pInt, const char *strName, int32 nMin, int32 nMax, const char **aStr,
+ 	             void (*pFunc)(), const char *strPath)
+ 	    : m_pPath(strPath), m_pVarName(strName), m_pIntVar(pInt), m_nMin(nMin), m_nMax(nMax),
+-	      m_aStr(aStr)
++	      m_aStr(aStr), m_pFunc(pFunc)
+ 	{
+ 		CTweakVars::Add(this);
+ 	}
+@@ -153,6 +153,7 @@ void DebugMenuInit(void);
+ void DebugMenuShutdown(void);
+ void DebugMenuProcess(void);
+ void DebugMenuRender(void);
++bool DebugMenuIsActive(void);
+ 
+ 
+ // Some overloads for simplicity
+diff --git a/src/extras/vcmodpanel.cpp b/src/extras/vcmodpanel.cpp
+new file mode 100644
+index 0000000..440edb1
+--- /dev/null
++++ b/src/extras/vcmodpanel.cpp
+@@ -0,0 +1,435 @@
++#include "common.h"
++
++#include <stdio.h>
++#include <string.h>
++
++#include "RwHelper.h"
++#include "Pad.h"
++#include "Camera.h"
++#include "AnimBlendAssocGroup.h"
++#include "AnimBlendAssociation.h"
++#include "AnimBlendHierarchy.h"
++#include "vcmodpanel.h"
++
++bool bVCModPlayerNpcAnims;
++int32 nVCModAnimChoice;
++bool bVCModMouseAimLockOn;
++bool bVCModAimAllWeapons;
++bool bVCModPlayerDoomAim;
++bool bVCModNoScopedAim;
++bool bVCModWalkMode;
++bool bVCModLockOnVehicles;
++bool bVCModNeverWanted;
++bool bVCModLockOnLatch;
++
++// only groups built from aStdAnimDescs are offered: they are the ones carrying all
++// five locomotion slots, so the swap can't leave a slot unresolved
++static const char *aVCModAnimGroupNames[] = {
++	"man (police, most male civs)", "gang1", "gang2", "shuffle", "oldman", "fatman",
++	"oldfatman", "jogger", "woman", "shopping", "busywoman", "sexywoman",
++	"fatwoman", "oldwoman", "jogwoman", "panicchunky"
++};
++static const int32 aVCModAnimGroups[] = {
++	ASSOCGRP_STD, ASSOCGRP_GANG1, ASSOCGRP_GANG2, ASSOCGRP_SHUFFLE, ASSOCGRP_OLD,
++	ASSOCGRP_FAT, ASSOCGRP_OLDFAT, ASSOCGRP_JOGGER, ASSOCGRP_WOMAN, ASSOCGRP_WOMANSHOP,
++	ASSOCGRP_BUSYWOMAN, ASSOCGRP_SEXYWOMAN, ASSOCGRP_FATWOMAN, ASSOCGRP_OLDWOMAN,
++	ASSOCGRP_JOGWOMAN, ASSOCGRP_PANICCHUNKY
++};
++
++// SetRealMoveAnim reaches m_animGroup every frame from ProcessControl, using ids
++// beyond the five move slots, so every association a group can hand out has to be
++// usable before the group becomes current
++static bool
++VCModGroupPlayable(AssocGroupId groupId)
++{
++	CAnimBlendAssocGroup *grp = &CAnimManager::GetAnimAssocGroups()[groupId];
++	for (int32 i = 0; i < grp->numAssociations; i++) {
++		CAnimBlendHierarchy *h = grp->assocList[i].hierarchy;
++		if (h == nil || h->sequences == nil || h->numSequences <= 0) {
++			fprintf(stderr, "VCMOD refusing group %d, assoc %d (%s)\n",
++				groupId, i, h ? h->name : "nil hierarchy");
++			return false;
++		}
++	}
++	return true;
++}
++
++bool
++VCModPickAnimGroup(AssocGroupId *out)
++{
++	if (!bVCModPlayerNpcAnims)
++		return false;
++
++	AssocGroupId want = (AssocGroupId) aVCModAnimGroups[nVCModAnimChoice];
++	static AssocGroupId loggedWant = NUM_ANIM_ASSOC_GROUPS;
++	if (want != loggedWant) {
++		fprintf(stderr, "VCMOD selecting %s (list %d -> group %d)\n",
++			aVCModAnimGroupNames[nVCModAnimChoice], nVCModAnimChoice, want);
++		loggedWant = want;
++	}
++	if (!VCModGroupPlayable(want))
++		return false;
++
++	*out = want;
++	return true;
++}
++
++#ifdef DEBUGMENU
++#include "rtcharse.h"
++#include "re3_inttypes.h"
++#include "ControllerConfig.h"
++#include "debugmenu.h"
++
++// one row per group: activating a row applies it immediately, which a cycling
++// value cannot. Row order must match aVCModAnimGroups / aVCModAnimGroupNames.
++#define VCMOD_ROW(idx, label) \
++	static void VCModPick##idx(void) { nVCModAnimChoice = idx; bVCModPlayerNpcAnims = true; } \
++	TWEAKFUNCN(VCModPick##idx, label);
++
++SETTWEAKPATH("VC Mods");
++TWEAKBOOL(bVCModPlayerNpcAnims);
++TWEAKINT32(nVCModAnimChoice, 0, ARRAY_SIZE(aVCModAnimGroups)-1, 1);
++VCMOD_ROW(0, "anim: man (police, most male civs)")
++VCMOD_ROW(1, "anim: gang1")
++VCMOD_ROW(2, "anim: gang2")
++VCMOD_ROW(3, "anim: shuffle")
++VCMOD_ROW(4, "anim: oldman")
++VCMOD_ROW(5, "anim: fatman")
++VCMOD_ROW(6, "anim: oldfatman")
++VCMOD_ROW(7, "anim: jogger")
++VCMOD_ROW(8, "anim: woman")
++VCMOD_ROW(9, "anim: shopping")
++VCMOD_ROW(10, "anim: busywoman")
++VCMOD_ROW(11, "anim: sexywoman")
++VCMOD_ROW(12, "anim: fatwoman")
++VCMOD_ROW(13, "anim: oldwoman")
++VCMOD_ROW(14, "anim: jogwoman")
++VCMOD_ROW(15, "anim: panicchunky")
++TWEAKBOOL(bVCModMouseAimLockOn);
++TWEAKBOOL(bVCModAimAllWeapons);
++TWEAKBOOL(bVCModPlayerDoomAim);
++TWEAKBOOL(bVCModNoScopedAim);
++TWEAKBOOL(bVCModWalkMode);
++TWEAKBOOL(bVCModLockOnVehicles);
++TWEAKBOOL(bVCModNeverWanted);
++TWEAKBOOL(bVCModLockOnLatch);
++
++// Colour comes from the charset, the same way the debug menu highlights a selected
++// row: an opaque background on every glyph is what makes a row read as a panel.
++enum eVCModFont
++{
++	VCFONT_TITLE,
++	VCFONT_LABEL,
++	VCFONT_ON,
++	VCFONT_OFF,
++	VCFONT_SET,
++	VCFONT_WARN,
++	VCFONT_HINT,
++	VCFONT_MARK,
++	NUM_VCFONTS
++};
++
++static RtCharset *aVCModFonts[NUM_VCFONTS];
++static int32 nVCModCharW, nVCModCharH;
++static bool bVCModPanelOpen;
++static bool bVCModAnimListOpen;
++static float fVCModCursorX, fVCModCursorY;
++
++#define VCMOD_PANEL_X		20
++#define VCMOD_PANEL_Y		60
++#define VCMOD_NAME_COLS		18
++#define VCMOD_VALUE_COLS	28
++
++struct VCModRowDef
++{
++	const char *name;
++	bool *state;	// nil means the row cycles the anim set instead
++};
++
++static const VCModRowDef aVCModRows[] = {
++	{ "NPC ANIMATION",   &bVCModPlayerNpcAnims  },
++	{ "ANIM SET",        nil                    },
++	{ "FREEAIM+LOCKON",  &bVCModMouseAimLockOn  },
++	{ "AIM ALL WEAPONS", &bVCModAimAllWeapons   },
++	{ "NPC DOOM AIM",    &bVCModPlayerDoomAim   },
++	{ "NO SCOPE CAMERA", &bVCModNoScopedAim     },
++	{ "WALK MODE",       &bVCModWalkMode        },
++	{ "LOCKON VEHICLES", &bVCModLockOnVehicles  },
++	{ "NEVER WANTED",    &bVCModNeverWanted     },
++	{ "LOCKON LATCH",    &bVCModLockOnLatch     },
++};
++
++static void
++VCModMakeFonts(void)
++{
++	static const RwRGBA aFg[NUM_VCFONTS] = {
++		{ 255,  96, 192, 255 },	// title
++		{ 232, 232, 240, 255 },	// label
++		{ 112, 240, 148, 255 },	// on
++		{ 132, 132, 144, 255 },	// off
++		{ 110, 216, 255, 255 },	// anim set name
++		{ 255, 200,  72, 255 },	// warning
++		{ 196, 156, 255, 255 },	// key hints
++		{ 255, 255, 255, 255 }		// marker
++	};
++	static const RwRGBA aBgPanel[NUM_VCFONTS] = {
++		{  32,   8,  40, 255 },
++		{  12,  12,  20, 255 },
++		{  12,  12,  20, 255 },
++		{  12,  12,  20, 255 },
++		{  12,  12,  20, 255 },
++		{  36,  24,   4, 255 },
++		{  12,  12,  20, 255 },
++		{  12,  12,  20,   0 }
++	};
++
++	OpenCharsetSafe();
++
++	for (int32 i = 0; i < NUM_VCFONTS; i++) {
++		aVCModFonts[i] = RtCharsetCreate(&aFg[i], &aBgPanel[i]);
++		if (aVCModFonts[i] == nil)
++			return;
++	}
++
++	RtCharsetDesc desc;
++	RtCharsetGetDesc(aVCModFonts[VCFONT_LABEL], &desc);
++	nVCModCharW = desc.width;
++	nVCModCharH = desc.height;
++}
++
++static void
++VCModPrint(int32 style, const char *s, int32 x, int32 y)
++{
++	RtCharsetPrintBuffered(aVCModFonts[style], s, x, y, false);
++}
++
++// every cell is padded to a fixed width, otherwise the row backgrounds end at
++// ragged distances and the panel reads as floating text
++static void
++VCModCell(int32 style, const char *s, int32 x, int32 y, int32 cols)
++{
++	char cell[64];
++	snprintf(cell, sizeof(cell), "%-*s", cols, s);
++	VCModPrint(style, cell, x, y);
++}
++
++static bool
++VCModCursorInRect(float px, float py, int32 x, int32 y, int32 w, int32 h)
++{
++	return px >= x && px < x + w && py >= y && py < y + h;
++}
++
++static void
++VCModUpdateMouse(CPad *pad, int32 screenW, int32 screenH)
++{
++	// the panel cursor has to follow the same invert settings the game's own mouse
++	// look uses, or it moves against the hand that is pointing it
++	int dirX = MousePointerStateHelper.bInvertHorizontally ? -1 : 1;
++	int dirY = MousePointerStateHelper.bInvertVertically ? -1 : 1;
++
++	fVCModCursorX += pad->NewMouseControllerState.x * dirX;
++	fVCModCursorY += pad->NewMouseControllerState.y * dirY;
++	if (fVCModCursorX < 0.0f) fVCModCursorX = 0.0f;
++	if (fVCModCursorY < 0.0f) fVCModCursorY = 0.0f;
++	if (fVCModCursorX >= screenW) fVCModCursorX = screenW - 1.0f;
++	if (fVCModCursorY >= screenH) fVCModCursorY = screenH - 1.0f;
++
++	// the camera must not turn while the panel is being pointed at
++	pad->NewMouseControllerState.x = 0.0f;
++	pad->NewMouseControllerState.y = 0.0f;
++}
++
++static int32
++VCModRowY(int32 row)
++{
++	return VCMOD_PANEL_Y + nVCModCharH * (row + 1);
++}
++
++#define VCMOD_ANIM_SET_ROW	1
++
++// the anim list opens beside the panel instead of pushing the rows down, so the
++// panel keeps one shape while choosing
++static int32
++VCModListX(void)
++{
++	return VCMOD_PANEL_X + (VCMOD_NAME_COLS + VCMOD_VALUE_COLS) * nVCModCharW + 20;
++}
++
++static int32
++VCModListRowY(int32 entry)
++{
++	return VCModRowY(VCMOD_ANIM_SET_ROW) + nVCModCharH * entry;
++}
++
++static void
++VCModTriangle(RwCamera *cam, float x0, float y0, float x1, float y1, float x2, float y2,
++	uint8 r, uint8 g, uint8 b)
++{
++	RwIm2DVertex verts[3];
++	float recipz = 1.0f / RwCameraGetNearClipPlane(cam);
++
++	RwRenderStateSet(rwRENDERSTATETEXTURERASTER, nil);
++
++	RwIm2DVertexSetScreenX(&verts[0], x0);
++	RwIm2DVertexSetScreenY(&verts[0], y0);
++	RwIm2DVertexSetScreenZ(&verts[0], RwIm2DGetNearScreenZ());
++	RwIm2DVertexSetCameraZ(&verts[0], RwCameraGetNearClipPlane(cam));
++	RwIm2DVertexSetRecipCameraZ(&verts[0], recipz);
++	RwIm2DVertexSetIntRGBA(&verts[0], r, g, b, 255);
++
++	RwIm2DVertexSetScreenX(&verts[1], x1);
++	RwIm2DVertexSetScreenY(&verts[1], y1);
++	RwIm2DVertexSetScreenZ(&verts[1], RwIm2DGetNearScreenZ());
++	RwIm2DVertexSetCameraZ(&verts[1], RwCameraGetNearClipPlane(cam));
++	RwIm2DVertexSetRecipCameraZ(&verts[1], recipz);
++	RwIm2DVertexSetIntRGBA(&verts[1], r, g, b, 255);
++
++	RwIm2DVertexSetScreenX(&verts[2], x2);
++	RwIm2DVertexSetScreenY(&verts[2], y2);
++	RwIm2DVertexSetScreenZ(&verts[2], RwIm2DGetNearScreenZ());
++	RwIm2DVertexSetCameraZ(&verts[2], RwCameraGetNearClipPlane(cam));
++	RwIm2DVertexSetRecipCameraZ(&verts[2], recipz);
++	RwIm2DVertexSetIntRGBA(&verts[2], r, g, b, 255);
++
++	RwIm2DRenderPrimitive(rwPRIMTYPETRILIST, verts, 3);
++}
++
++// a charset "+" was unreadably small, so the pointer is geometry: a filled arrow
++// with a dark edge that stays visible on both the panel and the sky
++static void
++VCModDrawCursor(RwCamera *cam)
++{
++	int32 x = (int32) fVCModCursorX;
++	int32 y = (int32) fVCModCursorY;
++
++	VCModTriangle(cam, x - 2.0f, y - 2.0f, x - 2.0f, y + 22.0f, x + 16.0f, y + 12.0f, 8, 8, 12);
++	VCModTriangle(cam, (float) x, (float) y, (float) x, y + 19.0f, x + 14.0f, y + 10.0f, 255, 255, 255);
++}
++
++static void
++VCModClick(CPad *pad)
++{
++	if (!(pad->NewMouseControllerState.LMB && !pad->OldMouseControllerState.LMB))
++		return;
++
++	if (bVCModAnimListOpen) {
++		for (uint32 k = 0; k < ARRAY_SIZE(aVCModAnimGroupNames); k++) {
++			if (!VCModCursorInRect(fVCModCursorX, fVCModCursorY, VCModListX(), VCModListRowY(k),
++					VCMOD_VALUE_COLS * nVCModCharW, nVCModCharH))
++				continue;
++
++			nVCModAnimChoice = k;
++			bVCModPlayerNpcAnims = true;
++			bVCModAnimListOpen = false;
++			return;
++		}
++	}
++
++	int32 rowW = (VCMOD_NAME_COLS + VCMOD_VALUE_COLS) * nVCModCharW;
++	for (uint32 i = 0; i < ARRAY_SIZE(aVCModRows); i++) {
++		if (!VCModCursorInRect(fVCModCursorX, fVCModCursorY, VCMOD_PANEL_X, VCModRowY(i), rowW, nVCModCharH))
++			continue;
++
++		if (aVCModRows[i].state)
++			*aVCModRows[i].state = !*aVCModRows[i].state;
++		else
++			bVCModAnimListOpen = !bVCModAnimListOpen;
++		return;
++	}
++
++	bVCModAnimListOpen = false;
++}
++
++void
++VCModPanelRender(void)
++{
++	CPad *pad = CPad::GetPad(0);
++	if (pad == nil)
++		return;
++
++	// the debug menu's page column occupies the same corner, so it wins while open
++	if (DebugMenuIsActive())
++		return;
++
++	if (ControlsManager.GetIsKeyboardKeyJustDown((RsKeyCodes)'\\'))
++		bVCModPanelOpen = !bVCModPanelOpen;
++	if (!bVCModPanelOpen) {
++		bVCModAnimListOpen = false;
++		return;
++	}
++
++	RwRenderStateSet(rwRENDERSTATEZTESTENABLE, 0);
++	RwRenderStateSet(rwRENDERSTATEZWRITEENABLE, 0);
++	RwRenderStateSet(rwRENDERSTATEVERTEXALPHAENABLE, (void*)TRUE);
++	RwRenderStateSet(rwRENDERSTATESRCBLEND, (void*)rwBLENDSRCALPHA);
++	RwRenderStateSet(rwRENDERSTATEDESTBLEND, (void*)rwBLENDINVSRCALPHA);
++	RwRenderStateSet(rwRENDERSTATEFOGENABLE, 0);
++	RwRenderStateSet(rwRENDERSTATECULLMODE, (void*)rwCULLMODECULLNONE);
++
++	RwCamera *cam = RwCameraGetCurrentCamera();
++	if (cam == nil)
++		return;
++	int32 screenW = RwRasterGetWidth(RwCameraGetRaster(cam));
++	int32 screenH = RwRasterGetHeight(RwCameraGetRaster(cam));
++
++	if (aVCModFonts[VCFONT_LABEL] == nil) {
++		VCModMakeFonts();
++		if (aVCModFonts[VCFONT_LABEL] == nil)
++			return;
++	}
++
++	VCModUpdateMouse(pad, screenW, screenH);
++	VCModClick(pad);
++
++	int32 rowW = (VCMOD_NAME_COLS + VCMOD_VALUE_COLS) * nVCModCharW;
++	int32 fullCols = rowW / nVCModCharW;
++	VCModCell(VCFONT_TITLE, " VC MODS ", VCMOD_PANEL_X, VCMOD_PANEL_Y, fullCols);
++
++	for (uint32 i = 0; i < ARRAY_SIZE(aVCModRows); i++) {
++		int32 y = VCModRowY(i);
++		int32 style = VCFONT_OFF;
++		const char *value = "[--]";
++
++		if (aVCModRows[i].state) {
++			if (*aVCModRows[i].state) {
++				style = VCFONT_ON;
++				value = "[ON]";
++			}
++		} else {
++			style = VCFONT_SET;
++			value = aVCModAnimGroupNames[nVCModAnimChoice];
++		}
++
++		VCModCell(VCFONT_LABEL, aVCModRows[i].name, VCMOD_PANEL_X, y, VCMOD_NAME_COLS);
++		VCModCell(style, value, VCMOD_PANEL_X + VCMOD_NAME_COLS*nVCModCharW, y, VCMOD_VALUE_COLS);
++
++		// the affordance that this row opens a list rather than flipping anything
++		if (aVCModRows[i].state == nil)
++			VCModPrint(VCFONT_MARK, bVCModAnimListOpen ? "-" : "+",
++				VCMOD_PANEL_X + rowW + nVCModCharW, y);
++	}
++
++	if (bVCModAnimListOpen) {
++		for (uint32 k = 0; k < ARRAY_SIZE(aVCModAnimGroupNames); k++) {
++			bool selected = (int32) k == nVCModAnimChoice;
++			VCModCell(selected ? VCFONT_ON : VCFONT_SET, aVCModAnimGroupNames[k],
++				VCModListX(), VCModListRowY(k), VCMOD_VALUE_COLS);
++			if (selected)
++				VCModPrint(VCFONT_ON, ">", VCModListX() - nVCModCharW, VCModListRowY(k));
++		}
++	}
++
++	int32 y = VCModRowY((int32) ARRAY_SIZE(aVCModRows));
++	if (bVCModNoScopedAim && !bVCModAimAllWeapons)
++		VCModCell(VCFONT_WARN, "! sniper needs AIM ALL WEAPONS", VCMOD_PANEL_X, y++, fullCols);
++	if (!bVCModMouseAimLockOn && CCamera::m_bUseMouse3rdPerson)
++		VCModCell(VCFONT_WARN, "! two-finger hold does nothing", VCMOD_PANEL_X, y++, fullCols);
++
++	VCModCell(VCFONT_HINT, "fire G   walk B   close backslash", VCMOD_PANEL_X, y, fullCols);
++
++	// charset glyphs go through the buffered path, so flush them before the cursor
++	// geometry or the pointer ends up underneath the panel
++	RtCharsetBufferFlush();
++	VCModDrawCursor(cam);
++}
++#endif
+diff --git a/src/extras/vcmodpanel.h b/src/extras/vcmodpanel.h
+new file mode 100644
+index 0000000..8ab32c4
+--- /dev/null
++++ b/src/extras/vcmodpanel.h
+@@ -0,0 +1,26 @@
++#ifndef VCMODPANEL_H
++#define VCMODPANEL_H
++
++#include "AnimManager.h"
++
++// Every mod switch lives in vcmodpanel.cpp. The debug menu's "VC Mods" page and the
++// on-screen panel write these same variables, so the two can never disagree.
++extern bool bVCModPlayerNpcAnims;
++extern int32 nVCModAnimChoice;
++extern bool bVCModMouseAimLockOn;
++extern bool bVCModAimAllWeapons;
++extern bool bVCModPlayerDoomAim;
++extern bool bVCModNoScopedAim;
++extern bool bVCModWalkMode;
++extern bool bVCModLockOnVehicles;
++extern bool bVCModNeverWanted;
++extern bool bVCModLockOnLatch;
++
++// the group the anim swap wants, false when the swap must stand down
++bool VCModPickAnimGroup(AssocGroupId *out);
++
++#ifdef DEBUGMENU
++void VCModPanelRender(void);
++#endif
++
++#endif
+diff --git a/src/peds/PlayerPed.cpp b/src/peds/PlayerPed.cpp
+index cd8da42..6d111f9 100644
+--- a/src/peds/PlayerPed.cpp
++++ b/src/peds/PlayerPed.cpp
+@@ -12,6 +12,8 @@
+ #include "World.h"
+ #include "RpAnimBlend.h"
+ #include "AnimBlendAssociation.h"
++#include "AnimBlendAssocGroup.h"
++#include "AnimBlendHierarchy.h"
+ #include "General.h"
+ #include "Pools.h"
+ #include "Darkel.h"
+@@ -24,9 +26,22 @@
+ #include "PedPlacement.h"
+ #include "VarConsole.h"
+ #include "SaveBuf.h"
++#include "ControllerConfig.h"
++#include "vcmodpanel.h"
+ 
+ #define PAD_MOVE_TO_GAME_WORLD_MOVE 60.0f
+ 
++// whether the aim button is currently latched down
++static bool bVCModLockOnHeld;
++
++#define KEYDOWN(k)     ControlsManager.GetIsKeyboardKeyDown((RsKeyCodes)k)
++#define KEYJUSTDOWN(k) ControlsManager.GetIsKeyboardKeyJustDown((RsKeyCodes)k)
++
++// a trackpad can't press the fire button while its two-finger aim button is held,
++// and gta_vc.set rewrites the binding table on load, so these are checked directly
++#define VCMOD_FIREKEY 'G'
++#define VCMOD_WALKKEY 'B'
++
+ bool CPlayerPed::bDontAllowWeaponChange;
+ #ifndef MASTER
+ bool CPlayerPed::bDebugPlayerInfo;
+@@ -255,7 +270,11 @@ CPlayerPed::ReApplyMoveAnims(void)
+ 	for(int i = 0; i < ARRAY_SIZE(moveAnims); i++) {
+ 		CAnimBlendAssociation *curMoveAssoc = RpAnimBlendClumpGetAssociation(GetClump(), moveAnims[i]);
+ 		if (curMoveAssoc) {
+-			if (CGeneral::faststrcmp(CAnimManager::GetAnimAssociation(m_animGroup, moveAnims[i])->hierarchy->name, curMoveAssoc->hierarchy->name)) {
++			// a group lacking one of these slots used to dereference nil here
++			CAnimBlendAssociation *groupAssoc = CAnimManager::GetAnimAssociation(m_animGroup, moveAnims[i]);
++			if (groupAssoc == nil || groupAssoc->hierarchy == nil)
++				continue;
++			if (CGeneral::faststrcmp(groupAssoc->hierarchy->name, curMoveAssoc->hierarchy->name)) {
+ 				CAnimBlendAssociation *newMoveAssoc = CAnimManager::AddAnimation(GetClump(), m_animGroup, moveAnims[i]);
+ 				newMoveAssoc->blendDelta = curMoveAssoc->blendDelta;
+ 				newMoveAssoc->blendAmount = curMoveAssoc->blendAmount;
+@@ -908,6 +927,11 @@ CPlayerPed::PlayerControl1stPersonRunAround(CPad *padUsed)
+ 	if (!CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->IsFlagSet(WEAPONFLAG_HEAVY) && padUsed->GetSprint()) {
+ 		m_nMoveState = PEDMOVE_SPRINT;
+ 	}
++	// same cap as the camera-relative path: this one runs whenever the mouse cam is up
++	if (bVCModWalkMode && m_fMoveSpeed > 0.9f) {
++		m_fMoveSpeed = 0.9f;
++		m_nMoveState = PEDMOVE_WALK;
++	}
+ 	if (m_nPedState != PED_FIGHT)
+ 		SetRealMoveAnim();
+ 
+@@ -1094,6 +1118,16 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
+ 		if (obj && !obj->bHasBeenDamaged && CanIKReachThisTarget(obj->GetPosition(), GetWeapon(), true))
+ 			EvaluateNeighbouringTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, lookToLeft, true);
+ 	}
++	if (bVCModLockOnVehicles) {
++		for (int v = CPools::GetVehiclePool()->GetSize() - 1; v >= 0; v--) {
++			CVehicle *veh = CPools::GetVehiclePool()->GetSlot(v);
++			if (veh == nil || veh->pDriver == nil || veh->pDriver == this ||
++				(CEntity *)veh == previousTarget || veh->GetStatus() == STATUS_WRECKED)
++				continue;
++			if (OurPedCanSeeThisOne(veh, true) && CanIKReachThisTarget(veh->GetPosition(), GetWeapon(), true))
++				EvaluateNeighbouringTarget(veh, &nextTarget, &lastCloseness, weaponRange, referenceBeta, lookToLeft, false);
++		}
++	}
+ 	if (!nextTarget)
+ 		return false;
+ 
+@@ -1144,6 +1178,16 @@ CPlayerPed::FindWeaponLockOnTarget(void)
+ 		if (obj && !obj->bHasBeenDamaged && CanIKReachThisTarget(obj->GetPosition(), GetWeapon(), true))
+ 			EvaluateTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, true);
+ 	}
++	if (bVCModLockOnVehicles) {
++		for (int v = CPools::GetVehiclePool()->GetSize() - 1; v >= 0; v--) {
++			CVehicle *veh = CPools::GetVehiclePool()->GetSlot(v);
++			// an empty or wrecked hull is scenery, not a target
++			if (veh == nil || veh->pDriver == nil || veh->pDriver == this || veh->GetStatus() == STATUS_WRECKED)
++				continue;
++			if (OurPedCanSeeThisOne(veh) && CanIKReachThisTarget(veh->GetPosition(), GetWeapon(), true))
++				EvaluateTarget(veh, &nextTarget, &lastCloseness, weaponRange, referenceBeta, false);
++		}
++	}
+ 	if (!nextTarget)
+ 		return false;
+ 
+@@ -1158,6 +1202,25 @@ void
+ CPlayerPed::ProcessAnimGroups(void)
+ {
+ 	AssocGroupId groupToSet;
++	if (bVCModPlayerNpcAnims) {
++		// feeding the engine's own re-apply path instead of fighting it each frame
++		bool strafing = false;
++#ifdef PC_PLAYER_CONTROLS
++		// an NPC group has no side-step clips, so A and D would play a forward walk;
++		// leave the stock strafe groups alone while strafing is active
++		strafing = (m_fWalkAngle <= -DEGTORAD(50.0f) || m_fWalkAngle >= DEGTORAD(50.0f))
++			&& TheCamera.Cams[TheCamera.ActiveCam].Using3rdPersonMouseCam()
++			&& CanStrafeOrMouseControl();
++#endif
++		AssocGroupId want;
++		if (!strafing && VCModPickAnimGroup(&want)) {
++			if (m_animGroup != want) {
++				m_animGroup = want;
++				ReApplyMoveAnims();
++			}
++			return;
++		}
++	}
+ #ifdef PC_PLAYER_CONTROLS
+ 	if ((m_fWalkAngle <= -DEGTORAD(50.0f) || m_fWalkAngle >= DEGTORAD(50.0f))
+ 		&& TheCamera.Cams[TheCamera.ActiveCam].Using3rdPersonMouseCam()
+@@ -1263,15 +1326,24 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+ 		m_wepAccuracy = 95;
+ 	else
+ 		m_wepAccuracy = 100;
++	// what CPed's constructor hands every ped. Their locked-on shots spray, and the
++	// first round of a burst is no more accurate than the last.
++	if (bVCModPlayerDoomAim)
++		m_wepAccuracy = 60;
+ 
+ 	if (!m_pFire) {
+ 		eWeaponType weapon = GetWeapon()->m_eWeaponType;
++		// the scope camera is what keeps these weapons off the lock-on path further down
++		bool bVCModScopeSkip = bVCModNoScopedAim && weapon != WEAPONTYPE_CAMERA &&
++			(weapon == WEAPONTYPE_ROCKETLAUNCHER || weapon == WEAPONTYPE_SNIPERRIFLE ||
++			 weapon == WEAPONTYPE_LASERSCOPE || weapon == WEAPONTYPE_M4 ||
++			 weapon == WEAPONTYPE_RUGER || weapon == WEAPONTYPE_M60);
+ 		if (weapon == WEAPONTYPE_ROCKETLAUNCHER || weapon == WEAPONTYPE_SNIPERRIFLE ||
+ 			weapon == WEAPONTYPE_LASERSCOPE || weapon == WEAPONTYPE_M4 ||
+ 			weapon == WEAPONTYPE_RUGER || weapon == WEAPONTYPE_M60 ||
+ 			weapon == WEAPONTYPE_CAMERA) {
+ 
+-			if (padUsed->TargetJustDown() || TheCamera.m_bJustJumpedOutOf1stPersonBecauseOfTarget) {
++			if (!bVCModScopeSkip && (padUsed->TargetJustDown() || TheCamera.m_bJustJumpedOutOf1stPersonBecauseOfTarget)) {
+ #ifdef FREE_CAM
+ 				if (CCamera::bFreeCam && TheCamera.Cams[0].Using3rdPersonMouseCam()) {
+ 					m_fRotationCur = CGeneral::LimitRadianAngle(-TheCamera.Orientation);
+@@ -1292,7 +1364,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+ 				SetPedState(PED_SNIPER_MODE);
+ 				return;
+ 			}
+-			if (!TheCamera.Using1stPersonWeaponMode())
++			if (!bVCModScopeSkip && !TheCamera.Using1stPersonWeaponMode())
+ 				if (weapon == WEAPONTYPE_ROCKETLAUNCHER || weapon == WEAPONTYPE_SNIPERRIFLE || weapon == WEAPONTYPE_LASERSCOPE || weapon == WEAPONTYPE_CAMERA)
+ 					return;
+ 		}
+@@ -1416,14 +1488,14 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+ 	}
+ #endif
+ 
+-	if (padUsed->GetTarget() && m_nSelectedWepSlot == m_currentWeapon && m_nMoveState != PEDMOVE_SPRINT && !TheCamera.Using1stPersonWeaponMode() && weaponInfo->IsFlagSet(WEAPONFLAG_CANAIM)) {
++	if (padUsed->GetTarget() && m_nSelectedWepSlot == m_currentWeapon && m_nMoveState != PEDMOVE_SPRINT && !TheCamera.Using1stPersonWeaponMode() && (weaponInfo->IsFlagSet(WEAPONFLAG_CANAIM) || bVCModAimAllWeapons)) {
+ 		if (m_pPointGunAt) {
+ 			// what??
+ 			if (!m_pPointGunAt
+ #ifdef FREE_CAM
+-				|| (!CCamera::bFreeCam && CCamera::m_bUseMouse3rdPerson)
++				|| (!CCamera::bFreeCam && CCamera::m_bUseMouse3rdPerson && !bVCModMouseAimLockOn)
+ #else
+-				|| CCamera::m_bUseMouse3rdPerson
++				|| (CCamera::m_bUseMouse3rdPerson && !bVCModMouseAimLockOn)
+ #endif		
+ 			) {
+ 				ClearWeaponTarget();
+@@ -1457,7 +1529,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+ 			TheCamera.SetNewPlayerWeaponMode(CCam::MODE_SYPHON, 0, 0);
+ 			TheCamera.UpdateAimingCoors(m_pPointGunAt->GetPosition());
+ 
+-		} else if (!CCamera::m_bUseMouse3rdPerson) {
++		} else if (!CCamera::m_bUseMouse3rdPerson || bVCModMouseAimLockOn) {
+ 			if (padUsed->TargetJustDown() || TheCamera.m_bJustJumpedOutOf1stPersonBecauseOfTarget)
+ 				FindWeaponLockOnTarget();
+ 		}
+@@ -1556,6 +1628,12 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
+ 			m_nMoveState = PEDMOVE_SPRINT;
+ 	}
+ 
++	// a direction key is always full deflection, so walking has to be capped under it
++	if (bVCModWalkMode && m_fMoveSpeed > 0.9f) {
++		m_fMoveSpeed = 0.9f;
++		m_nMoveState = PEDMOVE_WALK;
++	}
++
+ 	if (m_nPedState != PED_FIGHT)
+ 		SetRealMoveAnim();
+ 
+@@ -1705,7 +1783,25 @@ CPlayerPed::ProcessControl(void)
+ 		return;
+ 
+ 	CPad *padUsed = GetPadFromPlayer(this);
++	if (padUsed && !padUsed->ArePlayerControlsDisabled() && m_nPedState != PED_DRIVING) {
++		if (KEYDOWN(VCMOD_FIREKEY))
++			padUsed->NewState.Circle = true;
++		if (KEYJUSTDOWN(VCMOD_WALKKEY))
++			bVCModWalkMode = !bVCModWalkMode;
++
++		// re-arming the aim button each frame is what keeps the lock alive once the
++		// fingers are off it; it lets go on its own when the target is gone
++		if (!bVCModLockOnLatch || (bVCModLockOnHeld && m_pPointGunAt == nil))
++			bVCModLockOnHeld = false;
++		if (bVCModLockOnLatch && padUsed->GetRightMouseJustDown())
++			bVCModLockOnHeld = !bVCModLockOnHeld;
++		if (bVCModLockOnHeld)
++			padUsed->NewState.RightShoulder1 = true;
++	}
+ 	m_pWanted->Update();
++	// SetWantedLevel(0) clears the crime queue and the chaos that feeds it
++	if (bVCModNeverWanted && (m_pWanted->GetWantedLevel() != 0 || m_pWanted->m_nChaos != 0))
++		m_pWanted->SetWantedLevel(0);
+ 	PruneReferences();
+ 
+ 	if (GetWeapon()->m_eWeaponType == WEAPONTYPE_MINIGUN) {
+@@ -1783,7 +1879,9 @@ CPlayerPed::ProcessControl(void)
+ 	if (bIsLanding)
+ 		RunningLand(padUsed);
+ 
+-	if (padUsed && padUsed->WeaponJustDown() && !TheCamera.Using1stPersonWeaponMode()) {
++	// with the scope suppressed these are meant to shoot from third person, so the
++	// "you have to zoom first" click has to go quiet too
++	if (padUsed && padUsed->WeaponJustDown() && !TheCamera.Using1stPersonWeaponMode() && !bVCModNoScopedAim) {
+ 		// ...Really?
+ 		eWeaponType playerWeapon = FindPlayerPed()->GetWeapon()->m_eWeaponType;
+ 		if (playerWeapon == WEAPONTYPE_SNIPERRIFLE || playerWeapon == WEAPONTYPE_LASERSCOPE) {
+diff --git a/src/skel/skeleton.cpp b/src/skel/skeleton.cpp
+index 2bb2346..7ea77cb 100644
+--- a/src/skel/skeleton.cpp
++++ b/src/skel/skeleton.cpp
+@@ -403,7 +403,7 @@ RsInitialize(void)
+ 	RsGlobal.width = DEFAULT_SCREEN_WIDTH;
+ 	RsGlobal.height = DEFAULT_SCREEN_HEIGHT;
+ 	
+-	RsGlobal.maxFPS = 30;
++	RsGlobal.maxFPS = 60;
+ 	 
+ 	RsGlobal.quit = FALSE;
+ 
+diff --git a/src/weapons/Weapon.cpp b/src/weapons/Weapon.cpp
+index cada168..ce2fb4c 100644
+--- a/src/weapons/Weapon.cpp
++++ b/src/weapons/Weapon.cpp
+@@ -29,6 +29,7 @@
+ #include "Boat.h"
+ #include "WaterLevel.h"
+ #include "WeaponInfo.h"
++#include "vcmodpanel.h"
+ #include "World.h"
+ #include "SurfaceTable.h"
+ #include "Bike.h"
+@@ -215,11 +216,12 @@ CWeapon::Fire(CEntity *shooter, CVector *fireSource)
+ 			case WEAPONTYPE_SNIPERRIFLE:
+ 			case WEAPONTYPE_LASERSCOPE:
+ 			{
+-				if (shooter == FindPlayerPed())
++				// FireSniper refuses to shoot unless the camera is already in a scope mode
++				if (shooter == FindPlayerPed() && !bVCModNoScopedAim)
+ 					fired = FireSniper(shooter);
+ 				else
+ 					fired = FireInstantHit(shooter, source);
+-				
++
+ 				break;
+ 			}
+ 			
+@@ -912,7 +914,9 @@ CWeapon::FireInstantHit(CEntity *shooter, CVector *fireSource)
+ 			target *= info->m_fRange / distToTarget;
+ 			target += *fireSource;
+ 
+-			if (shooter == FindPlayerPed() && inaccuracy != 0.f)
++			// the player-only ramp starts at zero, so the first round of a burst is
++			// dead-on; doom aim hands the shot to the ped branch, which is always wild
++			if (shooter == FindPlayerPed() && !bVCModPlayerDoomAim && inaccuracy != 0.f)
+ 			{
+ 				float newInaccuracy = fPlayerAimScale * FindPlayerPed()->m_fAttackButtonCounter * (inaccuracy * Min(1.f, fPlayerAimScaleDist / distToTarget));
+ 				if (FindPlayerPed()->bIsDucking)
+@@ -1068,7 +1072,7 @@ CWeapon::FireInstantHit(CEntity *shooter, CVector *fireSource)
+ 			target.y += rotOffset.y * info->m_fRange;
+ 
+ 			CParticle::HandleShootableBirdsStuff(shooter, *fireSource);
+-			if (shooter->IsPed() && ((CPed*)shooter)->bDoomAim && (shooter != FindPlayerPed() || !info->IsFlagSet(WEAPONFLAG_CANAIM)))
++			if (shooter->IsPed() && ((CPed*)shooter)->bDoomAim && (shooter != FindPlayerPed() || !info->IsFlagSet(WEAPONFLAG_CANAIM) || bVCModPlayerDoomAim))
+ 			{
+ 				CWeapon::DoDoomAiming(shooter, fireSource, &target);
+ 			}
