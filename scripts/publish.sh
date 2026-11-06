@@ -9,7 +9,7 @@ OUT="${1:-$HOME/Desktop/vc-mod-public}"
 UPSTREAM_URL="https://github.com/mrxenginner/reVC"
 BRANCH="miami"
 PIN=a26fff4
-MOD="$(git -C "$HERE/reVC" log -1 --format='%h %s' vcmods)"
+MOD="$(git -C "$HERE/reVC" log --format='    %h %s' "$PIN..vcmods")"
 
 for f in README.md CHANGELOG.md vc-mods.patch; do
 	[ -f "$HERE/$f" ] || { echo "missing $HERE/$f, run scripts/sync.sh" >&2; exit 1; }
@@ -41,7 +41,9 @@ cat > "$stage/repo/UPSTREAM.md" <<EOF
 # Where this came from
 
 Built against [$UPSTREAM_URL]($UPSTREAM_URL), branch \`$BRANCH\`, commit \`$PIN\`.
-One mod commit on top: \`$MOD\`.
+Mod commits on top of it:
+
+$MOD
 
 reVC is MIT with a proof-of-usage condition (see LICENSE.md). That condition
 also covers systems that read this repository, so the use is recorded in
