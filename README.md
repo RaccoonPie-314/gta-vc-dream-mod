@@ -6,11 +6,11 @@ shoot as badly as an NPC, never gain a star. All of it compiled into the game
 itself, every one of them a live toggle.
 
 `vc-mods.patch` against reVC `miami` commit `a26fff4`.
-Ten toggles in three groups. Built and run on macOS arm64 (Apple
-clang 21, CMake + vendored librw GL3/GLFW) against licensed game data, and every
-toggle below has been seen working at the keyboard. Two things remain unverified:
-the ini seeding at startup and panel row clicks at other window sizes. See
-`CHANGELOG.md`.
+Built and run on macOS arm64 (Apple clang 21, CMake + vendored librw GL3/GLFW)
+against licensed game data. Everything described as seen was turned on at the
+keyboard; the personal driver is harness-tested and waiting on a live run. Two
+older things remain unverified: the ini seeding at startup and panel row clicks at
+other window sizes. See `CHANGELOG.md`.
 
 ## Apply
 
@@ -100,7 +100,7 @@ all live there, so `PlayerPed.cpp` keeps only the behaviour hooks.
 - Green `[ON]`, grey `[--]`, cyan for the anim set name, amber for a warning,
   lavender for the key hints, magenta title bar.
 - A row flips on mouse click. **ANIM SET** has no boolean: clicking it opens a list
-  of all sixteen groups beside the panel, marked `+` when closed and `-` when open.
+  of all seventeen groups beside the panel, marked `+` when closed and `-` when open.
   Picking a name sets it (marked `>` in green) and turns the swap on; clicking the
   row again, or anywhere outside both panels, closes the list. It opens beside the
   panel rather than pushing rows down so the panel keeps one shape.
@@ -142,11 +142,14 @@ AdrenalineSlowMo = 1
 PedModel = -1
 PassengerMode = 0
 RideZone = -1
+RideStyle = 0
 ```
 
 `1`/`0`, and `AnimChoice` is the index into `aVCModAnimGroups` (0 = man, 8 = woman,
 15 = panicchunky). `PedModel` is a model index, `-1` meaning Tommy. `RideZone` is
-an index into the ride destination list, `-1` meaning cruise with traffic. Section and key names are case sensitive — `MINI_CASE_SENSITIVE`
+an index into the ride destination list, `-1` meaning cruise with traffic.
+`RideStyle` is `0` safe or `1` fast and aggressive; an old ini that still says `2`
+for the removed skip style is clamped to safe. Section and key names are case sensitive — `MINI_CASE_SENSITIVE`
 is on in this build. Precedence is one sentence: **the ini seeds it, the panel owns
 it from then on** — flipping a row in play does not write back to the ini, so the
 file stays a preset rather than a second live state to keep in sync.
@@ -172,8 +175,11 @@ file stays a preset rather than a second live state to keep in sync.
 | `bVCModCopPistol` | off | Two-handed colt hold. **Paused**: it shoots correctly, the arm still tracks the old target. Left out of ALL ON/OFF so it cannot come on during other testing |
 | `bVCModPassengerMode` | off | The enter-vehicle key takes the passenger seat while an NPC drives |
 | `nVCModRideZone` | -1 | Where that NPC goes: `-1` cruises with traffic, otherwise a map zone from the destination list |
+| `nVCModRideStyle` | 0 | How he drives there: `0` safe — stops for traffic and for red lights; `1` fast and aggressive — ploughs through both |
+| `SKIP RIDE` row | — | One-shot travel to the **RIDE TO** destination, on foot or from a passenger seat. Never bound to the enter key |
+| `CALL DRIVER` row | — | Calls the chauffeur, or dismisses one already coming. `H` does the same |
 
-Two keys are checked directly in `CPlayerPed::ProcessControl`, on foot only:
+Three keys are checked directly in `CPlayerPed::ProcessControl`:
 
 - `G` = fire. A trackpad cannot hold the two-finger aim button and press the left
   mouse button at the same time. This is a direct key check rather than a rebinding
@@ -181,10 +187,16 @@ Two keys are checked directly in `CPlayerPed::ProcessControl`, on foot only:
   rebinding screen; Left Ctrl still fires too, and `Insert` (numpad 0) is the other
   default — absent on a laptop.
 - `B` = toggle walk mode.
+- `H` = call the chauffeur, or dismiss him. Checked outside the on-foot block, so
+  it also works from the back seat, where the player state is `PED_DRIVING`.
 
 Walk mode is capped in **both** on-foot control paths: `PlayerControlZelda` (the
 camera-relative one) and `PlayerControl1stPersonRunAround`, which is what actually
-runs whenever `Using3rdPersonMouseCam()` is true.
+runs whenever `Using3rdPersonMouseCam()` is true. The cap can cross the walk/run
+boundary in one frame, so `SetRealMoveAnim` now crossfades the incoming clip at
+that boundary instead of swapping the blend weights directly, the way
+`CPed::SetMoveAnim` blends an NPC's move-state change. Starting from a standstill
+with the cap on fades into the walk clip the same way instead of cutting into it.
 
 The scope toggle has three parts: the mode request and the sniper-family early
 return in `ProcessPlayerWeapon`, the "you have to zoom first" click in
@@ -221,7 +233,9 @@ clips — forcing one makes A and D play a forward walk.
 Two rows pick who Tommy wears: **PED CATEGORY** (cops / gangs / civilians /
 mission) then **CHARACTER**, Tommy always first so there is a way back. The list
 is read out of the model table the game loaded rather than a hand-kept list, so
-nothing goes stale when the ide changes.
+nothing goes stale when the ide changes. It shows what each body is rather than
+the ide's name — `Cuban gangster 1`, `Hispanic girl, street`, `Candy Suxxx` — and
+falls back to the raw model name for anything it does not recognise.
 
 The worn model brings its own animation group, gated by the same playability
 check the animation picker uses, and the swap happens in the update pass, never
@@ -248,11 +262,58 @@ mission owns is left alone, and if no driver can be made the press falls back to
 the stock driver entry rather than doing nothing.
 
 The car is held with `MISSION_STOP_FOREVER` until Tommy is actually seated, the
-same trick the shortcut taxi uses, so it cannot drive off without him. **RIDE TO**
+same trick the shortcut taxi uses, so it cannot drive off without him. A car the
+traffic system is still simulating on rails (`STATUS_SIMPLE`) is promoted to real
+physics before its route is touched: entering as the driver does that when the
+player sits down, but entering as a passenger never does, and the on-rails update
+writes the car's position directly — it would drag the car sideways onto the path
+lane the moment the ride re-routes. **RIDE TO**
 then chooses what the driver does: cruise with traffic indefinitely, or route to a
 named district from the game's zone table and park on arrival. Getting out is the
-normal exit key; the ride state is tracked by vehicle handle, so a car that is
-blown up or recycled mid-ride is dropped rather than followed.
+normal exit key; the street car is then handed back to traffic with the cruise
+speed, driving style and `m_fMaxTrafficSpeed` it had before the press, so its
+driver carries on like the traffic around him — generated traffic runs
+`STOP_FOR_CARS` at 9–14, and handing it back on the ride's faster `AVOID_CARS`
+setting made the driver look like he was bolting. A summoned limo, which never had
+a traffic pace of its own, is released at ordinary traffic speed. The ride state is
+tracked by vehicle handle, so a car that is blown up or recycled mid-ride is
+dropped rather than followed.
+
+## Personal driver
+
+**CALL DRIVER** (or `H`) sends a black Stretch with a chauffeur to wherever Tommy
+is standing. It spawns on the nearest car path node behind him — far enough that
+the approach is a drive — gets a radar blip, and is made mission-owned so traffic
+cannot reclaim it while it waits. It stops within 15 m; if Tommy walks more than
+20 m from the pick-up point it is re-targeted every 3 seconds, and walking more
+than 120 m away while it waits calls it off, the shortcut taxi's own rule.
+
+Boarding is the ordinary enter key. Your own limo is always boardable even with
+**PASSENGER MODE** off, because that flag governs street cars, not the one you
+called. Once Tommy is in the back seat the limo drives to **RIDE TO** with the
+selected **RIDE STYLE**. Calling again dismisses him; at the end of a ride he is
+handed back to traffic rather than deleted, with the counters and the blip moved
+the way `ClearShortCut` moves them.
+
+**RIDE STYLE** applies to ordinary passenger rides too, and it can be changed
+mid-ride:
+
+| Style | Engine settings | What it does |
+|---|---|---|
+| Safe | `DRIVINGSTYLE_STOP_FOR_CARS`, cruise 20 (25 to a destination) | Slows for cars and peds and stops at red lights |
+| Fast | `DRIVINGSTYLE_PLOUGH_THROUGH`, `STATUS_PHYSICS`, cruise 45 (55 to a destination) | No traffic scan, no light stop, no weaving. Bridge stops still apply |
+
+Only the two `STOP_FOR_CARS` styles reach `CTrafficLights::ShouldCarStopForLight`
+in `CCarCtrl::SteerAICarWithPhysics`, which is what makes "safe" mean traffic law
+rather than merely a slower cruise.
+
+**SKIP RIDE** is a button, not a style. It travels once to the **RIDE TO**
+destination: nearest car path node to the zone centre, `LoadScene`/`LoadSceneCollision`,
+ground Z plus the entity's base offset, `FindPlayerEntity()->Teleport`, camera jump
+cut. It works on foot or from a passenger seat, and a car Tommy is riding in parks
+on arrival instead of driving on. It needs a destination, so with **RIDE TO** left
+on traffic it says so and does nothing. The enter key never travels: pressing it
+next to a car with **PASSENGER MODE** on always boards and drives.
 
 ## Why the group swap crashed, and the actual fix
 
@@ -309,11 +370,24 @@ Defaults are all off so an unmodified game behaves normally until you switch som
 
 ## Which groups are offered
 
-Only groups built from `aStdAnimDescs`, because those carry all five locomotion
-slots (`ANIM_STD_WALK`, `RUN`, `RUNFAST`, `IDLE`, `STARTWALK`): man, gang1, gang2,
-shuffle, oldman, fatman, oldfatman, jogger, woman, shopping, busywoman, sexywoman,
-fatwoman, oldwoman, jogwoman, panicchunky. Weapon groups (`shotgun`, `m60`, `uzi`)
-have no locomotion slots at all and are not offered.
+Only groups built from `aStdAnimDescs`, because those carry the locomotion slots
+the player path reaches directly (`ANIM_STD_WALK`, `RUN`, `RUNFAST`, `IDLE`): man,
+gang1, gang2, shuffle, oldman, fatman, oldfatman, jogger, woman, shopping,
+busywoman, sexywoman, fatwoman, oldwoman, jogwoman, panicchunky, skater.
+
+Only the player groups carry a `STARTWALK` slot; every NPC group is four clips
+(walk, run, sprint, idle), so the player used to borrow Tommy's start clip and cut
+straight into it. With `WALK MODE` on, and on any group without a start clip of its
+own, the player now skips the start clip and fades into the movement clip under the
+idle, the way `CPed::SetMoveAnim` does for the NPCs; cutting to full weight snapped
+the arms out in a single frame, and stopping mid-fade blends the idle back. A
+sprint start keeps the start clip's step. The skater group is the extreme case: it
+has no start clip anywhere in `skate.ifp`, so it always fades; `ReApplyMoveAnims`
+also skips a slot the group does not have. The native `SOUND_SKATING` is driven off
+the group too,
+because the mod keeps `PEDSTAT_PLAYER` across a model swap; the skater surface
+slow-down and trip chance in that branch stay NPC-only. Weapon groups
+(`shotgun`, `m60`, `uzi`) have no locomotion slots at all and are not offered.
 
 Verified against licensed stock data: `cop`, `swat`, `fbi`, `army` and `vice1-3`
 all use group `man`, so there is no distinct police walk in Vice City — `man` is
