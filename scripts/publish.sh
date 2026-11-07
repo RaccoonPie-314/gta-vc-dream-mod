@@ -33,6 +33,7 @@ trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/repo/scripts"
 cp "$HERE/README.md" "$HERE/CHANGELOG.md" "$HERE/vc-mods.patch" "$stage/repo/"
 cp "$HERE"/scripts/*.sh "$stage/repo/scripts/"
+cp -R "$HERE/docs" "$stage/repo/"
 cp "$HERE/reVC/LICENSE.md" "$stage/repo/"
 
 cat > "$stage/repo/UPSTREAM.md" <<EOF
