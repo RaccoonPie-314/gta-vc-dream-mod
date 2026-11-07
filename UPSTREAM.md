@@ -3,6 +3,7 @@
 Built against [https://github.com/mrxenginner/reVC](https://github.com/mrxenginner/reVC), branch `miami`, commit `a26fff4`.
 Mod commits on top of it:
 
+    ca60b70 Add street idle, chauffeur, ride style and passenger fixes
     6d5f67d Add adrenaline, character selection and passenger riding mods
     bd9cbc5 Add player-animation, aiming and control-surface mods
 
@@ -14,9 +15,9 @@ Usage record for the build of this folder:
 
     System:   Qoder agent
     Operator: RaccoonPie-314
-    Date:     2026-11-06T21:05:29Z
+    Date:     2026-11-07T04:39:49Z
     Target:   https://github.com/mrxenginner/reVC
-    Hash:     1dd8f437ae971976d6f9747d033d411ed50f0b53aa1a952e548868ca6ce02d59
+    Hash:     6f4d79277180ae58fb5f7e7a0ed20a90e02718acf0f81b460ad303b5a8d3fb4b
 
 ## Rebuilding
 

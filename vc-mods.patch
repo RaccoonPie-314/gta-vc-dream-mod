@@ -142,7 +142,7 @@ index a412a98..9c8bcf9 100644
  	POP_RENDERGROUP();
  }
 diff --git a/src/core/re3.cpp b/src/core/re3.cpp
-index d16088f..242ad89 100644
+index d16088f..b383d25 100644
 --- a/src/core/re3.cpp
 +++ b/src/core/re3.cpp
 @@ -32,6 +32,7 @@
@@ -153,7 +153,7 @@ index d16088f..242ad89 100644
  #include "Frontend.h"
  #include "WaterLevel.h"
  #include "main.h"
-@@ -622,6 +623,25 @@ bool LoadINISettings()
+@@ -622,6 +623,31 @@ bool LoadINISettings()
  	}
  #endif
  
@@ -174,7 +174,13 @@ index d16088f..242ad89 100644
 +	ReadIniIfExists("VC Mods", "CopHoldFrame", &nVCModCopHoldFrame);
 +	ReadIniIfExists("VC Mods", "PedModel", &nVCModPedModel);
 +	ReadIniIfExists("VC Mods", "PassengerMode", &bVCModPassengerMode);
++	ReadIniIfExists("VC Mods", "StreetIdle", &bVCModStreetIdle);
++	ReadIniIfExists("VC Mods", "Chatter", &bVCModChatter);
 +	ReadIniIfExists("VC Mods", "RideZone", &nVCModRideZone);
++	ReadIniIfExists("VC Mods", "RideStyle", &nVCModRideStyle);
++	// an ini written before skip became its own button may still say 2
++	if (nVCModRideStyle < 0 || nVCModRideStyle >= NUM_VCMOD_RIDE_STYLES)
++		nVCModRideStyle = VCMOD_RIDE_SAFE;
 +
  	// Fetched in above block, but needs evaluation
  #ifdef PED_CAR_DENSITY_SLIDERS
@@ -219,15 +225,17 @@ index a160c06..e25b3a9 100644
  // Some overloads for simplicity
 diff --git a/src/extras/vcmodpanel.cpp b/src/extras/vcmodpanel.cpp
 new file mode 100644
-index 0000000..164e996
+index 0000000..b426fa6
 --- /dev/null
 +++ b/src/extras/vcmodpanel.cpp
-@@ -0,0 +1,1001 @@
+@@ -0,0 +1,1231 @@
 +#include "common.h"
 +
 +#include <stdio.h>
 +#include <string.h>
++#include <ctype.h>
 +
++#include "General.h"
 +#include "RwHelper.h"
 +#include "Pad.h"
 +#include "Camera.h"
@@ -262,26 +270,37 @@ index 0000000..164e996
 +int32 nVCModPedModel = -1;
 +int32 nVCModPedCategory;
 +bool bVCModPassengerMode;
++// ambient flavour rather than a cheat, so these start on; the ini can turn them
++// off and the panel can flip them live
++bool bVCModStreetIdle = true;
++bool bVCModChatter = true;
 +int32 nVCModRideZone;
++int32 nVCModRideStyle;
 +
-+// only groups built from aStdAnimDescs are offered: they are the ones carrying all
-+// five locomotion slots, so the swap can't leave a slot unresolved
++static const char *aVCModRideStyleNames[] = {
++	"safe (traffic law)", "fast & aggressive"
++};
++
++// only groups built from aStdAnimDescs are offered. The skate group is the one
++// exception to the five-slot rule: it carries walk, run, sprint and idle, and
++// borrows startwalk from the player set the same way the game's skaters do.
 +static const char *aVCModAnimGroupNames[] = {
 +	"man (police, most male civs)", "gang1", "gang2", "shuffle", "oldman", "fatman",
 +	"oldfatman", "jogger", "woman", "shopping", "busywoman", "sexywoman",
-+	"fatwoman", "oldwoman", "jogwoman", "panicchunky"
++	"fatwoman", "oldwoman", "jogwoman", "panicchunky", "skater (rollerblades)"
 +};
 +static const int32 aVCModAnimGroups[] = {
 +	ASSOCGRP_STD, ASSOCGRP_GANG1, ASSOCGRP_GANG2, ASSOCGRP_SHUFFLE, ASSOCGRP_OLD,
 +	ASSOCGRP_FAT, ASSOCGRP_OLDFAT, ASSOCGRP_JOGGER, ASSOCGRP_WOMAN, ASSOCGRP_WOMANSHOP,
 +	ASSOCGRP_BUSYWOMAN, ASSOCGRP_SEXYWOMAN, ASSOCGRP_FATWOMAN, ASSOCGRP_OLDWOMAN,
-+	ASSOCGRP_JOGWOMAN, ASSOCGRP_PANICCHUNKY
++	ASSOCGRP_JOGWOMAN, ASSOCGRP_PANICCHUNKY, ASSOCGRP_SKATE
 +};
 +
-+// SetRealMoveAnim and ReApplyMoveAnims reach these five every frame, so a group
-+// that cannot hand them out must never become current
++// SetRealMoveAnim blends these directly, so a group that cannot hand them out
++// must never become current. STARTWALK is left out: AddAnimation borrows the
++// player's clip for it, and ReApplyMoveAnims skips a slot the group lacks.
 +static const AnimationId aVCModMoveAnims[] = {
-+	ANIM_STD_IDLE, ANIM_STD_STARTWALK, ANIM_STD_WALK, ANIM_STD_RUN, ANIM_STD_RUNFAST
++	ANIM_STD_IDLE, ANIM_STD_WALK, ANIM_STD_RUN, ANIM_STD_RUNFAST
 +};
 +
 +static bool
@@ -436,7 +455,7 @@ index 0000000..164e996
 +		return false;
 +	if (entry == 0) {
 +		*outIndex = MI_PLAYER;
-+		*outName = "player (Tommy)";
++		*outName = "Tommy Vercetti";
 +		return true;
 +	}
 +	if (category == VCMOD_PEDCAT_MISSION) {
@@ -567,6 +586,7 @@ index 0000000..164e996
 +VCMOD_ROW(13, "anim: oldwoman")
 +VCMOD_ROW(14, "anim: jogwoman")
 +VCMOD_ROW(15, "anim: panicchunky")
++VCMOD_ROW(16, "anim: skater (rollerblades)")
 +TWEAKBOOL(bVCModMouseAimLockOn);
 +TWEAKBOOL(bVCModAimAllWeapons);
 +TWEAKBOOL(bVCModPlayerDoomAim);
@@ -584,7 +604,12 @@ index 0000000..164e996
 +// ProcessControl does the swap, so there is one apply path
 +TWEAKINT32(nVCModPedModel, -1, MI_LAST_PED, 1);
 +TWEAKBOOL(bVCModPassengerMode);
++TWEAKBOOL(bVCModStreetIdle);
++TWEAKBOOL(bVCModChatter);
 +TWEAKINT32(nVCModRideZone, -1, NUMMAPZONES - 1, 1);
++TWEAKINT32(nVCModRideStyle, 0, NUM_VCMOD_RIDE_STYLES - 1, 1);
++TWEAKFUNCN(VCModCallDriver, "call driver (H)");
++TWEAKFUNCN(VCModSkipRide, "skip ride (travel)");
 +TWEAKFUNCN(VCModToggleAll, "all on/off (not walk)");
 +
 +// Colour comes from the charset, the same way the debug menu highlights a selected
@@ -615,6 +640,7 @@ index 0000000..164e996
 +	VCMOD_LIST_PEDCAT,
 +	VCMOD_LIST_PEDCHAR,
 +	VCMOD_LIST_RIDEZONE,
++	VCMOD_LIST_RIDESTYLE,
 +	NUM_VCMOD_LISTS
 +};
 +
@@ -635,7 +661,10 @@ index 0000000..164e996
 +	VCMOD_ROW_ADRENALINE_MODE,
 +	VCMOD_ROW_PEDCAT,	// opens the category list
 +	VCMOD_ROW_PEDCHAR,	// opens that category's roster
-+	VCMOD_ROW_RIDEZONE	// opens the ride destination list
++	VCMOD_ROW_RIDEZONE,	// opens the ride destination list
++	VCMOD_ROW_RIDESTYLE,	// opens the driving style list
++	VCMOD_ROW_SKIPRIDE,	// travels to the RIDE TO destination now
++	VCMOD_ROW_CALLDRIVER	// calls the chauffeur, or dismisses him
 +};
 +
 +struct VCModRowDef
@@ -657,7 +686,9 @@ index 0000000..164e996
 +	&bVCModLockOnVehicles,
 +	&bVCModNeverWanted,
 +	&bVCModLockOnLatch,
-+	&bVCModAdrenaline
++	&bVCModAdrenaline,
++	&bVCModStreetIdle,
++	&bVCModChatter
 +};
 +
 +static int32
@@ -697,6 +728,11 @@ index 0000000..164e996
 +	{ "ADRENALINE MODE", VCMOD_ROW_ADRENALINE_MODE, &bVCModAdrenalineSlowMo },
 +	{ "PASSENGER MODE",  VCMOD_ROW_FLAG,    &bVCModPassengerMode  },
 +	{ "RIDE TO",         VCMOD_ROW_RIDEZONE, nil },
++	{ "RIDE STYLE",      VCMOD_ROW_RIDESTYLE, nil },
++	{ "SKIP RIDE",       VCMOD_ROW_SKIPRIDE, nil },
++	{ "CALL DRIVER",     VCMOD_ROW_CALLDRIVER, nil },
++	{ "IDLE GESTURES",   VCMOD_ROW_FLAG,    &bVCModStreetIdle   },
++	{ "CHATTER",         VCMOD_ROW_FLAG,    &bVCModChatter      },
 +};
 +
 +static void
@@ -788,6 +824,7 @@ index 0000000..164e996
 +#define VCMOD_ANIM_SET_ROW	2
 +#define VCMOD_PEDCAT_ROW	3
 +#define VCMOD_PEDCHAR_ROW	4
++#define VCMOD_RIDE_STYLE_ROW	18
 +
 +// lists open beside the panel instead of pushing the rows down, so the panel
 +// keeps one shape while choosing
@@ -811,6 +848,7 @@ index 0000000..164e996
 +	case VCMOD_ROW_PEDCAT:	return VCMOD_LIST_PEDCAT;
 +	case VCMOD_ROW_PEDCHAR:	return VCMOD_LIST_PEDCHAR;
 +	case VCMOD_ROW_RIDEZONE:	return VCMOD_LIST_RIDEZONE;
++	case VCMOD_ROW_RIDESTYLE:	return VCMOD_LIST_RIDESTYLE;
 +	}
 +	return VCMOD_LIST_NONE;
 +}
@@ -821,6 +859,8 @@ index 0000000..164e996
 +	switch (list) {
 +	case VCMOD_LIST_ANIM:	return VCMOD_ANIM_SET_ROW;
 +	case VCMOD_LIST_PEDCAT:	return VCMOD_PEDCAT_ROW;
++	// the short lists fit beside their own row; the long lists anchor higher up
++	case VCMOD_LIST_RIDESTYLE:	return VCMOD_RIDE_STYLE_ROW;
 +	}
 +	return VCMOD_PEDCHAR_ROW;
 +}
@@ -832,6 +872,7 @@ index 0000000..164e996
 +	case VCMOD_LIST_ANIM:	return ARRAY_SIZE(aVCModAnimGroupNames);
 +	case VCMOD_LIST_PEDCAT:	return NUM_VCMOD_PEDCATS;
 +	case VCMOD_LIST_RIDEZONE:	return VCModRideZoneCount();
++	case VCMOD_LIST_RIDESTYLE:	return NUM_VCMOD_RIDE_STYLES;
 +	}
 +	return VCModPedModelCount(nVCModPedCategory);
 +}
@@ -859,17 +900,179 @@ index 0000000..164e996
 +	return player->GetModelIndex();
 +}
 +
++// The model table names bodies the way the IDE does (hfyst, wmybu), which says
++// nothing to someone picking a character. These are the ones worth spelling out;
++// the rest decode from the same letters the IDE uses.
++static const struct {
++	const char *model;
++	const char *label;
++} aVCModPedNames[] = {
++	// cops and emergency services
++	{ "cop", "Cop" },
++	{ "swat", "SWAT officer" },
++	{ "fbi", "FBI agent" },
++	{ "army", "Army soldier" },
++	{ "medic", "Paramedic" },
++	{ "fireman", "Firefighter" },
++	{ "vice1", "Undercover cop 1" },
++	{ "vice2", "Undercover cop 2" },
++	{ "vice3", "Undercover cop 3" },
++	{ "vice4", "Undercover cop 4" },
++	{ "vice5", "Undercover cop 5" },
++	{ "vice6", "Undercover cop 6" },
++	{ "vice7", "Undercover cop 7" },
++	{ "vice8", "Undercover cop 8" },
++
++	// gangs
++	{ "cba", "Cuban gangster 1" },
++	{ "cbb", "Cuban gangster 2" },
++	{ "hna", "Haitian gangster 1" },
++	{ "hnb", "Haitian gangster 2" },
++	{ "sga", "Shark gangster 1" },
++	{ "sgb", "Shark gangster 2" },
++	{ "cla", "Diaz gangster 1" },
++	{ "clb", "Diaz gangster 2" },
++	{ "gda", "Security guard 1" },
++	{ "gdb", "Security guard 2" },
++	{ "bka", "Biker 1" },
++	{ "bkb", "Biker 2" },
++	{ "pga", "Vercetti gangster 1" },
++	{ "pgb", "Vercetti gangster 2" },
++	{ "wfyg1", "Love Fist groupie 1" },
++	{ "wfyg2", "Love Fist groupie 2" },
++
++	// story bodies, resolved from the cutscene table on the mission shelf
++	{ "player", "Tommy (cutscene)" },
++	{ "player2", "Tommy outfit 2" },
++	{ "player3", "Tommy outfit 3" },
++	{ "player4", "Tommy outfit 4" },
++	{ "player5", "Tommy outfit 5" },
++	{ "player6", "Tommy outfit 6" },
++	{ "player7", "Tommy outfit 7" },
++	{ "player8", "Tommy outfit 8" },
++	{ "player9", "Tommy outfit 9" },
++	{ "play10", "Tommy outfit 10" },
++	{ "play11", "Tommy outfit 11" },
++	{ "igken", "Ken Rosenberg" },
++	{ "igcandy", "Candy Suxxx" },
++	{ "igsonny", "Sonny Forelli" },
++	{ "igbuddy", "Lance Vance" },
++	{ "igjezz", "Jezz Torrent" },
++	{ "ighlary", "Hilary King" },
++	{ "igphil", "Phil Cassidy" },
++	{ "igmerc", "Mercedes Cortez" },
++	{ "igdick", "Dick (Love Fist)" },
++	{ "igdiaz", "Ricardo Diaz" },
++
++	// the one civilian whose name does not fit the five-letter pattern
++	{ "male01", "Common street guy" },
++};
++
++// the two letters the IDE puts after race, sex and age
++static const struct {
++	const char *code;
++	const char *style;
++} aVCModPedStyles[] = {
++	{ "st", "street" },
++	{ "ri", "rich" },
++	{ "be", "beach" },
++	{ "bu", "business" },
++	{ "md", "maid" },
++	{ "cg", "cigar seller" },
++	{ "pr", "prostitute" },
++	{ "tr", "tramp" },
++	{ "ap", "airport worker" },
++	{ "ca", "cab driver" },
++	{ "dk", "dock worker" },
++	{ "cr", "criminal" },
++	{ "pi", "pimp" },
++	{ "bb", "tracksuit" },
++	{ "cw", "construction" },
++	{ "go", "golfer" },
++	{ "lg", "lifeguard" },
++	{ "jg", "jogger" },
++	{ "sk", "skater" },
++	{ "sh", "shopper" },
++	{ "to", "tourist" },
++};
++
++static char aVCModPedLabel[32];
++
++static const char *
++VCModPedDisplayName(const char *modelName)
++{
++	uint32 i;
++
++	if (modelName == nil || modelName[0] == '\0')
++		return "unknown";
++
++	for (i = 0; i < ARRAY_SIZE(aVCModPedNames); i++)
++		if (!CGeneral::faststricmp(modelName, aVCModPedNames[i].model))
++			return aVCModPedNames[i].label;
++
++	// hfyst is race + sex + age + clothing: Hispanic, female, young, street.
++	if (strlen(modelName) == 5) {
++		char race = tolower((unsigned char) modelName[0]);
++		char sex = tolower((unsigned char) modelName[1]);
++		char age = tolower((unsigned char) modelName[2]);
++		char code0 = tolower((unsigned char) modelName[3]);
++		char code1 = tolower((unsigned char) modelName[4]);
++		const char *raceName = nil;
++		const char *person = nil;
++
++		switch (race) {
++		case 'h': raceName = "Hispanic"; break;
++		case 'b': raceName = "Black"; break;
++		case 'w': raceName = "White"; break;
++		case 'j': raceName = "Japanese"; break;
++		}
++		if (sex == 'm')
++			person = age == 'y' ? "guy" : age == 'o' ? "man" : nil;
++		else if (sex == 'f')
++			person = age == 'y' ? "girl" : age == 'o' ? "woman" : nil;
++
++		if (raceName != nil && person != nil) {
++			for (i = 0; i < ARRAY_SIZE(aVCModPedStyles); i++) {
++				if (code0 == aVCModPedStyles[i].code[0] &&
++				    code1 == aVCModPedStyles[i].code[1]) {
++					snprintf(aVCModPedLabel, sizeof(aVCModPedLabel),
++						"%s %s, %s", raceName, person, aVCModPedStyles[i].style);
++					return aVCModPedLabel;
++				}
++			}
++			snprintf(aVCModPedLabel, sizeof(aVCModPedLabel), "%s %s", raceName, person);
++			return aVCModPedLabel;
++		}
++	}
++
++	// a modded IDE gets its own name back rather than an empty row
++	snprintf(aVCModPedLabel, sizeof(aVCModPedLabel), "%.28s", modelName);
++	return aVCModPedLabel;
++}
++
 +static const char *
 +VCModCurrentPedLabel(void)
 +{
 +	int16 modelIndex = VCModCurrentPedModel();
 +	if (modelIndex == MI_PLAYER)
-+		return "player (Tommy)";
++		return "Tommy Vercetti";
 +
 +	CBaseModelInfo *mi = CModelInfo::GetModelInfo(modelIndex);
 +	if (mi == nil)
 +		return "unknown";
-+	return mi->GetModelName();
++	return VCModPedDisplayName(mi->GetModelName());
++}
++
++static const char *
++VCModDriverCell(void)
++{
++	switch (VCModRidePhase()) {
++	case VCMOD_RIDE_APPROACH:	return "[EN ROUTE]  H dismiss";
++	case VCMOD_RIDE_PICKUP:		return "[WAITING]   H dismiss";
++	case VCMOD_RIDE_BOARDING:	return "[BOARDING]";
++	case VCMOD_RIDE_DRIVING:	return "[DRIVING]   H dismiss";
++	}
++	return "[CALL]      H";
 +}
 +
 +static const char *
@@ -884,6 +1087,10 @@ index 0000000..164e996
 +	case VCMOD_LIST_PEDCAT:
 +		*selected = entry == nVCModPedCategory;
 +		return aVCModPedCategoryNames[entry];
++
++	case VCMOD_LIST_RIDESTYLE:
++		*selected = entry == nVCModRideStyle;
++		return aVCModRideStyleNames[entry];
 +
 +	case VCMOD_LIST_RIDEZONE: {
 +		int32 zoneIndex;
@@ -904,7 +1111,7 @@ index 0000000..164e996
 +		return missing;
 +	}
 +	*selected = modelIndex == VCModCurrentPedModel();
-+	return name;
++	return VCModPedDisplayName(name);
 +}
 +
 +static void
@@ -919,6 +1126,10 @@ index 0000000..164e996
 +	case VCMOD_LIST_PEDCAT:
 +		nVCModPedCategory = entry;
 +		nVCModListScroll = 0;
++		break;
++
++	case VCMOD_LIST_RIDESTYLE:
++		nVCModRideStyle = entry;
 +		break;
 +
 +	case VCMOD_LIST_RIDEZONE: {
@@ -1048,12 +1259,19 @@ index 0000000..164e996
 +		case VCMOD_ROW_ANIMSET:
 +		case VCMOD_ROW_PEDCAT:
 +		case VCMOD_ROW_PEDCHAR:
-+		case VCMOD_ROW_RIDEZONE: {
++		case VCMOD_ROW_RIDEZONE:
++		case VCMOD_ROW_RIDESTYLE: {
 +			int32 want = VCModRowList(aVCModRows[i].kind);
 +			nVCModOpenList = nVCModOpenList == want ? VCMOD_LIST_NONE : want;
 +			nVCModListScroll = 0;
 +			break;
 +		}
++		case VCMOD_ROW_CALLDRIVER:
++			VCModCallDriver();
++			break;
++		case VCMOD_ROW_SKIPRIDE:
++			VCModSkipRide();
++			break;
 +		case VCMOD_ROW_MASTER:
 +			VCModToggleAll();
 +			break;
@@ -1153,6 +1371,24 @@ index 0000000..164e996
 +			break;
 +		}
 +
++		case VCMOD_ROW_RIDESTYLE:
++			style = VCFONT_SET;
++			value = aVCModRideStyleNames[nVCModRideStyle];
++			break;
++
++		case VCMOD_ROW_SKIPRIDE: {
++			int32 zoneIndex;
++			bool hasDestination = VCModRideZoneAt(nVCModRideZone, &zoneIndex, nil, nil) && zoneIndex >= 0;
++			style = hasDestination ? VCFONT_SET : VCFONT_WARN;
++			value = hasDestination ? "[JUMP]  to RIDE TO" : "[--]  pick RIDE TO";
++			break;
++		}
++
++		case VCMOD_ROW_CALLDRIVER:
++			style = VCModRidePhase() == VCMOD_RIDE_NONE ? VCFONT_OFF : VCFONT_ON;
++			value = VCModDriverCell();
++			break;
++
 +		case VCMOD_ROW_ADRENALINE_MODE:
 +			style = VCFONT_SET;
 +			value = bVCModAdrenalineSlowMo ? "[SLOW-MO]  click to switch" : "[NORMAL]   click to switch";
@@ -1216,7 +1452,7 @@ index 0000000..164e996
 +	if (!bVCModMouseAimLockOn && CCamera::m_bUseMouse3rdPerson)
 +		VCModCell(VCFONT_WARN, "! two-finger hold does nothing", VCMOD_PANEL_X, y++, fullCols);
 +
-+	VCModCell(VCFONT_HINT, "fire G   walk B   panel backslash   cheats ctrl-M", VCMOD_PANEL_X, y, fullCols);
++	VCModCell(VCFONT_HINT, "G fire B walk H driver \\ panel ctrl-M cheats", VCMOD_PANEL_X, y, fullCols);
 +
 +	// charset glyphs go through the buffered path, so flush them before the cursor
 +	// geometry or the pointer ends up underneath the panel
@@ -1226,10 +1462,10 @@ index 0000000..164e996
 +#endif
 diff --git a/src/extras/vcmodpanel.h b/src/extras/vcmodpanel.h
 new file mode 100644
-index 0000000..bb770f9
+index 0000000..d23ba9f
 --- /dev/null
 +++ b/src/extras/vcmodpanel.h
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,96 @@
 +#ifndef VCMODPANEL_H
 +#define VCMODPANEL_H
 +
@@ -1259,8 +1495,31 @@ index 0000000..bb770f9
 +extern int32 nVCModPedCategory;
 +// ride as a passenger while an NPC drives
 +extern bool bVCModPassengerMode;
++// Tommy waits like a ped does, and starts the same pair chat with a civilian
++extern bool bVCModStreetIdle;
++extern bool bVCModChatter;
 +// -1 rides with traffic, otherwise the index of the zone to drive to
 +extern int32 nVCModRideZone;
++// how the driver drives, shared by the summoned limo and any street car
++extern int32 nVCModRideStyle;
++
++enum eVCModRideStyle
++{
++	VCMOD_RIDE_SAFE,	// stops for traffic and for red lights
++	VCMOD_RIDE_FAST,	// ploughs through both
++	NUM_VCMOD_RIDE_STYLES
++};
++
++// Calling the chauffeur is the action, so there is no on/off flag to keep in step
++// with it; the panel reads the phase instead.
++enum eVCModRidePhase
++{
++	VCMOD_RIDE_NONE,
++	VCMOD_RIDE_APPROACH,
++	VCMOD_RIDE_PICKUP,
++	VCMOD_RIDE_BOARDING,
++	VCMOD_RIDE_DRIVING
++};
 +
 +enum eVCModPedCategory
 +{
@@ -1291,12 +1550,85 @@ index 0000000..bb770f9
 +// takes over an enter-vehicle press so Tommy rides as a passenger; false means
 +// the press is not ours and the stock driver entry should happen
 +bool VCModPassengerEntry(CVehicle *vehicle);
++// where the ride has got to, one of eVCModRidePhase
++int32 VCModRidePhase(void);
++// calls the limo, or dismisses the one already on its way
++void VCModCallDriver(void);
++// one-shot travel to the RIDE TO destination; never part of the enter press
++void VCModSkipRide(void);
 +
 +#ifdef DEBUGMENU
 +void VCModPanelRender(void);
 +#endif
 +
 +#endif
+diff --git a/src/peds/Ped.cpp b/src/peds/Ped.cpp
+index aa63c32..1574724 100644
+--- a/src/peds/Ped.cpp
++++ b/src/peds/Ped.cpp
+@@ -1404,8 +1404,11 @@ CPed::WillChat(CPed *stranger)
+ 		return false;
+ 	if (stranger->m_nPedType == PEDTYPE_COP)
+ 		return false;
++	// the player starts chats through the street-idle mod now, so a ped has to
++	// be able to say yes to him; the ped's own surface and road checks above
++	// still apply
+ 	if (stranger->IsPlayer())
+-		return false;
++		return true;
+ 	if ((IsGangMember() || stranger->IsGangMember()) && m_nPedType != stranger->m_nPedType)
+ 		return false;
+ 	return true;
+@@ -3142,6 +3145,9 @@ CPed::PlayFootSteps(void)
+ 	CAnimBlendAssociation *walkRunAssoc = nil;
+ 	float walkRunAssocBlend = 0.0f, idleAssocBlend = 0.0f;
+ 	bool isSkater = m_pedStats == CPedStats::ms_apPedStats[PEDSTAT_SKATER];
++	// the player keeps PEDSTAT_PLAYER across a model swap, so the group is what
++	// says he is on skates
++	bool skateSound = isSkater || m_animGroup == ASSOCGRP_SKATE;
+ 
+ 	CVector footPosL(0.0f, 0.0f, 0.0f), footPosR(0.0f, 0.0f, 0.0f);
+ 	bool footPosLok = false, footPosRok = false;
+@@ -3173,7 +3179,7 @@ CPed::PlayFootSteps(void)
+ 		float stepEnd = walkRunAssoc->hierarchy->totalLength / 2.0f + stepStart;
+ 		float currentTime = walkRunAssoc->currentTime;
+ 
+-		if (isSkater) {
++		if (skateSound) {
+ 			// both are unused
+ 			static float stepStartSection = 1.0f;
+ 			static float animSections = 15.f;
+@@ -3189,22 +3195,25 @@ CPed::PlayFootSteps(void)
+ 			switch (CSurfaceTable::GetAdhesionGroup(m_nSurfaceTouched)) {
+ 				case ADHESIVE_LOOSE:
+ 					if (CGeneral::GetRandomNumber() % 128) {
+-						m_vecAnimMoveDelta *= 0.5f;
+-					} else {
++						if (isSkater)
++							m_vecAnimMoveDelta *= 0.5f;
++					} else if (isSkater) {
+ 						SetFall(0, ANIM_STD_HIGHIMPACT_BACK, false);
+ 					}
+ 					soundVolume = 0.5f;
+ 					break;
+ 				case ADHESIVE_SAND:
+ 					if (CGeneral::GetRandomNumber() % 64) {
+-						m_vecAnimMoveDelta *= 0.2f;
+-					} else {
++						if (isSkater)
++							m_vecAnimMoveDelta *= 0.2f;
++					} else if (isSkater) {
+ 						SetFall(0, ANIM_STD_HIGHIMPACT_BACK, false);
+ 					}
+ 					soundVolume = 0.2f;
+ 					break;
+ 				case ADHESIVE_WET:
+-					m_vecAnimMoveDelta *= 0.3f;
++					if (isSkater)
++						m_vecAnimMoveDelta *= 0.3f;
+ 					soundVolume = 0.2f;
+ 					break;
+ 				default:
 diff --git a/src/peds/PedFight.cpp b/src/peds/PedFight.cpp
 index 8a3b971..456e1d2 100644
 --- a/src/peds/PedFight.cpp
@@ -1406,10 +1738,18 @@ index 8a3b971..456e1d2 100644
  					} else {
  						weaponAnimAssoc = CAnimManager::BlendAnimation(GetClump(), ourWeapon->m_AnimToPlay, GetFireAnimGround(ourWeapon, false), 8.0f);
 diff --git a/src/peds/PlayerPed.cpp b/src/peds/PlayerPed.cpp
-index cd8da42..5e0ebf5 100644
+index cd8da42..5096581 100644
 --- a/src/peds/PlayerPed.cpp
 +++ b/src/peds/PlayerPed.cpp
-@@ -9,9 +9,12 @@
+@@ -1,5 +1,7 @@
+ #include "common.h"
+ 
++#include <stdio.h>
++
+ #include "RwHelper.h"
+ #include "PlayerPed.h"
+ #include "Wanted.h"
+@@ -9,9 +11,12 @@
  #include "Camera.h"
  #include "WeaponEffects.h"
  #include "ModelIndices.h"
@@ -1422,17 +1762,22 @@ index cd8da42..5e0ebf5 100644
  #include "General.h"
  #include "Pools.h"
  #include "Darkel.h"
-@@ -21,12 +24,37 @@
+@@ -21,12 +26,43 @@
  #include "Population.h"
  #include "Script.h"
  #include "Replay.h"
 +#include "CutsceneMgr.h"
 +#include "Vehicle.h"
++#include "Automobile.h"
++#include "PathFind.h"
++#include "Radar.h"
++#include "ColStore.h"
 +#include "Hud.h"
  #include "PedPlacement.h"
  #include "VarConsole.h"
  #include "SaveBuf.h"
 +#include "ControllerConfig.h"
++#include "SurfaceTable.h"
 +#include "vcmodpanel.h"
  
  #define PAD_MOVE_TO_GAME_WORLD_MOVE 60.0f
@@ -1456,11 +1801,12 @@ index cd8da42..5e0ebf5 100644
 +// and gta_vc.set rewrites the binding table on load, so these are checked directly
 +#define VCMOD_FIREKEY 'G'
 +#define VCMOD_WALKKEY 'B'
++#define VCMOD_DRIVERKEY 'H'
 +
  bool CPlayerPed::bDontAllowWeaponChange;
  #ifndef MASTER
  bool CPlayerPed::bDebugPlayerInfo;
-@@ -49,6 +77,8 @@ GetPadFromPlayer(CPlayerPed*)
+@@ -49,6 +85,8 @@ GetPadFromPlayer(CPlayerPed*)
  
  CPlayerPed::~CPlayerPed()
  {
@@ -1469,7 +1815,7 @@ index cd8da42..5e0ebf5 100644
  	delete m_pWanted;
  }
  
-@@ -153,12 +183,362 @@ CPlayerPed::AnnoyPlayerPed(bool annoyedByPassingEntity)
+@@ -153,12 +191,886 @@ CPlayerPed::AnnoyPlayerPed(bool annoyedByPassingEntity)
  void
  CPlayerPed::ClearAdrenaline(void)
  {
@@ -1652,14 +1998,35 @@ index cd8da42..5e0ebf5 100644
 +	}
 +}
 +
-+// ---- passenger mode: an NPC drives, Tommy rides along ---------------------
-+// the ride is tracked by pool index because the car can be destroyed or blown up
++// ---- passenger mode and the chauffeur: an NPC drives, Tommy rides along -----
++// the ride is tracked by pool handle because the car can be destroyed or blown up
 +// between the enter press and actually sitting down
 +static int32 nVCModRideHandle = -1;
-+static bool bVCModRideWaiting;
++static int32 nVCModRidePhase = VCMOD_RIDE_NONE;
 +static bool bVCModRideSpawnedDriver;
++static bool bVCModRideSummoned;
 +static bool bVCModRideHasDestination;
 +static CVector vecVCModRideDestination;
++static CVector vecVCModRidePickup;
++static uint32 nVCModRideRetargetAt;
++static int32 nVCModRideAppliedStyle = -1;
++// the car's own traffic pace, put back when the ride ends; releasing a street car
++// at the ride's cruise speed and weaving style made the driver bolt like a maniac
++static uint8 nVCModRideTrafficCruise;
++static uint8 nVCModRideTrafficStyle;
++static float fVCModRideTrafficMaxSpeed;
++static bool bVCModRideTrafficSaved;
++
++#define VCMOD_DRIVER_MODEL	MI_STRETCH
++#define VCMOD_SPAWN_BACK	80.0f
++#define VCMOD_PICKUP_NEAR	15.0f
++#define VCMOD_RETARGET_NEAR	20.0f
++#define VCMOD_RETARGET_WAIT	3000
++#define VCMOD_ABANDON_FAR	120.0f
++#define VCMOD_ARRIVE_NEAR	20.0f
++
++static CVehicle *VCModRideVehicle(void);
++static bool VCModRideSkipTravel(void);
 +
 +static void
 +VCModRideNotice(const char *text)
@@ -1672,13 +2039,71 @@ index cd8da42..5e0ebf5 100644
 +	CHud::SetHelpMessage(notice, false);
 +}
 +
++int32
++VCModRidePhase(void)
++{
++	return nVCModRidePhase;
++}
++
++// back to ordinary traffic; a car held for boarding would otherwise sit at
++// MISSION_STOP_FOREVER with its driver frozen for the rest of the session
++static void
++VCModRideReleaseToTraffic(CVehicle *veh)
++{
++	if (veh == nil)
++		return;
++	CCarCtrl::JoinCarWithRoadSystem(veh);
++	veh->AutoPilot.m_nCarMission = MISSION_CRUISE;
++	veh->AutoPilot.m_nTempAction = TEMPACT_NONE;
++	if (bVCModRideTrafficSaved && nVCModRideTrafficCruise != 0) {
++		// exactly how the car drove before we borrowed it, so the driver blends
++		// back into the traffic instead of speeding and weaving away
++		veh->AutoPilot.m_nDrivingStyle = nVCModRideTrafficStyle;
++		veh->AutoPilot.m_nCruiseSpeed = nVCModRideTrafficCruise;
++		veh->AutoPilot.m_fMaxTrafficSpeed = fVCModRideTrafficMaxSpeed;
++	} else {
++		// a car we caught stopped, or a limo we conjured, had no pace to restore
++		veh->AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_STOP_FOR_CARS;
++		veh->AutoPilot.m_nCruiseSpeed = 12;
++		veh->AutoPilot.m_fMaxTrafficSpeed = 12.0f;
++	}
++}
++
++// a summoned limo goes back to traffic rather than being deleted, so the pool and
++// the radar never hold a slot we freed by hand
++static void
++VCModRideHandBack(CVehicle *veh)
++{
++	if (veh == nil)
++		return;
++	if (veh->VehicleCreatedBy == MISSION_VEHICLE) {
++		veh->VehicleCreatedBy = RANDOM_VEHICLE;
++		CCarCtrl::NumMissionCars--;
++		CCarCtrl::NumRandomCars++;
++	}
++	CRadar::ClearBlipForEntity(BLIP_CAR, CPools::GetVehiclePool()->GetIndex(veh));
++	VCModRideReleaseToTraffic(veh);
++}
++
 +static void
 +VCModRideStandDown(void)
 +{
++	CVehicle *veh = VCModRideVehicle();
++	CPlayerPed *player = FindPlayerPed();
++	bool aboard = player != nil && veh != nil && player->InVehicle() && player->m_pMyVehicle == veh;
++
++	if (bVCModRideSummoned)
++		VCModRideHandBack(veh);
++	// a street car we held for boarding goes back to traffic once nobody is in it
++	else if (veh != nil && !aboard)
++		VCModRideReleaseToTraffic(veh);
 +	nVCModRideHandle = -1;
-+	bVCModRideWaiting = false;
++	nVCModRidePhase = VCMOD_RIDE_NONE;
 +	bVCModRideSpawnedDriver = false;
++	bVCModRideSummoned = false;
 +	bVCModRideHasDestination = false;
++	nVCModRideAppliedStyle = -1;
++	bVCModRideTrafficSaved = false;
 +}
 +
 +static CVehicle *
@@ -1702,11 +2127,13 @@ index cd8da42..5e0ebf5 100644
 +bool
 +VCModPassengerEntry(CVehicle *vehicle)
 +{
-+	if (!bVCModPassengerMode)
-+		return false;
-+
 +	CPlayerPed *player = FindPlayerPed();
 +	if (player == nil || !player->IsPedInControl() || player->bInVehicle || vehicle == nil)
++		return false;
++
++	// the limo we called is always boardable; the flag governs street cars
++	bool summoned = bVCModRideSummoned && vehicle == VCModRideVehicle();
++	if (!bVCModPassengerMode && !summoned)
 +		return false;
 +
 +	// planes and helis have no passenger seat at all, trains are not rideable here
@@ -1719,7 +2146,11 @@ index cd8da42..5e0ebf5 100644
 +		return true;
 +	}
 +
-+	bVCModRideSpawnedDriver = false;
++	// boarding a street car replaces a chauffeur we already called
++	if (bVCModRideSummoned && !summoned)
++		VCModRideStandDown();
++	if (!summoned)
++		bVCModRideSpawnedDriver = false;
 +	if (vehicle->pDriver == nil) {
 +		// a parked car has nowhere to put a driver until the traffic counts move it
 +		if (vehicle->VehicleCreatedBy == PARKED_VEHICLE) {
@@ -1739,6 +2170,26 @@ index cd8da42..5e0ebf5 100644
 +		bVCModRideSpawnedDriver = true;
 +	}
 +
++	// A simple car is moved by the on-rails traffic update, which writes its
++	// position directly; re-routing one drags it sideways onto the path lane.
++	// Driving promotes the car to STATUS_PLAYER when the player sits down, but
++	// riding as a passenger does not, so promote it before we touch its route.
++	if (vehicle->GetStatus() == STATUS_SIMPLE) {
++		vehicle->SetStatus(STATUS_PHYSICS);
++		CCarCtrl::SwitchVehicleToRealPhysics(vehicle);
++	}
++
++	// remember the pace the car was already keeping, so handing it back does not
++	// leave a street car driving to the ride's tune
++	if (summoned) {
++		bVCModRideTrafficSaved = false;
++	} else {
++		nVCModRideTrafficCruise = vehicle->AutoPilot.m_nCruiseSpeed;
++		nVCModRideTrafficStyle = vehicle->AutoPilot.m_nDrivingStyle;
++		fVCModRideTrafficMaxSpeed = vehicle->AutoPilot.m_fMaxTrafficSpeed;
++		bVCModRideTrafficSaved = true;
++	}
++
 +	// hold the car until Tommy is aboard, the way the shortcut taxi waits
 +	vehicle->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
 +	vehicle->AutoPilot.m_nCruiseSpeed = 0;
@@ -1746,25 +2197,249 @@ index cd8da42..5e0ebf5 100644
 +	player->SetObjective(OBJECTIVE_ENTER_CAR_AS_PASSENGER, vehicle);
 +
 +	nVCModRideHandle = CPools::GetVehiclePool()->GetIndex(vehicle);
-+	bVCModRideWaiting = true;
++	nVCModRidePhase = VCMOD_RIDE_BOARDING;
++	// boarding always routes, even when the chauffeur was already driving to us
++	nVCModRideAppliedStyle = -1;
 +	return true;
 +}
 +
-+// traffic driving for the driver we are riding with
++// SAFE is the only style that scans for cars and peds and the only one that stops
++// at a red light; PLOUGH_THROUGH does neither and never weaves around traffic.
 +static void
-+VCModRideStartCruise(CVehicle *veh)
++VCModRideApplyStyle(CVehicle *veh, bool goingSomewhere)
 +{
-+	CCarCtrl::JoinCarWithRoadSystem(veh);
-+	veh->AutoPilot.m_nCarMission = MISSION_CRUISE;
++	// both styles steer with real physics; a simple car would instead be dragged
++	// along its path lane every frame, which is the car snapping sideways
++	veh->SetStatus(STATUS_PHYSICS);
++	if (nVCModRideStyle == VCMOD_RIDE_FAST) {
++		veh->AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_PLOUGH_THROUGH;
++		veh->AutoPilot.m_nCruiseSpeed = goingSomewhere ? 55 : 45;
++	} else {
++		veh->AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_STOP_FOR_CARS;
++		veh->AutoPilot.m_nCruiseSpeed = goingSomewhere ? 25 : 20;
++	}
++	nVCModRideAppliedStyle = nVCModRideStyle;
++}
++
++// the journey: a zone routes the driver, anything else lets traffic take him
++static void
++VCModRideDrive(CVehicle *veh)
++{
++	int32 zoneIndex;
++	CVector dest;
++	if (VCModRideZoneAt(nVCModRideZone, &zoneIndex, nil, &dest) && zoneIndex >= 0) {
++		CCarCtrl::JoinCarWithRoadSystemGotoCoors(veh, dest, false);
++		veh->AutoPilot.m_nCarMission = MISSION_GOTOCOORDS;
++		vecVCModRideDestination = dest;
++		bVCModRideHasDestination = true;
++		VCModRideApplyStyle(veh, true);
++	} else {
++		CCarCtrl::JoinCarWithRoadSystem(veh);
++		veh->AutoPilot.m_nCarMission = MISSION_CRUISE;
++		bVCModRideHasDestination = false;
++		VCModRideApplyStyle(veh, false);
++	}
 +	veh->AutoPilot.m_nTempAction = TEMPACT_NONE;
-+	veh->AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_AVOID_CARS;
-+	veh->AutoPilot.m_nCruiseSpeed = 25;
++}
++
++// the engine's own waypoint teleport, aimed at the nearest road so a zone centre
++// in the sea or inside a block cannot be where Tommy lands
++static bool
++VCModRideSkipTravel(void)
++{
++	int32 zoneIndex;
++	CVector dest;
++	if (!VCModRideZoneAt(nVCModRideZone, &zoneIndex, nil, &dest) || zoneIndex < 0) {
++		VCModRideNotice("skip the ride: pick a destination first");
++		return false;
++	}
++	int32 node = ThePaths.FindNodeClosestToCoors(dest, PATH_CAR, 999999.9f, true, true);
++	if (node < 0) {
++		VCModRideNotice("skip the ride: no road there");
++		return false;
++	}
++	dest = ThePaths.m_pathNodes[node].GetPosition();
++
++	// the car when Tommy is aboard, Tommy otherwise, so one path covers both
++	CEntity *who = FindPlayerEntity();
++	if (who == nil)
++		return false;
++
++	CColStore::RequestCollision(dest);
++	CStreaming::LoadSceneCollision(dest);
++	CStreaming::LoadScene(dest);
++	dest.z = CWorld::FindGroundZForCoord(dest.x, dest.y) + who->GetDistanceFromCentreOfMassToBaseOfModel();
++	CTheScripts::ClearSpaceForMissionEntity(dest, who);
++	who->Teleport(dest);
++	if (who->IsVehicle() && ((CVehicle*)who)->IsCar())
++		((CAutomobile*)who)->PlaceOnRoadProperly();
++	// the camera has to accept a discontinuous jump, the same way the engine's
++	// own map teleport does; there is no fade-out to wait for here
++	TheCamera.RestoreWithJumpCut();
++	VCModRideNotice("skip the ride: arrived");
++	return true;
++}
++
++static bool
++VCModRideSpawnLimo(CPlayerPed *player)
++{
++	CStreaming::RequestModel(VCMOD_DRIVER_MODEL, 0);
++	CStreaming::LoadAllRequestedModels(false);
++	if (!CStreaming::HasModelLoaded(VCMOD_DRIVER_MODEL)) {
++		VCModRideNotice("driver: the limo cannot be loaded");
++		return false;
++	}
++
++	// come from behind Tommy so the approach is a drive, not a car under his feet
++	CVector here = player->GetPosition();
++	CVector from = here - player->GetForward() * VCMOD_SPAWN_BACK;
++	int32 node = ThePaths.FindNodeClosestToCoors(from, PATH_CAR, 60.0f, true, true);
++	if (node < 0)
++		node = ThePaths.FindNodeClosestToCoors(here, PATH_CAR, 200.0f, true, true);
++	if (node < 0) {
++		VCModRideNotice("driver: no road to come from");
++		return false;
++	}
++
++	CAutomobile *limo = new CAutomobile(VCMOD_DRIVER_MODEL, RANDOM_VEHICLE);
++	if (limo == nil) {
++		VCModRideNotice("driver: no room for a limo");
++		return false;
++	}
++
++	CVector pos = ThePaths.m_pathNodes[node].GetPosition();
++	limo->SetPosition(pos);
++	// face the pickup the way traffic spawns face their destination
++	CVector2D direction = here - pos;
++	direction.Normalise();
++	limo->GetForward() = CVector(direction.x, direction.y, 0.0f);
++	limo->GetRight() = CVector(direction.y, -direction.x, 0.0f);
++	limo->GetUp() = CVector(0.0f, 0.0f, 1.0f);
++	pos.z += limo->GetDistanceFromCentreOfMassToBaseOfModel();
++	limo->SetPosition(pos);
++	limo->PlaceOnRoadProperly();
++	limo->SetStatus(STATUS_PHYSICS);
++	limo->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
++	limo->AutoPilot.m_nCruiseSpeed = 0;
++
++	if (limo->SetUpDriver() == nil) {
++		// nowhere to put a chauffeur: leave it as an abandoned car and say so
++		limo->SetStatus(STATUS_ABANDONED);
++		CWorld::Add(limo);
++		VCModRideNotice("driver: nobody to drive this");
++		return false;
++	}
++
++	// mission ownership keeps traffic from reclaiming it while it waits for us
++	limo->VehicleCreatedBy = MISSION_VEHICLE;
++	CCarCtrl::NumRandomCars--;
++	CCarCtrl::NumMissionCars++;
++	CTheScripts::ClearSpaceForMissionEntity(pos, limo);
++	CWorld::Add(limo);
++	CRadar::SetEntityBlip(BLIP_CAR, CPools::GetVehiclePool()->GetIndex(limo), 0, BLIP_DISPLAY_BOTH);
++
++	nVCModRideHandle = CPools::GetVehiclePool()->GetIndex(limo);
++	nVCModRidePhase = VCMOD_RIDE_APPROACH;
++	bVCModRideSummoned = true;
++	bVCModRideSpawnedDriver = true;
++	vecVCModRidePickup = here;
++	nVCModRideRetargetAt = 0;
++	CCarCtrl::JoinCarWithRoadSystemGotoCoors(limo, here, false);
++	limo->AutoPilot.m_nCarMission = MISSION_GOTOCOORDS;
++	limo->AutoPilot.m_nTempAction = TEMPACT_NONE;
++	VCModRideApplyStyle(limo, true);
++	VCModRideNotice("your driver is on the way");
++	return true;
++}
++
++void
++VCModCallDriver(void)
++{
++	CPlayerPed *player = FindPlayerPed();
++	if (player == nil || !player->IsPedInControl()) {
++		VCModRideNotice("driver: not right now");
++		return;
++	}
++
++	// calling again dismisses him, from the kerb or from the back seat
++	if (bVCModRideSummoned && nVCModRidePhase != VCMOD_RIDE_NONE) {
++		CVehicle *veh = VCModRideVehicle();
++		bool aboard = player->InVehicle() && player->m_pMyVehicle == veh;
++		VCModRideStandDown();
++		// dismissed while riding: wait for Tommy to get out instead of driving off
++		if (aboard && veh != nil) {
++			veh->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
++			veh->AutoPilot.m_nCruiseSpeed = 0;
++		}
++		VCModRideNotice("driver dismissed");
++		return;
++	}
++
++	if (player->bInVehicle) {
++		VCModRideNotice("driver: get out first");
++		return;
++	}
++	VCModRideStandDown();
++	VCModRideSpawnLimo(player);
++}
++
++// the one-shot travel action: it is not a driving style, so no press of the enter
++// key can ever turn itself into a jump
++void
++VCModSkipRide(void)
++{
++	if (!VCModRideSkipTravel())
++		return;
++
++	CVehicle *veh = VCModRideVehicle();
++	CPlayerPed *player = FindPlayerPed();
++	bool aboard = player != nil && veh != nil && player->InVehicle() && player->m_pMyVehicle == veh;
++
++	VCModRideStandDown();
++	// arrived with Tommy still inside: park rather than let the hand-back drive off
++	if (aboard) {
++		veh->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
++		veh->AutoPilot.m_nCruiseSpeed = 0;
++		veh->AutoPilot.m_nTempAction = TEMPACT_NONE;
++	}
++}
++
++static void
++VCModUpdatePickup(CPlayerPed *player, CVehicle *veh)
++{
++	if (nVCModRideAppliedStyle != nVCModRideStyle)
++		VCModRideApplyStyle(veh, true);
++
++	CVector here = player->GetPosition();
++	if (nVCModRidePhase == VCMOD_RIDE_APPROACH) {
++		// Tommy walked on: send the chauffeur to where he is now, not where he was
++		if ((here - vecVCModRidePickup).Magnitude2D() > VCMOD_RETARGET_NEAR &&
++				CTimer::GetTimeInMilliseconds() >= nVCModRideRetargetAt) {
++			vecVCModRidePickup = here;
++			nVCModRideRetargetAt = CTimer::GetTimeInMilliseconds() + VCMOD_RETARGET_WAIT;
++			CCarCtrl::JoinCarWithRoadSystemGotoCoors(veh, here, false);
++			veh->AutoPilot.m_nCarMission = MISSION_GOTOCOORDS;
++		}
++		if ((veh->GetPosition() - vecVCModRidePickup).Magnitude2D() < VCMOD_PICKUP_NEAR) {
++			veh->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
++			veh->AutoPilot.m_nCruiseSpeed = 0;
++			nVCModRidePhase = VCMOD_RIDE_PICKUP;
++			VCModRideNotice("your driver is here");
++		}
++		return;
++	}
++
++	// waiting at the kerb: walking far enough away calls it off, the taxi's own rule
++	if ((here - veh->GetPosition()).Magnitude2D() > VCMOD_ABANDON_FAR) {
++		VCModRideStandDown();
++		VCModRideNotice("driver left: too far away");
++	}
 +}
 +
 +static void
 +VCModUpdateRide(CPlayerPed *player)
 +{
-+	if (nVCModRideHandle < 0)
++	if (nVCModRidePhase == VCMOD_RIDE_NONE)
 +		return;
 +
 +	CVehicle *veh = VCModRideVehicle();
@@ -1773,32 +2448,19 @@ index cd8da42..5e0ebf5 100644
 +		return;
 +	}
 +
-+	if (bVCModRideWaiting) {
++	if (nVCModRidePhase == VCMOD_RIDE_APPROACH || nVCModRidePhase == VCMOD_RIDE_PICKUP) {
++		VCModUpdatePickup(player, veh);
++		return;
++	}
++
++	if (nVCModRidePhase == VCMOD_RIDE_BOARDING) {
 +		// still walking to the door, or the objective was taken away by something else
 +		if (!player->InVehicle() || player->m_pMyVehicle != veh) {
 +			if (player->m_objective != OBJECTIVE_ENTER_CAR_AS_PASSENGER || player->m_carInObjective != veh)
 +				VCModRideStandDown();
 +			return;
 +		}
-+		bVCModRideWaiting = false;
-+
-+		// a boat with a driver we conjured up has no route to follow, so it waits
-+		// with someone at the wheel instead of guessing at water pathfinding
-+		if (veh->IsBoat() && bVCModRideSpawnedDriver)
-+			return;
-+
-+		int32 zoneIndex;
-+		CVector dest;
-+		if (VCModRideZoneAt(nVCModRideZone, &zoneIndex, nil, &dest) && zoneIndex >= 0) {
-+			CCarCtrl::JoinCarWithRoadSystemGotoCoors(veh, dest, false);
-+			veh->AutoPilot.m_nCarMission = MISSION_GOTOCOORDS;
-+			veh->AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_AVOID_CARS;
-+			veh->AutoPilot.m_nCruiseSpeed = 40;
-+			vecVCModRideDestination = dest;
-+			bVCModRideHasDestination = true;
-+		} else {
-+			VCModRideStartCruise(veh);
-+		}
++		nVCModRidePhase = VCMOD_RIDE_DRIVING;
 +		return;
 +	}
 +
@@ -1808,12 +2470,26 @@ index cd8da42..5e0ebf5 100644
 +		return;
 +	}
 +
++	// a boat with a driver we conjured up has no route to follow, so it waits
++	// with someone at the wheel instead of guessing at water pathfinding
++	if (veh->IsBoat() && bVCModRideSpawnedDriver && !bVCModRideSummoned) {
++		nVCModRideAppliedStyle = nVCModRideStyle;
++		return;
++	}
++
++	// the selector is live: changing it re-routes the driver
++	if (nVCModRideAppliedStyle != nVCModRideStyle)
++		VCModRideDrive(veh);
++
 +	if (bVCModRideHasDestination &&
-+			(veh->GetPosition() - vecVCModRideDestination).Magnitude2D() < 20.0f) {
-+		veh->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
-+		veh->AutoPilot.m_nCruiseSpeed = 0;
++			(veh->GetPosition() - vecVCModRideDestination).Magnitude2D() < VCMOD_ARRIVE_NEAR) {
++		bool summoned = bVCModRideSummoned;
++		if (!summoned) {
++			veh->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
++			veh->AutoPilot.m_nCruiseSpeed = 0;
++		}
 +		VCModRideStandDown();
-+		VCModRideNotice("passenger mode: arrived");
++		VCModRideNotice(summoned ? "your driver has arrived" : "passenger mode: arrived");
 +	}
 +}
 +
@@ -1829,10 +2505,204 @@ index cd8da42..5e0ebf5 100644
 +	return VCModPedAnimGroupFor(player->GetModelIndex(), out);
 +}
 +
++// ---- street idle: waiting on the pavement, and the pair chat the peds have --
++// the reasons are the peds' own, not new ones: a ped who is stuck waiting on a
++// pavement plays idle_hbhb (WAITSTATE_CROSS_ROAD / DOUBLEBACK), and a wandering
++// ped within 1.8 m of another one starts the same idle_chat pair both ways.
++// Tommy gets both on the same terms, on foot, unarmed and off the tarmac.
++static bool bVCModStreetChat;
++static uint32 nVCModStreetStillSince;
++static uint32 nVCModStreetGestureEnd;
++static uint32 nVCModStreetNextGesture;
++static uint32 nVCModStreetNextChat;
++static int32 nVCModStreetLastBlock = -1;
++
++#define VCMOD_STREET_WAIT		4000	// still this long before the waiting pose
++#define VCMOD_STREET_HOLD_MIN	3000
++#define VCMOD_STREET_HOLD_MAX	5000
++#define VCMOD_STREET_GESTURE_GAP 14000
++#define VCMOD_STREET_CHAT_WAIT	2500
++#define VCMOD_STREET_CHAT_RANGE	1.8f	// the ped chat start distance
++#define VCMOD_STREET_CHAT_MIN	10000
++#define VCMOD_STREET_CHAT_MAX	14000
++#define VCMOD_STREET_CHAT_GAP	30000
++#define VCMOD_STREET_CHAT_ABORT_GAP 10000
++
++// one bit per refusal, so a feature that stays silent can say which condition
++// held it back instead of only failing to start
++enum
++{
++	VCMOD_STREET_NO_AI	= 1 << 0,
++	VCMOD_STREET_IN_CAR	= 1 << 1,
++	VCMOD_STREET_DYING	= 1 << 2,
++	VCMOD_STREET_DUCKING = 1 << 3,
++	VCMOD_STREET_AIMING	= 1 << 4,
++	VCMOD_STREET_STATE	= 1 << 5,
++	VCMOD_STREET_ARMED	= 1 << 6,
++	VCMOD_STREET_MOVING	= 1 << 7,
++	VCMOD_STREET_IN_AIR	= 1 << 8,
++	VCMOD_STREET_IN_WATER = 1 << 9,
++	VCMOD_STREET_CONTROLS = 1 << 10,
++	VCMOD_STREET_INPUT	= 1 << 11,
++	VCMOD_STREET_ACTION	= 1 << 12,
++	VCMOD_STREET_TARMAC	= 1 << 13
++};
++
++static int32
++VCModStreetBlockReason(CPlayerPed *player, CPad *pad)
++{
++	int32 reason = 0;
++	if (!player->IsPedInControl()) reason |= VCMOD_STREET_NO_AI;
++	if (player->bInVehicle) reason |= VCMOD_STREET_IN_CAR;
++	if (player->DyingOrDead()) reason |= VCMOD_STREET_DYING;
++	if (player->bIsDucking) reason |= VCMOD_STREET_DUCKING;
++	if (player->bIsAimingGun || player->bIsPointingGunAt) reason |= VCMOD_STREET_AIMING;
++	if (player->m_nPedState != PED_IDLE && player->m_nPedState != PED_CHAT) reason |= VCMOD_STREET_STATE;
++	if (player->GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED) reason |= VCMOD_STREET_ARMED;
++	if (player->m_fMoveSpeed > 0.05f) reason |= VCMOD_STREET_MOVING;
++	if (player->bIsInTheAir) reason |= VCMOD_STREET_IN_AIR;
++	if (player->bIsInWater) reason |= VCMOD_STREET_IN_WATER;
++	if (pad->ArePlayerControlsDisabled()) reason |= VCMOD_STREET_CONTROLS;
++	if (pad->GetPedWalkLeftRight() != 0 || pad->GetPedWalkUpDown() != 0) reason |= VCMOD_STREET_INPUT;
++	if (pad->JumpJustDown() || pad->GetWeapon() != 0 || pad->GetTarget()) reason |= VCMOD_STREET_ACTION;
++	if (player->m_nSurfaceTouched == SURFACE_TARMAC) reason |= VCMOD_STREET_TARMAC;
++	return reason;
++}
++
++static void
++VCModStreetFadeGesture(CPlayerPed *player)
++{
++	CAnimBlendAssociation *assoc = RpAnimBlendClumpGetAssociation(player->GetClump(), ANIM_STD_IDLE_HBHB);
++	if (assoc) {
++		assoc->blendDelta = -8.0f;
++		assoc->flags |= ASSOC_DELETEFADEDOUT;
++	}
++}
++
++static void
++VCModStreetStartGesture(CPlayerPed *player)
++{
++	CAnimManager::BlendAnimation(player->GetClump(), ASSOCGRP_STD, ANIM_STD_IDLE_HBHB, 4.0f);
++	uint32 now = CTimer::GetTimeInMilliseconds();
++	nVCModStreetGestureEnd = now + CGeneral::GetRandomNumberInRange(VCMOD_STREET_HOLD_MIN, VCMOD_STREET_HOLD_MAX);
++	nVCModStreetNextGesture = nVCModStreetGestureEnd + VCMOD_STREET_GESTURE_GAP;
++	fprintf(stderr, "VCMOD street idle: waiting pose\n");
++}
++
++// the same candidate the ped chat start would pick: a wandering civilian in
++// reach, both able to see each other, on a surface WillChat accepts
++static CPed *
++VCModStreetChatPartner(CPlayerPed *player)
++{
++	float rangeSqr = sq(VCMOD_STREET_CHAT_RANGE);
++	for (int32 i = 0; i < player->m_numNearPeds; i++) {
++		CPed *ped = player->m_nearPeds[i];
++		if (ped == nil || ped == player || ped->CharCreatedBy != RANDOM_CHAR)
++			continue;
++		if (!ped->IsPedShootable() || ped->DyingOrDead() || ped->bInVehicle)
++			continue;
++		if (ped->m_nPedState != PED_WANDER_PATH && ped->m_nPedState != PED_IDLE)
++			continue;
++		// cops and gang members have their own business with Tommy
++		if (ped->m_nPedType != PEDTYPE_CIVMALE && ped->m_nPedType != PEDTYPE_CIVFEMALE)
++			continue;
++		if ((ped->GetPosition() - player->GetPosition()).MagnitudeSqr() > rangeSqr)
++			continue;
++		if (!player->CanSeeEntity(ped) || !ped->CanSeeEntity(player))
++			continue;
++		if (!ped->WillChat(player))
++			continue;
++		return ped;
++	}
++	return nil;
++}
++
++static void
++VCModUpdateStreetIdle(CPlayerPed *player, CPad *pad)
++{
++	uint32 now = CTimer::GetTimeInMilliseconds();
++
++	if (!bVCModStreetIdle && !bVCModChatter) {
++		VCModStreetFadeGesture(player);
++		if (bVCModStreetChat)
++			player->ClearChat();
++		bVCModStreetChat = false;
++		nVCModStreetStillSince = 0;
++		return;
++	}
++
++	// the chat ends on its own timer or is taken away by a car, a death or a
++	// script; in either case the gap starts from here
++	if (bVCModStreetChat && player->m_nPedState != PED_CHAT) {
++		bVCModStreetChat = false;
++		nVCModStreetNextChat = now + VCMOD_STREET_CHAT_GAP;
++		nVCModStreetStillSince = 0;
++	}
++
++	if (player->m_nPedState == PED_CHAT) {
++		// any movement, weapon or aim key ends it; Chat() has already run this
++		// frame, so the pair separates here and the ped follows next frame
++		if (VCModStreetBlockReason(player, pad) != 0) {
++			player->ClearChat();
++			bVCModStreetChat = false;
++			nVCModStreetNextChat = now + VCMOD_STREET_CHAT_ABORT_GAP;
++		}
++		return;
++	}
++
++	int32 block = VCModStreetBlockReason(player, pad);
++	if (block != 0) {
++		// one line per distinct refusal, so a silent feature names its reason
++		if (block != nVCModStreetLastBlock) {
++			fprintf(stderr, "VCMOD street idle held: 0x%x state=%d wep=%d surf=%d spd=%.2f\n",
++				(uint32)block, (int)player->m_nPedState, (int)player->GetWeapon()->m_eWeaponType,
++				(int)player->m_nSurfaceTouched, player->m_fMoveSpeed);
++			nVCModStreetLastBlock = block;
++		}
++		nVCModStreetStillSince = 0;
++		VCModStreetFadeGesture(player);
++		return;
++	}
++	nVCModStreetLastBlock = -1;
++
++	if (nVCModStreetStillSince == 0)
++		nVCModStreetStillSince = now;
++
++	uint32 stillFor = now - nVCModStreetStillSince;
++
++	if (bVCModStreetIdle) {
++		bool waiting = RpAnimBlendClumpGetAssociation(player->GetClump(), ANIM_STD_IDLE_HBHB) != nil;
++		// the stock bored fidget (stretch, watch, scratch) owns the pose when
++		// it is playing, and the waiting pose steps aside for it
++		if (RpAnimBlendClumpGetFirstAssociation(player->GetClump(), ASSOC_IDLE))
++			VCModStreetFadeGesture(player);
++		else if (waiting && now >= nVCModStreetGestureEnd)
++			VCModStreetFadeGesture(player);
++		else if (!waiting && stillFor >= VCMOD_STREET_WAIT && now >= nVCModStreetNextGesture)
++			VCModStreetStartGesture(player);
++	}
++
++	if (bVCModChatter && stillFor >= VCMOD_STREET_CHAT_WAIT && now >= nVCModStreetNextChat) {
++		CPed *partner = VCModStreetChatPartner(player);
++		if (partner) {
++			uint32 time = CGeneral::GetRandomNumberInRange(VCMOD_STREET_CHAT_MIN, VCMOD_STREET_CHAT_MAX);
++			VCModStreetFadeGesture(player);
++			player->SetChat(partner, time);
++			partner->SetChat(player, time);
++			bVCModStreetChat = true;
++			nVCModStreetNextChat = now + VCMOD_STREET_CHAT_GAP;
++			fprintf(stderr, "VCMOD street idle: chat started\n");
++		} else {
++			// nobody to talk to this time; look again once the scene has moved
++			nVCModStreetNextChat = now + 2000;
++		}
++	}
++}
++
  CPlayerInfo *
  CPlayerPed::GetPlayerInfoForThisPlayerPed()
  {
-@@ -255,7 +635,11 @@ CPlayerPed::ReApplyMoveAnims(void)
+@@ -255,7 +1167,11 @@ CPlayerPed::ReApplyMoveAnims(void)
  	for(int i = 0; i < ARRAY_SIZE(moveAnims); i++) {
  		CAnimBlendAssociation *curMoveAssoc = RpAnimBlendClumpGetAssociation(GetClump(), moveAnims[i]);
  		if (curMoveAssoc) {
@@ -1845,7 +2715,7 @@ index cd8da42..5e0ebf5 100644
  				CAnimBlendAssociation *newMoveAssoc = CAnimManager::AddAnimation(GetClump(), m_animGroup, moveAnims[i]);
  				newMoveAssoc->blendDelta = curMoveAssoc->blendDelta;
  				newMoveAssoc->blendAmount = curMoveAssoc->blendAmount;
-@@ -269,6 +653,8 @@ CPlayerPed::ReApplyMoveAnims(void)
+@@ -269,6 +1185,8 @@ CPlayerPed::ReApplyMoveAnims(void)
  void
  CPlayerPed::SetInitialState(void)
  {
@@ -1854,7 +2724,135 @@ index cd8da42..5e0ebf5 100644
  	m_nDrunkenness = 0;
  	m_nFadeDrunkenness = 0;
  	CMBlur::ClearDrunkBlur();
-@@ -525,7 +911,7 @@ CPlayerPed::SetRealMoveAnim(void)
+@@ -379,6 +1297,11 @@ CPlayerPed::SetRealMoveAnim(void)
+ 				m_nWaitTimer = CTimer::GetTimeInMilliseconds() + CGeneral::GetRandomNumberInRange(2500, 4000);
+ 			}
+ 
++			// stopping while a start is still fading has to bring the idle back,
++			// or the player stands in the movement pose until it finishes
++			if (curIdleAssoc && curIdleAssoc->blendDelta < 0.0f && curIdleAssoc->animId == ANIM_STD_IDLE)
++				CAnimManager::BlendAnimation(GetClump(), m_animGroup, ANIM_STD_IDLE, 4.0f);
++
+ 			if ((m_fCurrentStamina > 0.0f || bIsAimingGun) && curIdleAssoc->animId == ANIM_STD_IDLE_TIRED) {
+ 				CAnimManager::BlendAnimation(GetClump(), m_animGroup, ANIM_STD_IDLE, 4.0f);
+ 
+@@ -394,24 +1317,44 @@ CPlayerPed::SetRealMoveAnim(void)
+ 			m_nMoveState = PEDMOVE_STILL;
+ 
+ 		} else {
+-			if (curIdleAssoc) {
+-				if (curWalkStartAssoc) {
+-					curWalkStartAssoc->blendAmount = 1.0f;
+-					curWalkStartAssoc->blendDelta = 0.0f;
++			bool fadeStart = false;
++			// CPed::SetMoveAnim fades into the movement clip; the player cut
++			// straight to it, and on the groups that carry no start clip of their
++			// own it borrowed Tommy's, so the first frame snapped to a mid-stride
++			// pose. The walk cap stays inside the walk clip, so a start can fade
++			// there too; a sprint start still needs the step the start clip gives
++			if (curIdleAssoc && curIdleAssoc->blendDelta >= 0.0f) {
++				CAnimBlendAssociation *groupStart = CAnimManager::GetAnimAssociation(m_animGroup, ANIM_STD_STARTWALK);
++				fadeStart = m_nMoveState != PEDMOVE_SPRINT &&
++					(bVCModWalkMode || groupStart == nil || groupStart->hierarchy == nil);
++				if (fadeStart) {
++					if (curWalkStartAssoc) {
++						delete curWalkStartAssoc;
++						curWalkStartAssoc = nil;
++					}
++					curWalkAssoc = CAnimManager::BlendAnimation(GetClump(), m_animGroup, ANIM_STD_WALK, 1.0f);
++					curRunAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_RUN);
+ 				} else {
+-					curWalkStartAssoc = CAnimManager::AddAnimation(GetClump(), m_animGroup, ANIM_STD_STARTWALK);
++					if (curWalkStartAssoc) {
++						curWalkStartAssoc->blendAmount = 1.0f;
++						curWalkStartAssoc->blendDelta = 0.0f;
++					} else {
++						curWalkStartAssoc = CAnimManager::AddAnimation(GetClump(), m_animGroup, ANIM_STD_STARTWALK);
++					}
++					if (curWalkAssoc)
++						curWalkAssoc->SetCurrentTime(0.0f);
++					if (curRunAssoc)
++						curRunAssoc->SetCurrentTime(0.0f);
++				}
++
++				if (!fadeStart) {
++					delete curIdleAssoc;
++					delete RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_IDLE_TIRED);
++					CAnimBlendAssociation *fightIdleAnim = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_FIGHT_IDLE);
++					if (!fightIdleAnim)
++						fightIdleAnim = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_MELEE_IDLE_FIGHTMODE);
++					delete fightIdleAnim;
+ 				}
+-				if (curWalkAssoc)
+-					curWalkAssoc->SetCurrentTime(0.0f);
+-				if (curRunAssoc)
+-					curRunAssoc->SetCurrentTime(0.0f);
+-
+-				delete curIdleAssoc;
+-				delete RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_IDLE_TIRED);
+-				CAnimBlendAssociation *fightIdleAnim = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_FIGHT_IDLE);
+-				if (!fightIdleAnim)
+-					fightIdleAnim = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_MELEE_IDLE_FIGHTMODE);
+-				delete fightIdleAnim;
+ 				delete curSprintAssoc;
+ 
+ 				curSprintAssoc = nil;
+@@ -499,33 +1442,50 @@ CPlayerPed::SetRealMoveAnim(void)
+ 						curRunAssoc->blendDelta = -2.0f;
+ 					}
+ 				} else {
+-					// Transition between run-sprint
++					// Transition between run-sprint; a start fade may still be
++					// in flight, so drop its deltas with the weights
+ 					curWalkAssoc->blendAmount = 0.0f;
++					curWalkAssoc->blendDelta = 0.0f;
+ 					curRunAssoc->blendAmount = 1.0f;
++					curRunAssoc->blendDelta = 0.0f;
+ 					curSprintAssoc = CAnimManager::BlendAnimation(GetClump(), m_animGroup, ANIM_STD_RUNFAST, 2.0f);
+ 				}
+ 				UseSprintEnergy();
+ 			} else {
+-				if (m_fMoveSpeed < 1.0f) {
+-					curWalkAssoc->blendAmount = 1.0f;
+-					curRunAssoc->blendAmount = 0.0f;
++				// the walk cap can drop from run to walk in one frame, and a
++				// direct weight swap made that look like a cut; fade the
++				// incoming clip the way CPed::SetMoveAnim does
++				bool fading = curWalkAssoc->blendDelta != 0.0f || curRunAssoc->blendDelta != 0.0f;
++				if (fading) {
++					// a walk/run crossfade is already in flight
++				} else if (m_fMoveSpeed < 1.0f && curRunAssoc->blendAmount > 0.5f) {
++					CAnimManager::BlendAnimation(GetClump(), m_animGroup, ANIM_STD_WALK, 1.0f);
+ 					m_nMoveState = PEDMOVE_WALK;
+-				} else if (m_fMoveSpeed < 2.0f) {
+-					curWalkAssoc->blendAmount = 2.0f - m_fMoveSpeed;
+-					curRunAssoc->blendAmount = m_fMoveSpeed - 1.0f;
++				} else if (m_fMoveSpeed >= 2.0f && curWalkAssoc->blendAmount > 0.5f) {
++					CAnimManager::BlendAnimation(GetClump(), m_animGroup, ANIM_STD_RUN, 1.0f);
+ 					m_nMoveState = PEDMOVE_RUN;
+ 				} else {
+-					curWalkAssoc->blendAmount = 0.0f;
+-					curRunAssoc->blendAmount = 1.0f;
+-					m_nMoveState = PEDMOVE_RUN;
++					if (m_fMoveSpeed < 1.0f) {
++						curWalkAssoc->blendAmount = 1.0f;
++						curRunAssoc->blendAmount = 0.0f;
++						m_nMoveState = PEDMOVE_WALK;
++					} else if (m_fMoveSpeed < 2.0f) {
++						curWalkAssoc->blendAmount = 2.0f - m_fMoveSpeed;
++						curRunAssoc->blendAmount = m_fMoveSpeed - 1.0f;
++						m_nMoveState = PEDMOVE_RUN;
++					} else {
++						curWalkAssoc->blendAmount = 0.0f;
++						curRunAssoc->blendAmount = 1.0f;
++						m_nMoveState = PEDMOVE_RUN;
++					}
++					curWalkAssoc->blendDelta = 0.0f;
++					curRunAssoc->blendDelta = 0.0f;
+ 				}
+-				curWalkAssoc->blendDelta = 0.0f;
+-				curRunAssoc->blendDelta = 0.0f;
+ 			}
  		}
  	}
  	if (m_bAdrenalineActive) {
@@ -1863,7 +2861,7 @@ index cd8da42..5e0ebf5 100644
  			m_bAdrenalineActive = false;
  			CTimer::SetTimeScale(1.0f);
  			if (curWalkStartAssoc)
-@@ -537,15 +923,19 @@ CPlayerPed::SetRealMoveAnim(void)
+@@ -537,15 +1497,19 @@ CPlayerPed::SetRealMoveAnim(void)
  			if (curSprintAssoc)
  				curSprintAssoc->speed = 1.0f;
  		} else {
@@ -1888,7 +2886,7 @@ index cd8da42..5e0ebf5 100644
  		}
  	} else if (curSprintAssoc) {
  		if (TheCamera.Cams[TheCamera.ActiveCam].Mode == CCam::MODE_FIXED) {
-@@ -908,6 +1298,11 @@ CPlayerPed::PlayerControl1stPersonRunAround(CPad *padUsed)
+@@ -908,6 +1872,11 @@ CPlayerPed::PlayerControl1stPersonRunAround(CPad *padUsed)
  	if (!CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->IsFlagSet(WEAPONFLAG_HEAVY) && padUsed->GetSprint()) {
  		m_nMoveState = PEDMOVE_SPRINT;
  	}
@@ -1900,7 +2898,7 @@ index cd8da42..5e0ebf5 100644
  	if (m_nPedState != PED_FIGHT)
  		SetRealMoveAnim();
  
-@@ -1094,6 +1489,16 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
+@@ -1094,6 +2063,16 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
  		if (obj && !obj->bHasBeenDamaged && CanIKReachThisTarget(obj->GetPosition(), GetWeapon(), true))
  			EvaluateNeighbouringTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, lookToLeft, true);
  	}
@@ -1917,7 +2915,7 @@ index cd8da42..5e0ebf5 100644
  	if (!nextTarget)
  		return false;
  
-@@ -1144,6 +1549,16 @@ CPlayerPed::FindWeaponLockOnTarget(void)
+@@ -1144,6 +2123,16 @@ CPlayerPed::FindWeaponLockOnTarget(void)
  		if (obj && !obj->bHasBeenDamaged && CanIKReachThisTarget(obj->GetPosition(), GetWeapon(), true))
  			EvaluateTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, true);
  	}
@@ -1934,7 +2932,7 @@ index cd8da42..5e0ebf5 100644
  	if (!nextTarget)
  		return false;
  
-@@ -1158,6 +1573,23 @@ void
+@@ -1158,6 +2147,23 @@ void
  CPlayerPed::ProcessAnimGroups(void)
  {
  	AssocGroupId groupToSet;
@@ -1958,7 +2956,7 @@ index cd8da42..5e0ebf5 100644
  #ifdef PC_PLAYER_CONTROLS
  	if ((m_fWalkAngle <= -DEGTORAD(50.0f) || m_fWalkAngle >= DEGTORAD(50.0f))
  		&& TheCamera.Cams[TheCamera.ActiveCam].Using3rdPersonMouseCam()
-@@ -1263,15 +1695,24 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1263,15 +2269,24 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  		m_wepAccuracy = 95;
  	else
  		m_wepAccuracy = 100;
@@ -1984,7 +2982,7 @@ index cd8da42..5e0ebf5 100644
  #ifdef FREE_CAM
  				if (CCamera::bFreeCam && TheCamera.Cams[0].Using3rdPersonMouseCam()) {
  					m_fRotationCur = CGeneral::LimitRadianAngle(-TheCamera.Orientation);
-@@ -1292,7 +1733,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1292,7 +2307,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				SetPedState(PED_SNIPER_MODE);
  				return;
  			}
@@ -1993,7 +2991,7 @@ index cd8da42..5e0ebf5 100644
  				if (weapon == WEAPONTYPE_ROCKETLAUNCHER || weapon == WEAPONTYPE_SNIPERRIFLE || weapon == WEAPONTYPE_LASERSCOPE || weapon == WEAPONTYPE_CAMERA)
  					return;
  		}
-@@ -1416,14 +1857,14 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1416,14 +2431,14 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  	}
  #endif
  
@@ -2011,7 +3009,7 @@ index cd8da42..5e0ebf5 100644
  #endif		
  			) {
  				ClearWeaponTarget();
-@@ -1457,7 +1898,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1457,7 +2472,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  			TheCamera.SetNewPlayerWeaponMode(CCam::MODE_SYPHON, 0, 0);
  			TheCamera.UpdateAimingCoors(m_pPointGunAt->GetPosition());
  
@@ -2020,7 +3018,7 @@ index cd8da42..5e0ebf5 100644
  			if (padUsed->TargetJustDown() || TheCamera.m_bJustJumpedOutOf1stPersonBecauseOfTarget)
  				FindWeaponLockOnTarget();
  		}
-@@ -1556,6 +1997,12 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
+@@ -1556,6 +2571,12 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
  			m_nMoveState = PEDMOVE_SPRINT;
  	}
  
@@ -2033,7 +3031,7 @@ index cd8da42..5e0ebf5 100644
  	if (m_nPedState != PED_FIGHT)
  		SetRealMoveAnim();
  
-@@ -1663,6 +2110,10 @@ CPlayerPed::FindNewAttackPoints(void)
+@@ -1663,6 +2684,10 @@ CPlayerPed::FindNewAttackPoints(void)
  void
  CPlayerPed::ProcessControl(void)
  {
@@ -2044,10 +3042,18 @@ index cd8da42..5e0ebf5 100644
  	// Mobile has some debug/abandoned cheat thing in here: "gbFrankenTommy"
  
  	if (m_nEvadeAmount != 0)
-@@ -1705,7 +2156,25 @@ CPlayerPed::ProcessControl(void)
+@@ -1705,7 +2730,33 @@ CPlayerPed::ProcessControl(void)
  		return;
  
  	CPad *padUsed = GetPadFromPlayer(this);
++	// before the control code, so a press ends a chat on the same frame instead
++	// of moving Tommy while he is still talking
++	if (padUsed)
++		VCModUpdateStreetIdle(this, padUsed);
++	// H sits outside the on-foot block: dismissing the chauffeur from the back
++	// seat has to work while PED_DRIVING too
++	if (padUsed && !padUsed->ArePlayerControlsDisabled() && KEYJUSTDOWN(VCMOD_DRIVERKEY))
++		VCModCallDriver();
 +	if (padUsed && !padUsed->ArePlayerControlsDisabled() && m_nPedState != PED_DRIVING) {
 +		if (KEYDOWN(VCMOD_FIREKEY))
 +			padUsed->NewState.Circle = true;
@@ -2070,7 +3076,7 @@ index cd8da42..5e0ebf5 100644
  	PruneReferences();
  
  	if (GetWeapon()->m_eWeaponType == WEAPONTYPE_MINIGUN) {
-@@ -1783,7 +2252,9 @@ CPlayerPed::ProcessControl(void)
+@@ -1783,7 +2834,9 @@ CPlayerPed::ProcessControl(void)
  	if (bIsLanding)
  		RunningLand(padUsed);
  
@@ -2143,10 +3149,10 @@ index cada168..ce2fb4c 100644
  			}
 diff --git a/utils/test_vc_adrenaline.py b/utils/test_vc_adrenaline.py
 new file mode 100644
-index 0000000..457d8dd
+index 0000000..e05c55f
 --- /dev/null
 +++ b/utils/test_vc_adrenaline.py
-@@ -0,0 +1,459 @@
+@@ -0,0 +1,479 @@
 +#!/usr/bin/env python3
 +import re
 +import subprocess
@@ -2445,13 +3451,19 @@ index 0000000..457d8dd
 +        panel = (ROOT / "src/extras/vcmodpanel.cpp").read_text()
 +        header = (ROOT / "src/extras/vcmodpanel.h").read_text()
 +        categoryEnum = re.search(r"enum eVCModPedCategory\s*\{.*?\}", header, re.S).group(0) + ";"
++        rideEnums = "\n".join(re.search(pattern, header, re.S).group(0) + ";" for pattern in (
++            r"enum eVCModRideStyle\s*\{.*?\}",
++            r"enum eVCModRidePhase\s*\{.*?\}"))
 +        self.assertIn("VCMOD_ROW_ADRENALINE_MODE", panel)
 +        definitions = "\n".join(re.findall(r"^(?:bool|int32) [bn]VCMod[^;\n]*;", panel, re.M))
 +        defines = "\n".join(re.findall(r"^#define VCMOD_[A-Z_]+\s+\d+", panel, re.M))
 +        declarations = "\n".join(braced(panel, marker) + ";" for marker in (
 +            "static const char *aVCModAnimGroupNames[]", "static const char *aVCModPedCategoryNames[]",
++            "static const char *aVCModRideStyleNames[]",
 +            "enum eVCModFont", "enum eVCModList", "enum eVCModRowKind", "struct VCModRowDef",
 +            "static bool *aVCModSwitched[]", "static const VCModRowDef aVCModRows[]"))
++        pedTables = "\n".join(re.findall(r"^static const struct \{.*?^};", panel, re.S | re.M))
++        pedTables += "\n" + re.search(r"^static char aVCModPedLabel\[32\];", panel, re.M).group(0)
 +        functions = "\n".join(braced(panel, marker) for marker in (
 +            "static int32\nVCModCountOn(void)", "static void\nVCModToggleAll(void)",
 +            "static bool\nVCModCursorInRect(", "static int32\nVCModRowY(int32 row)",
@@ -2459,13 +3471,16 @@ index 0000000..457d8dd
 +            "static int32\nVCModListRowY(int32 anchorRow, int32 visible)",
 +            "static int32\nVCModRowList(int32 kind)", "static int32\nVCModListAnchorRow(int32 list)",
 +            "static int32\nVCModListCount(int32 list)", "static int32\nVCModListFirst(int32 list)",
-+            "static int16\nVCModCurrentPedModel(void)", "static const char *\nVCModCurrentPedLabel(void)",
++            "static int16\nVCModCurrentPedModel(void)", "static const char *\nVCModPedDisplayName(const char *modelName)",
++            "static const char *\nVCModCurrentPedLabel(void)",
++            "static const char *\nVCModDriverCell(void)",
 +            "static const char *\nVCModListLabel(int32 list, int32 entry, bool *selected)",
 +            "static void\nVCModListPick(int32 list, int32 entry)",
 +            "static void\nVCModClick(CPad *pad)"))
 +        render = braced(panel, "void\nVCModPanelRender(void)")
 +        rows = braced(render, "\tfor (uint32 i = 0; i < ARRAY_SIZE(aVCModRows); i++)")
-+        run_cpp(r'''
++        run_cpp(rideEnums + r'''
++#include <cctype>
 +#include <cstdio>
 +#include <cstdlib>
 +#include <cstring>
@@ -2478,6 +3493,14 @@ index 0000000..457d8dd
 +typedef uint32_t uint32;
 +typedef int16_t int16;
 +typedef uint8_t uint8;
++struct CGeneral {
++    static bool faststricmp(const char *str1, const char *str2) {
++        for (; *str1; str1++, str2++)
++            if (std::tolower((unsigned char) *str1) != std::tolower((unsigned char) *str2))
++                return true;
++        return *str2 != '\0';
++    }
++};
 +enum { MI_PLAYER = 0, MI_COP = 1 };
 +struct MouseState { bool LMB; };
 +struct CPad { MouseState NewMouseControllerState, OldMouseControllerState; };
@@ -2499,6 +3522,9 @@ index 0000000..457d8dd
 +int32 VCModPedModelCount(int32) { return 1; }
 +bool VCModPedModelAt(int32, int32, int16 *, const char **) { return false; }
 +bool VCModApplyPedModel(int16) { return true; }
++int32 VCModRidePhase(void) { return VCMOD_RIDE_NONE; }
++void VCModCallDriver(void) {}
++void VCModSkipRide(void) {}
 +static int32 nVCModOpenList;
 +static int32 nVCModListScroll;
 +static float fVCModCursorX, fVCModCursorY;
@@ -2510,7 +3536,7 @@ index 0000000..457d8dd
 +    cells.push_back(cell);
 +}
 +void VCModPrint(int, const char*, int, int) {}
-+''' + categoryEnum + "\n" + defines + "\n" + definitions + "\n" + declarations + "\n" + functions + r'''
++''' + categoryEnum + "\n" + defines + "\n" + definitions + "\n" + declarations + "\n" + pedTables + "\n" + functions + r'''
 +void DrawRows() {
 +    int32 rowW = (VCMOD_NAME_COLS + VCMOD_VALUE_COLS) * nVCModCharW;
 +    cells.clear();
@@ -2608,10 +3634,10 @@ index 0000000..457d8dd
 +    unittest.main()
 diff --git a/utils/test_vc_character.py b/utils/test_vc_character.py
 new file mode 100644
-index 0000000..d372750
+index 0000000..55e9be8
 --- /dev/null
 +++ b/utils/test_vc_character.py
-@@ -0,0 +1,847 @@
+@@ -0,0 +1,880 @@
 +#!/usr/bin/env python3
 +import re
 +import subprocess
@@ -2628,6 +3654,7 @@ index 0000000..d372750
 +STREAM = (ROOT / "src/core/Streaming.cpp").read_text()
 +
 +ENGINE_STUBS = r'''
++#include <cctype>
 +#include <cstdio>
 +#include <cstdlib>
 +#include <cstring>
@@ -2643,6 +3670,14 @@ index 0000000..d372750
 +typedef uint16_t uint16;
 +typedef int32_t int32;
 +typedef uint32_t uint32;
++struct CGeneral {
++    static bool faststricmp(const char *str1, const char *str2) {
++        for (; *str1; str1++, str2++)
++            if (std::tolower((unsigned char) *str1) != std::tolower((unsigned char) *str2))
++                return true;
++        return *str2 != '\0';
++    }
++};
 +static std::string to_string(int value) {
 +    std::ostringstream out;
 +    out << value;
@@ -3163,17 +4198,25 @@ index 0000000..d372750
 +        definitions = "\n".join(re.findall(r"^(?:bool|int32) [bn]VCMod[^;\n]*;", PANEL, re.M))
 +        defines = "\n".join(re.findall(r"^#define VCMOD_[A-Z_]+\s+\d+", PANEL, re.M))
 +        categoryEnum = re.search(r"enum eVCModPedCategory\s*\{.*?\}", HEAD, re.S).group(0) + ";"
++        rideEnums = "\n".join(re.search(pattern, HEAD, re.S).group(0) + ";" for pattern in (
++            r"enum eVCModRideStyle\s*\{.*?\}",
++            r"enum eVCModRidePhase\s*\{.*?\}"))
 +        blocks = "\n".join(braced(PANEL, marker) + ";" for marker in (
 +            "static const char *aVCModAnimGroupNames[]", "static const char *aVCModPedCategoryNames[]",
++            "static const char *aVCModRideStyleNames[]",
 +            "enum eVCModFont", "enum eVCModList", "enum eVCModRowKind", "struct VCModRowDef",
 +            "static bool *aVCModSwitched[]", "static const VCModRowDef aVCModRows[]"))
++        pedTables = "\n".join(re.findall(r"^static const struct \{.*?^};", PANEL, re.S | re.M))
++        pedTables += "\n" + re.search(r"^static char aVCModPedLabel\[32\];", PANEL, re.M).group(0)
 +        functions = "\n".join(braced(PANEL, marker) for marker in (
 +            "static int32\nVCModCountOn(void)", "static void\nVCModToggleAll(void)",
 +            "static bool\nVCModCursorInRect(", "static int32\nVCModRowY(int32 row)",
 +            "static int32\nVCModListX(void)", "static int32\nVCModListRowY(int32 anchorRow, int32 visible)",
 +            "static int32\nVCModRowList(int32 kind)", "static int32\nVCModListAnchorRow(int32 list)",
 +            "static int32\nVCModListCount(int32 list)", "static int32\nVCModListFirst(int32 list)",
-+            "static int16\nVCModCurrentPedModel(void)", "static const char *\nVCModCurrentPedLabel(void)",
++            "static int16\nVCModCurrentPedModel(void)", "static const char *\nVCModPedDisplayName(const char *modelName)",
++            "static const char *\nVCModCurrentPedLabel(void)",
++            "static const char *\nVCModDriverCell(void)",
 +            "static const char *\nVCModListLabel(int32 list, int32 entry, bool *selected)",
 +            "static void\nVCModListPick(int32 list, int32 entry)",
 +            "static void\nVCModScroll(CPad *pad)", "static void\nVCModClick(CPad *pad)"))
@@ -3181,7 +4224,7 @@ index 0000000..d372750
 +        # drawing has: the visible-window tail
 +        draw = braced(PANEL[PANEL.rindex("\tif (nVCModOpenList != VCMOD_LIST_NONE) {",
 +                0, PANEL.index("int32 last = count;")):], "\tif (nVCModOpenList != VCMOD_LIST_NONE) {")
-+        run_cpp(ENGINE_STUBS + r'''
++        run_cpp(ENGINE_STUBS + rideEnums + r'''
 +#include <algorithm>
 +typedef unsigned char uint8;
 +typedef signed char int8;
@@ -3238,7 +4281,10 @@ index 0000000..d372750
 +    *outName = rosterName(entry - 1);
 +    return true;
 +}
-+''' + categoryEnum + "\n" + defines + "\n" + definitions + "\n" + blocks + "\n" + functions + r'''
++int32 VCModRidePhase(void) { return VCMOD_RIDE_NONE; }
++void VCModCallDriver(void) {}
++void VCModSkipRide(void) {}
++''' + categoryEnum + "\n" + defines + "\n" + definitions + "\n" + blocks + "\n" + pedTables + "\n" + functions + r'''
 +void DrawList() {
 +    cells.clear(); printed.clear();
 +''' + draw + r'''}
@@ -3282,6 +4328,15 @@ index 0000000..d372750
 +}
 +int main() {
 +    reset();
++    check(std::strcmp(VCModPedDisplayName("hfyst"), "Hispanic girl, street") == 0,
++          "ide civilian names decode to a readable label");
++    check(std::strcmp(VCModPedDisplayName("cba"), "Cuban gangster 1") == 0,
++          "gang models are spelled out");
++    check(std::strcmp(VCModPedDisplayName("igcandy"), "Candy Suxxx") == 0,
++          "story bodies use the character name");
++    check(std::strcmp(VCModPedDisplayName("unknown_ped"), "unknown_ped") == 0,
++          "an unknown model falls back to its own name");
++
 +    check(rowNamed("PED CATEGORY") == VCMOD_PEDCAT_ROW && rowNamed("CHARACTER") == VCMOD_PEDCHAR_ROW,
 +          "the two new rows sit where the panel geometry expects");
 +
@@ -3294,8 +4349,8 @@ index 0000000..d372750
 +    rosterCount = 4;
 +    DrawList();
 +    check(cells.size() == 4 && cells[0].text == "player (Tommy)", "roster starts with Tommy");
-+    check(cells[1].text == "cop" && cells[1].style == VCFONT_ON, "the worn model is the selected one");
-+    check(cells[2].text == "swat" && cells[2].style == VCFONT_SET, "the rest read as choices");
++    check(cells[1].text == "Cop" && cells[1].style == VCFONT_ON, "the worn model is the selected one");
++    check(cells[2].text == "SWAT officer" && cells[2].style == VCFONT_SET, "the rest read as choices");
 +
 +    clickList(2);
 +    check(applied.empty(), "clicking a name does not swap inside the render pass");
@@ -3361,7 +4416,7 @@ index 0000000..d372750
 +    check(std::find(printed.begin(), printed.end(), "^") != printed.end(),
 +          "a scrolled roster marks the direction still available");
 +
-+    clickRow((int) ARRAY_SIZE(aVCModRows) - 1);
++    clickRow(rowNamed("RIDE TO"));
 +    check(nVCModOpenList == VCMOD_LIST_RIDEZONE, "the ride row opens its own list");
 +    check(VCModListAnchorRow(VCMOD_LIST_RIDEZONE) == VCMOD_PEDCHAR_ROW,
 +          "the long ride list anchors high enough to fit on screen");
@@ -3370,7 +4425,7 @@ index 0000000..d372750
 +    clickList(2);
 +    check(nVCModRideZone == 2, "picking a zone stores that zone");
 +    check(nVCModOpenList == VCMOD_LIST_NONE, "picking a zone closes the list");
-+    clickRow((int) ARRAY_SIZE(aVCModRows) - 1);
++    clickRow(rowNamed("RIDE TO"));
 +    clickList(0);
 +    check(nVCModRideZone == -1, "the cruise entry stores no zone at all");
 +
@@ -3386,13 +4441,17 @@ index 0000000..d372750
 +    reset();
 +    clickRow(VCMOD_ANIM_SET_ROW);
 +    DrawList();
-+    check((int) cells.size() == (int) ARRAY_SIZE(aVCModAnimGroupNames), "animation list still shows all groups");
++    check((int) cells.size() == VCMOD_LIST_ROWS, "one screen of animation groups is drawn");
++    check(cells[nVCModAnimChoice].style == VCFONT_ON, "animation list marks the current group");
++    check(std::find(printed.begin(), printed.end(), "v") != printed.end(),
++          "the skater group is below the fold");
 +    wheel(false, true);
-+    check(nVCModListScroll == 0, "a list that fits does not scroll");
++    check(nVCModListScroll == 1, "the animation list scrolls to the skater group");
++    DrawList();
++    check(cells.back().text == "skater (rollerblades)", "the seventeenth group is the skater");
 +    clickRow(VCMOD_PEDCAT_ROW);
 +    wheel(false, true);
 +    check(nVCModListScroll == 0, "the short category list does not scroll");
-+    check(cells[nVCModAnimChoice].style == VCFONT_ON, "animation list marks the current group");
 +
 +    reset();
 +    modelForInfo = nil;
@@ -3459,15 +4518,711 @@ index 0000000..d372750
 +
 +if __name__ == "__main__":
 +    unittest.main()
+diff --git a/utils/test_vc_driver.py b/utils/test_vc_driver.py
+new file mode 100644
+index 0000000..43cfa8c
+--- /dev/null
++++ b/utils/test_vc_driver.py
+@@ -0,0 +1,312 @@
++#!/usr/bin/env python3
++"""Personal-driver tests: the summon, the drive to the pick-up, dismissal and the
++skip-the-ride travel, all out of PlayerPed.cpp and run against the passenger
++suite's engine stubs."""
++import unittest
++
++from test_vc_passenger import ride_source, run_cpp
++
++SUMMON_FUNCTIONS = ("notice", "phase", "vehicle", "release", "handback", "standdown", "seatfree",
++                    "style", "drive", "skip", "spawn", "call", "pickup", "entry", "update",
++                    "skipride")
++
++
++class DriverTests(unittest.TestCase):
++    def test_summon(self):
++        run_cpp(ride_source(*SUMMON_FUNCTIONS) + r'''
++int main() {
++    CVehicle veh;
++
++    reset(veh);
++    limoModelLoaded = false;
++    VCModCallDriver();
++    check(saw("request:139"), "the limo model is asked for");
++    check(lastLimo == nil, "a model that never loads spawns nothing");
++    check(saw("notice:driver: the limo cannot be loaded"), "and it says why");
++    check(nVCModRidePhase == VCMOD_RIDE_NONE, "no ride is armed");
++
++    reset(veh);
++    noRoadNodes = true;
++    VCModCallDriver();
++    check(lastLimo == nil, "no road to come from means no car");
++    check(saw("notice:driver: no road to come from"), "and it says why");
++
++    reset(veh);
++    spawnDriverFails = true;
++    VCModCallDriver();
++    check(lastLimo != nil, "the car still exists");
++    check(lastLimo->status == STATUS_ABANDONED, "an unmanned limo is left abandoned");
++    check(saw("world:add"), "and is put in the world");
++    check(!saw("blip:5"), "with no blip to follow");
++    check(lastLimo->VehicleCreatedBy == RANDOM_VEHICLE && CCarCtrl::NumMissionCars == 0,
++          "and stays ordinary traffic");
++    check(saw("notice:driver: nobody to drive this"), "and it says why");
++    check(nVCModRidePhase == VCMOD_RIDE_NONE, "no ride is armed");
++
++    /* the working call */
++    reset(veh);
++    lastLimo = nil;
++    requestedNode = 1;
++    VCModCallDriver();
++    check(lastLimo != nil, "a limo is created");
++    check(lastLimo->GetModelIndex() == MI_STRETCH, "and it is the Stretch");
++    check(saw("node:0,-80:60"), "the road is looked for behind Tommy");
++    check(lastLimo->GetPosition().x == -80.0f, "the limo starts on that road node");
++    check(lastLimo->GetPosition().z == 1.0f, "sitting on the ground plus its own height");
++    check(lastLimo->GetForward().x == 1.0f, "facing the pick-up");
++    check(saw("onroad"), "it is placed on the road properly");
++    check(lastLimo->status == STATUS_PHYSICS, "with real physics");
++    check(saw("driver"), "a chauffeur is put at the wheel");
++    check(lastLimo->VehicleCreatedBy == MISSION_VEHICLE, "the car is mission-owned");
++    check(CCarCtrl::NumMissionCars == 1 && CCarCtrl::NumRandomCars == 0,
++          "and the traffic counts follow");
++    check(saw("clearspace"), "the spot is cleared for it");
++    check(saw("blip:5"), "it gets a radar blip");
++    check(lastLimo->AutoPilot.m_nCarMission == MISSION_GOTOCOORDS, "it is sent to Tommy");
++    check(saw("goto:5:0,0"), "at the pick-up point");
++    check(lastLimo->AutoPilot.m_nDrivingStyle == DRIVINGSTYLE_STOP_FOR_CARS,
++          "driving to the safe style by default");
++    check(lastLimo->AutoPilot.m_nCruiseSpeed == 25, "at the safe approach speed");
++    check(nVCModRidePhase == VCMOD_RIDE_APPROACH, "the ride is in the approach phase");
++    check(nVCModRideHandle == 5 && bVCModRideSummoned, "tracked as our own summoned car");
++    check(saw("notice:your driver is on the way"), "and Tommy is told");
++
++    /* refusals that must not disturb anything else */
++    reset(veh);
++    playerPed.controlsOn = false;
++    VCModCallDriver();
++    check(saw("notice:driver: not right now"), "no driver while out of control");
++    check(nVCModRidePhase == VCMOD_RIDE_NONE, "and nothing is armed");
++
++    reset(veh);
++    lastLimo = nil;
++    playerPed.bInVehicle = true; playerPed.m_pMyVehicle = &veh;
++    VCModCallDriver();
++    check(saw("notice:driver: get out first"), "no car while already riding");
++    check(lastLimo == nil, "and none is spawned");
++    std::printf("PASS: %d summon checks\n", checks);
++}
++''')
++
++    def test_pickup(self):
++        run_cpp(ride_source(*SUMMON_FUNCTIONS) + r'''
++CVehicle veh;
++CAutomobile *limo = nil;
++void callDriver(void) {
++    reset(veh);
++    lastLimo = nil;
++    VCModCallDriver();
++    limo = lastLimo;
++}
++int main() {
++    /* he arrives */
++    callDriver();
++    check(nVCModRidePhase == VCMOD_RIDE_APPROACH, "on his way");
++    limo->pos = CVector(10.0f, 0.0f, 0.0f);
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(limo->AutoPilot.m_nCarMission == MISSION_STOP_FOREVER, "he stops at the kerb");
++    check(limo->AutoPilot.m_nCruiseSpeed == 0, "with the wheels stopped");
++    check(nVCModRidePhase == VCMOD_RIDE_PICKUP, "and waits");
++    check(saw("notice:your driver is here"), "which is announced");
++
++    /* far away is not close enough */
++    callDriver();
++    limo->pos = CVector(16.0f, 0.0f, 0.0f);
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(nVCModRidePhase == VCMOD_RIDE_APPROACH, "just outside the kerb is still driving up");
++
++    /* the pick-up point follows Tommy, but not every frame */
++    callDriver();
++    playerPed.pos = CVector(50.0f, 0.0f, 0.0f);
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(saw("goto:5:50,0"), "a moved Tommy is re-targeted");
++    check(vecVCModRidePickup.x == 50.0f, "and the pick-up point follows him");
++    events.clear();
++    playerPed.pos = CVector(90.0f, 0.0f, 0.0f);
++    VCModUpdateRide(&playerPed);
++    check(!saw("goto:5:90,0"), "a second move inside the window waits");
++    nowMs += 3000;
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(saw("goto:5:90,0"), "and is followed once the window opens");
++
++    /* a small shuffle is not worth a new route */
++    callDriver();
++    playerPed.pos = CVector(10.0f, 0.0f, 0.0f);
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(!saw("goto:5:10,0"), "a few metres of walking is within the same kerb");
++
++    /* walking off abandons the pick-up */
++    callDriver();
++    limo->pos = CVector(5.0f, 0.0f, 0.0f);
++    VCModUpdateRide(&playerPed);
++    check(nVCModRidePhase == VCMOD_RIDE_PICKUP, "waiting at the kerb");
++    playerPed.pos = CVector(400.0f, 0.0f, 0.0f);
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(nVCModRidePhase == VCMOD_RIDE_NONE, "walking far away calls it off");
++    check(saw("notice:driver left: too far away"), "and says so");
++    check(saw("unblip:5"), "the blip goes with him");
++    check(limo->VehicleCreatedBy == RANDOM_VEHICLE && CCarCtrl::NumMissionCars == 0,
++          "and he goes back to traffic");
++
++    /* changing the style mid-approach is honoured */
++    callDriver();
++    events.clear();
++    nVCModRideStyle = VCMOD_RIDE_FAST;
++    VCModUpdateRide(&playerPed);
++    check(limo->AutoPilot.m_nDrivingStyle == DRIVINGSTYLE_PLOUGH_THROUGH,
++          "fast is applied while he is still on his way");
++    check(limo->AutoPilot.m_nCruiseSpeed == 55, "at the fast approach speed");
++    std::printf("PASS: %d pick-up checks\n", checks);
++}
++''')
++
++    def test_call_and_dismiss(self):
++        run_cpp(ride_source(*SUMMON_FUNCTIONS) + r'''
++CVehicle veh;
++CAutomobile *limo = nil;
++void callDriver(void) {
++    reset(veh);
++    lastLimo = nil;
++    VCModCallDriver();
++    limo = lastLimo;
++}
++void board(void) {
++    limo->pos = CVector(5.0f, 0.0f, 0.0f);
++    VCModUpdateRide(&playerPed);
++    check(nVCModRidePhase == VCMOD_RIDE_PICKUP, "he is waiting");
++    check(VCModPassengerEntry(limo), "the limo is boardable");
++    playerPed.bInVehicle = true; playerPed.m_pMyVehicle = limo;
++    playerPed.m_nPedState = PED_DRIVING;
++    VCModUpdateRide(&playerPed);   /* notices the seat */
++    VCModUpdateRide(&playerPed);   /* picks the route */
++}
++int main() {
++    callDriver();
++    check(nVCModRideHandle == 5, "a ride is running");
++    events.clear();
++    VCModCallDriver();
++    check(nVCModRidePhase == VCMOD_RIDE_NONE, "pressing again dismisses him");
++    check(saw("notice:driver dismissed"), "and says so");
++    check(saw("unblip:5"), "the blip is cleared");
++    check(limo->VehicleCreatedBy == RANDOM_VEHICLE && CCarCtrl::NumMissionCars == 0,
++          "he is ordinary traffic again");
++    check(limo->AutoPilot.m_nCarMission == MISSION_CRUISE, "and drives off");
++    check(limo->AutoPilot.m_nCruiseSpeed == 12 &&
++          limo->AutoPilot.m_nDrivingStyle == DRIVINGSTYLE_STOP_FOR_CARS,
++          "at the pace of the traffic around him, not the chauffeur's");
++
++    /* dismissing from the back seat stops the car rather than driving off with Tommy */
++    callDriver();
++    board();
++    check(nVCModRidePhase == VCMOD_RIDE_DRIVING, "riding");
++    events.clear();
++    VCModCallDriver();
++    check(nVCModRidePhase == VCMOD_RIDE_NONE, "H from the back seat ends the ride");
++    check(saw("notice:driver dismissed"), "and says so");
++    check(limo->AutoPilot.m_nCarMission == MISSION_STOP_FOREVER,
++          "the car waits for Tommy to get out");
++    check(limo->AutoPilot.m_nCruiseSpeed == 0, "with the wheels stopped");
++
++    /* he drives on to the chosen destination once Tommy is aboard */
++    reset(veh);
++    lastLimo = nil;
++    nVCModRideZone = 1;
++    VCModCallDriver();
++    limo = lastLimo;
++    board();
++    check(limo->AutoPilot.m_nCarMission == MISSION_GOTOCOORDS, "a zone destination routes him");
++    check(saw("goto:5:100,200"), "at the chosen zone");
++    check(bVCModRideHasDestination, "with arrival watched");
++
++    /* arriving ends the ride and sends him back to traffic */
++    limo->pos = CVector(105.0f, 205.0f, 0.0f);
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(nVCModRidePhase == VCMOD_RIDE_NONE, "arrival ends the ride");
++    check(saw("notice:your driver has arrived"), "which is announced");
++    check(saw("unblip:5"), "and the blip is cleared");
++    check(limo->VehicleCreatedBy == RANDOM_VEHICLE && CCarCtrl::NumMissionCars == 0,
++          "he goes back to traffic");
++    check(limo->AutoPilot.m_nCarMission == MISSION_CRUISE,
++          "driving off instead of parking like a street car");
++
++    /* boarding a street car while a chauffeur waits hands him back */
++    callDriver();
++    CVehicle street;
++    street.handle = 9; street.pDriver = &driverPed;
++    poolAdd(&street);
++    check(VCModPassengerEntry(&street), "a street car is still boardable");
++    check(limo->VehicleCreatedBy == RANDOM_VEHICLE && CCarCtrl::NumMissionCars == 0,
++          "the waiting limo is let go");
++    check(nVCModRideHandle == 9, "and the ride is now the street car");
++    std::printf("PASS: %d call and dismiss checks\n", checks);
++}
++''')
++
++    def test_skip_button(self):
++        run_cpp(ride_source(*SUMMON_FUNCTIONS) + r'''
++int main() {
++    CVehicle veh;
++
++    /* calling the driver never travels, even with a destination chosen */
++    reset(veh);
++    lastLimo = nil;
++    nVCModRideZone = 2;
++    VCModCallDriver();
++    check(lastLimo != nil, "H calls the car");
++    check(!saw("teleport"), "H never jumps");
++
++    /* the skip button travels and calls no car */
++    reset(veh);
++    lastLimo = nil;
++    nVCModRideZone = 2;
++    playerPed.pos = CVector(10.0f, 20.0f, 0.0f);
++    events.clear();
++    VCModSkipRide();
++    check(lastLimo == nil, "skip calls no car");
++    check(saw("teleport"), "Tommy is moved");
++    check(playerPed.pos.x == 150.0f && playerPed.pos.y == 250.0f,
++          "to the nearest road, not the zone centre");
++    check(saw("notice:skip the ride: arrived"), "and Tommy is told");
++
++    /* nowhere chosen means nowhere to go */
++    reset(veh);
++    nVCModRideZone = -1;
++    VCModSkipRide();
++    check(!saw("teleport"), "cruise has no destination to skip to");
++    check(saw("notice:skip the ride: pick a destination first"), "and it says why");
++
++    /* and a zone with no road in it is refused */
++    reset(veh);
++    nVCModRideZone = 1;
++    noRoadNodes = true;
++    VCModSkipRide();
++    check(!saw("teleport"), "no road means no jump");
++    check(saw("notice:skip the ride: no road there"), "and it says why");
++
++    /* skipping while the chauffeur is on his way lets him go */
++    reset(veh);
++    lastLimo = nil;
++    VCModCallDriver();
++    CAutomobile *limo = lastLimo;
++    nVCModRideZone = 1;
++    events.clear();
++    VCModSkipRide();
++    check(saw("teleport"), "skip travels instead of waiting");
++    check(saw("unblip:5"), "and the limo is let go");
++    check(limo->VehicleCreatedBy == RANDOM_VEHICLE, "back to traffic");
++    check(limo->AutoPilot.m_nCarMission == MISSION_CRUISE, "and driving again");
++    check(nVCModRidePhase == VCMOD_RIDE_NONE, "with no ride left");
++    std::printf("PASS: %d skip-button checks\n", checks);
++}
++''')
++
++
++if __name__ == "__main__":
++    unittest.main()
+\ No newline at end of file
+diff --git a/utils/test_vc_moveanim.py b/utils/test_vc_moveanim.py
+new file mode 100644
+index 0000000..e4c57b0
+--- /dev/null
++++ b/utils/test_vc_moveanim.py
+@@ -0,0 +1,368 @@
++#!/usr/bin/env python3
++import subprocess
++import tempfile
++import unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++PLAYER = (ROOT / "src/peds/PlayerPed.cpp").read_text()
++
++ENGINE_STUBS = r'''
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++#include <stdint.h>
++#define nil NULL
++typedef int8_t int8;
++typedef uint8_t uint8;
++typedef int16_t int16;
++typedef uint16_t uint16;
++typedef int32_t int32;
++typedef uint32_t uint32;
++
++enum AnimationId {
++    ANIM_STD_WALK = 0, ANIM_STD_RUN, ANIM_STD_RUNFAST, ANIM_STD_IDLE, ANIM_STD_STARTWALK,
++    ANIM_STD_RUNSTOP1, ANIM_STD_RUNSTOP2, ANIM_STD_IDLE_TIRED, ANIM_STD_FIGHT_IDLE,
++    ANIM_MELEE_IDLE_FIGHTMODE
++};
++enum AssocGroupId { ASSOCGRP_PLAYER = 0, ASSOCGRP_STD, ASSOCGRP_MAN, ASSOCGRP_SKATE };
++enum eMoveState { PEDMOVE_NONE, PEDMOVE_STILL, PEDMOVE_WALK, PEDMOVE_RUN, PEDMOVE_SPRINT };
++enum PedState { PED_IDLE = 0, PED_FIGHT, PED_ATTACK, PED_DIE };
++enum { ASSOC_RUNNING = 1, ASSOC_DELETEFADEDOUT = 2 };
++
++struct CAnimBlendHierarchy {};
++
++struct CAnimBlendAssociation {
++    static std::vector<CAnimBlendAssociation *> live;
++    AnimationId animId;
++    uint32 flags;
++    float blendAmount, blendDelta, speed, currentTime;
++    CAnimBlendHierarchy *hierarchy;
++
++    CAnimBlendAssociation()
++        : animId(ANIM_STD_IDLE), flags(ASSOC_RUNNING), blendAmount(1.0f),
++          blendDelta(0.0f), speed(1.0f), currentTime(0.0f), hierarchy(nil) {}
++    ~CAnimBlendAssociation();
++    void Unregister(void) {
++        for (size_t i = 0; i < live.size(); i++)
++            if (live[i] == this) { live.erase(live.begin() + i); return; }
++    }
++    bool IsRunning(void) const { return (flags & ASSOC_RUNNING) != 0; }
++    void SetRun(void) { flags |= ASSOC_RUNNING; }
++    void SetCurrentTime(float time) { currentTime = time; }
++    float GetProgress(void) const { return 0.5f; }
++    void SetDeleteCallback(void (*)(CAnimBlendAssociation *, void *), void *) {}
++};
++std::vector<CAnimBlendAssociation *> CAnimBlendAssociation::live;
++CAnimBlendAssociation::~CAnimBlendAssociation(void) { Unregister(); }
++
++// the group table: only the player groups carry a start clip, like the real
++// aStdAnimDescs sets
++static CAnimBlendAssociation *GroupStart(AssocGroupId group)
++{
++    static CAnimBlendHierarchy hierarchy;
++    static CAnimBlendAssociation start;
++    if (group != ASSOCGRP_PLAYER && group != ASSOCGRP_STD)
++        return nil;
++    start.hierarchy = &hierarchy;
++    return &start;
++}
++
++static CAnimBlendAssociation *NewLive(AnimationId id, float amount)
++{
++    CAnimBlendAssociation *anim = new CAnimBlendAssociation();
++    anim->animId = id;
++    anim->blendAmount = amount;
++    CAnimBlendAssociation::live.push_back(anim);
++    return anim;
++}
++
++CAnimBlendAssociation *RpAnimBlendClumpGetAssociation(void *, AnimationId id)
++{
++    for (size_t i = 0; i < CAnimBlendAssociation::live.size(); i++)
++        if (CAnimBlendAssociation::live[i]->animId == id)
++            return CAnimBlendAssociation::live[i];
++    return nil;
++}
++
++struct CAnimManager {
++    static CAnimBlendAssociation *GetAnimAssociation(AssocGroupId group, AnimationId id) {
++        return id == ANIM_STD_STARTWALK ? GroupStart(group) : nil;
++    }
++    static CAnimBlendAssociation *AddAnimation(void *, AssocGroupId, AnimationId id) {
++        CAnimBlendAssociation *anim = NewLive(id, 1.0f);
++        anim->flags |= ASSOC_RUNNING;
++        return anim;
++    }
++    static CAnimBlendAssociation *BlendAnimation(void *, AssocGroupId, AnimationId id, float delta) {
++        bool isMovement = id <= ANIM_STD_RUNFAST;
++        bool removePrev = false;
++        CAnimBlendAssociation *found = nil;
++        for (size_t i = 0; i < CAnimBlendAssociation::live.size(); i++) {
++            CAnimBlendAssociation *anim = CAnimBlendAssociation::live[i];
++            if (anim->animId == id) { found = anim; continue; }
++            if (anim->blendAmount > 0.0f) {
++                float blendDelta = -delta * anim->blendAmount;
++                if (blendDelta < anim->blendDelta)
++                    anim->blendDelta = blendDelta;
++            } else
++                anim->blendDelta = -1.0f;
++            anim->flags |= ASSOC_DELETEFADEDOUT;
++            removePrev = true;
++        }
++        (void)isMovement;
++        if (found) {
++            found->blendDelta = (1.0f - found->blendAmount) * delta;
++        } else {
++            found = NewLive(id, 0.0f);
++            if (!removePrev)
++                found->blendAmount = 1.0f;
++            else
++                found->blendDelta = delta;
++        }
++        return found;
++    }
++};
++
++struct CTimer {
++    static float scale;
++    static uint32 now;
++    static uint32 GetTimeInMilliseconds(void) { return now; }
++    static void SetTimeScale(float value) { scale = value; }
++};
++float CTimer::scale = 1.0f;
++uint32 CTimer::now = 1000;
++
++struct CGeneral {
++    static int GetRandomNumberInRange(int low, int) { return low; }
++};
++
++struct CWorld {
++    static bool TestSphereAgainstWorld(int, float, void *, bool, bool, bool, bool, bool, bool) {
++        return false;
++    }
++};
++
++struct CCam { enum { MODE_FIXED = 4 }; int Mode; };
++struct CCamera { CCam Cams[8]; int ActiveCam; } TheCamera;
++
++static void RestoreHeadingRateCB(CAnimBlendAssociation *, void *) {}
++
++struct CPlayerPed {
++    bool bResetWalkAnims, bIsAimingGun, m_bAdrenalineActive;
++    uint32 m_nWaitTimer, m_nAdrenalineTime;
++    PedState m_nPedState;
++    eMoveState m_nMoveState;
++    AssocGroupId m_animGroup;
++    float m_fMoveSpeed, m_fCurrentStamina, m_headingRate;
++    void *GetClump(void) { return this; }
++    int GetPosition(void) { return 0; }
++    void SetRealMoveAnim(void);
++    void UseSprintEnergy(void) {}
++    void RestoreHeadingRate(void) {}
++};
++CPlayerPed *pVCModAdrenalinePlayer = nil;
++bool bVCModWalkMode = false;
++'''
++
++
++def braced(source, marker):
++    start = source.index(marker)
++    opening = source.index("{", start)
++    depth = 1
++    end = opening + 1
++    while depth:
++        depth += (source[end] == "{") - (source[end] == "}")
++        end += 1
++    return source[start:end]
++
++
++HARNESS = r'''
++static int checks;
++static void check(bool condition, const char *name)
++{
++    if (!condition) {
++        std::fprintf(stderr, "FAIL: %s\n", name);
++        std::exit(1);
++    }
++    ++checks;
++}
++
++static void ClearLive(void)
++{
++    while (!CAnimBlendAssociation::live.empty())
++        delete CAnimBlendAssociation::live.back();
++}
++
++static CPlayerPed MakePed(AssocGroupId group, float speed)
++{
++    CPlayerPed ped = {};
++    ped.m_animGroup = group;
++    ped.m_nPedState = PED_IDLE;
++    ped.m_nMoveState = PEDMOVE_STILL;
++    ped.m_fMoveSpeed = speed;
++    ped.m_fCurrentStamina = 100.0f;
++    return ped;
++}
++
++// mirrors CAnimBlendAssociation::UpdateBlend
++static void Advance(float dt)
++{
++    for (size_t i = 0; i < CAnimBlendAssociation::live.size(); ) {
++        CAnimBlendAssociation *anim = CAnimBlendAssociation::live[i];
++        anim->blendAmount += anim->blendDelta * dt;
++        if (anim->blendAmount <= 0.0f && anim->blendDelta < 0.0f) {
++            anim->blendAmount = 0.0f;
++            anim->blendDelta = 0.0f;
++            if (anim->flags & ASSOC_DELETEFADEDOUT) {
++                delete anim;
++                continue;
++            }
++        }
++        if (anim->blendAmount > 1.0f) {
++            anim->blendAmount = 1.0f;
++            anim->blendDelta = 0.0f;
++        }
++        ++i;
++    }
++}
++
++static void RunFrames(CPlayerPed &ped, float seconds)
++{
++    int frames = (int)(seconds * 30.0f + 0.5f);
++    for (int i = 0; i < frames; i++) {
++        ped.SetRealMoveAnim();
++        Advance(1.0f / 30.0f);
++    }
++}
++
++int main()
++{
++    // a skater starting from a standstill: the block has no start clip, so
++    // the movement clip has to fade in over the idle the way CPed::SetMoveAnim
++    // does instead of snapping to full weight
++    ClearLive();
++    CPlayerPed skater = MakePed(ASSOCGRP_SKATE, 0.9f);
++    CAnimBlendAssociation *idle = NewLive(ANIM_STD_IDLE, 1.0f);
++    skater.SetRealMoveAnim();
++    check(RpAnimBlendClumpGetAssociation(nil, ANIM_STD_STARTWALK) == nil,
++          "skate does not borrow the walking start clip");
++    CAnimBlendAssociation *walk = RpAnimBlendClumpGetAssociation(nil, ANIM_STD_WALK);
++    check(walk != nil, "skate start adds the movement clip");
++    check(walk->blendAmount < 0.5f, "skate movement clip starts near zero weight");
++    check(walk->blendDelta > 0.0f, "skate movement clip fades in");
++    check(idle->blendDelta < 0.0f && (idle->flags & ASSOC_DELETEFADEDOUT),
++          "skate idle fades out under the movement clip");
++
++    RunFrames(skater, 0.5f);
++    walk = RpAnimBlendClumpGetAssociation(nil, ANIM_STD_WALK);
++    idle = RpAnimBlendClumpGetAssociation(nil, ANIM_STD_IDLE);
++    check(walk != nil && walk->blendAmount > 0.3f && walk->blendAmount < 0.8f,
++          "skate start is a crossfade, not a cut");
++    check(idle != nil && idle->blendAmount > 0.1f, "skate idle is still blended mid-start");
++
++    RunFrames(skater, 1.0f);
++    walk = RpAnimBlendClumpGetAssociation(nil, ANIM_STD_WALK);
++    check(walk != nil && walk->blendAmount == 1.0f, "skate movement clip ends at full weight");
++    check(RpAnimBlendClumpGetAssociation(nil, ANIM_STD_IDLE) == nil, "skate idle is gone after the fade");
++    check(skater.m_nMoveState == PEDMOVE_WALK, "walk speed keeps the player in the walk state");
++
++    // stopping in the middle of the fade has to bring the idle back
++    ClearLive();
++    CPlayerPed stopped = MakePed(ASSOCGRP_SKATE, 0.9f);
++    NewLive(ANIM_STD_IDLE, 1.0f);
++    RunFrames(stopped, 0.3f);
++    stopped.m_fMoveSpeed = 0.0f;
++    RunFrames(stopped, 0.2f);
++    idle = RpAnimBlendClumpGetAssociation(nil, ANIM_STD_IDLE);
++    walk = RpAnimBlendClumpGetAssociation(nil, ANIM_STD_WALK);
++    check(idle != nil && idle->blendDelta > 0.0f, "stopping mid-start blends the idle back in");
++    check(walk == nil || walk->blendDelta < 0.0f, "stopping mid-start fades the movement clip out");
++
++    // with walk mode on, every group fades the start, Tommy's own included
++    ClearLive();
++    bVCModWalkMode = true;
++    CPlayerPed tommy = MakePed(ASSOCGRP_PLAYER, 0.9f);
++    NewLive(ANIM_STD_IDLE, 1.0f);
++    tommy.SetRealMoveAnim();
++    check(RpAnimBlendClumpGetAssociation(nil, ANIM_STD_STARTWALK) == nil,
++          "walk mode does not play a start clip");
++    walk = RpAnimBlendClumpGetAssociation(nil, ANIM_STD_WALK);
++    check(walk != nil && walk->blendAmount < 0.5f && walk->blendDelta > 0.0f,
++          "walk mode fades into the walk clip");
++    bVCModWalkMode = false;
++
++    // an npc group carries no start clip; borrowing Tommy's was the jank
++    ClearLive();
++    CPlayerPed npcSkin = MakePed(ASSOCGRP_MAN, 0.9f);
++    NewLive(ANIM_STD_IDLE, 1.0f);
++    npcSkin.SetRealMoveAnim();
++    check(RpAnimBlendClumpGetAssociation(nil, ANIM_STD_STARTWALK) == nil,
++          "npc groups do not borrow Tommy's start clip");
++    walk = RpAnimBlendClumpGetAssociation(nil, ANIM_STD_WALK);
++    check(walk != nil && walk->blendAmount < 0.5f && walk->blendDelta > 0.0f,
++          "npc groups fade into the walk clip");
++
++    // a sprint start still takes the step the start clip gives
++    ClearLive();
++    CPlayerPed sprintSkin = MakePed(ASSOCGRP_MAN, 0.4f);
++    sprintSkin.m_nMoveState = PEDMOVE_SPRINT;
++    NewLive(ANIM_STD_IDLE, 1.0f);
++    sprintSkin.SetRealMoveAnim();
++    check(RpAnimBlendClumpGetAssociation(nil, ANIM_STD_STARTWALK) != nil,
++          "sprint starts keep the start clip step");
++
++    // groups that do have a start clip keep the native cut into it
++    ClearLive();
++    CPlayerPed normal = MakePed(ASSOCGRP_PLAYER, 0.9f);
++    NewLive(ANIM_STD_IDLE, 1.0f);
++    normal.SetRealMoveAnim();
++    check(RpAnimBlendClumpGetAssociation(nil, ANIM_STD_STARTWALK) != nil,
++          "full groups still play the walking start clip");
++    check(RpAnimBlendClumpGetAssociation(nil, ANIM_STD_IDLE) == nil,
++          "full groups drop the idle when the start clip takes over");
++
++    // dropping from run to walk in one frame crossfades instead of swapping weights
++    ClearLive();
++    CPlayerPed crossing = MakePed(ASSOCGRP_PLAYER, 0.9f);
++    CAnimBlendAssociation *walkSlot = NewLive(ANIM_STD_WALK, 0.0f);
++    CAnimBlendAssociation *runSlot = NewLive(ANIM_STD_RUN, 1.0f);
++    crossing.SetRealMoveAnim();
++    check(walkSlot->blendDelta > 0.0f && runSlot->blendDelta < 0.0f,
++          "walk/run boundary crossfades instead of cutting");
++    check(walkSlot->blendAmount < 1.0f, "incoming walk clip does not jump to full weight");
++
++    std::printf("ok %d checks\n", checks);
++    return 0;
++}
++'''
++
++
++def run_cpp(source):
++    with tempfile.TemporaryDirectory(prefix="vc-moveanim-test-") as directory:
++        cpp = Path(directory) / "test.cpp"
++        binary = Path(directory) / "test"
++        cpp.write_text(source)
++        build = subprocess.run(["c++", "-std=c++98", "-Wall", "-Wextra", str(cpp), "-o", str(binary)],
++                               capture_output=True, text=True)
++        if build.returncode:
++            print(build.stderr)
++            numbered = "".join(f"{n}: {line}\n" for n, line in enumerate(source.splitlines(), 1))
++            raise RuntimeError("compile failed\n" + numbered)
++        if build.stderr:
++            print(build.stderr)
++        run = subprocess.run([str(binary)], capture_output=True, text=True)
++        if run.returncode:
++            print(run.stdout, run.stderr)
++            raise RuntimeError("test binary failed")
++        print(run.stdout.strip())
++
++
++class MoveAnimTests(unittest.TestCase):
++    def test_start_transitions(self):
++        source = ENGINE_STUBS + braced(PLAYER, "void\nCPlayerPed::SetRealMoveAnim(void)") + HARNESS
++        run_cpp(source)
++
++
++if __name__ == "__main__":
++    unittest.main()
 diff --git a/utils/test_vc_passenger.py b/utils/test_vc_passenger.py
 new file mode 100644
-index 0000000..b76234f
+index 0000000..125b4b2
 --- /dev/null
 +++ b/utils/test_vc_passenger.py
-@@ -0,0 +1,535 @@
+@@ -0,0 +1,992 @@
 +#!/usr/bin/env python3
 +"""Passenger-mode tests: the ride state machine out of PlayerPed.cpp and the
-+destination list out of vcmodpanel.cpp, compiled against small engine stubs."""
++destination list out of vcmodpanel.cpp, compiled against small engine stubs.
++
++The stubs here are shared with test_vc_driver.py, which covers the chauffeur.
++"""
 +import re
 +import subprocess
 +import tempfile
@@ -3485,6 +5240,7 @@ index 0000000..b76234f
 +#include <cstdio>
 +#include <cstdlib>
 +#include <cstring>
++#include <cmath>
 +#include <sstream>
 +#include <string>
 +#include <vector>
@@ -3498,7 +5254,7 @@ index 0000000..b76234f
 +typedef int32_t int32;
 +typedef uint32_t uint32;
 +typedef uint16_t wchar;
-+static std::string to_string(int value) {
++std::string to_string(int value) {
 +    std::ostringstream out;
 +    out << value;
 +    return out.str();
@@ -3517,12 +5273,26 @@ index 0000000..b76234f
 +    return source[start:end]
 +
 +
++def ride_statics():
++    """The ride's own state, tuning constants and forward declarations."""
++    start = PLAYER.index("static int32 nVCModRideHandle")
++    end = PLAYER.index("static void\nVCModRideNotice")
++    return PLAYER[start:end]
++
++
++def ride_enums():
++    return (braced(HEAD, "enum eVCModRideStyle") + ";\n" +
++            braced(HEAD, "enum eVCModRidePhase") + ";\n")
++
++
 +def run_cpp(source):
 +    with tempfile.TemporaryDirectory(prefix="vc-passenger-test-") as directory:
 +        cpp = Path(directory) / "test.cpp"
 +        binary = Path(directory) / "test"
 +        cpp.write_text(source)
-+        build = subprocess.run(["c++", "-std=c++98", "-Wall", "-Wextra", str(cpp), "-o", str(binary)],
++        # each test compiles only the functions it drives, so some statics are unused
++        build = subprocess.run(["c++", "-std=c++98", "-Wall", "-Wextra", "-Wno-unused-function",
++                                str(cpp), "-o", str(binary)],
 +                               capture_output=True, text=True)
 +        if build.returncode:
 +            print(build.stderr)
@@ -3537,6 +5307,7 @@ index 0000000..b76234f
 +
 +
 +VEHICLE_STUBS = r'''
++std::vector<std::string> events;
 +enum eVCModRideVehicleType { VEH_CAR, VEH_BIKE, VEH_BOAT, VEH_PLANE, VEH_HELI, VEH_TRAIN };
 +enum { STATUS_SIMPLE, STATUS_PHYSICS, STATUS_PLAYER, STATUS_ABANDONED, STATUS_TRAIN_NOT_MOVING };
 +enum { CAR_CREATED_BY_RANDOM, CAR_CREATED_BY_MISSION, CAR_CREATED_BY_SCRIPT, CAR_CREATED_BY_PARKED };
@@ -3546,32 +5317,69 @@ index 0000000..b76234f
 +enum eObjective { OBJECTIVE_NONE, OBJECTIVE_ENTER_CAR_AS_DRIVER, OBJECTIVE_ENTER_CAR_AS_PASSENGER, OBJECTIVE_LEAVE_CAR };
 +enum ePedState { PED_IDLE, PED_ENTER_CAR, PED_DRIVING, PED_ON_FOOT };
 +enum { MISSION_NONE, MISSION_CRUISE, MISSION_GOTOCOORDS, MISSION_STOP_FOREVER };
-+enum { TEMPACT_NONE, DRIVINGSTYLE_AVOID_CARS };
-+struct CVector {
-+    float x, y, z;
-+    CVector() : x(0.0f), y(0.0f), z(0.0f) {}
-+    CVector(float xx, float yy, float zz) : x(xx), y(yy), z(zz) {}
++enum { TEMPACT_NONE };
++enum { DRIVINGSTYLE_STOP_FOR_CARS, DRIVINGSTYLE_SLOW_DOWN_FOR_CARS, DRIVINGSTYLE_AVOID_CARS,
++       DRIVINGSTYLE_PLOUGH_THROUGH, DRIVINGSTYLE_STOP_FOR_CARS_IGNORE_LIGHTS };
++enum { MI_PLAYER, MI_STRETCH = 139 };
++enum { PATH_CAR, PATH_PED };
++enum { BLIP_CAR, BLIP_CHAR };
++enum { BLIP_DISPLAY_BOTH, BLIP_DISPLAY_MARKER_ONLY };
++enum { FADE_IN, FADE_OUT };
++struct CVector2D {
++    float x, y;
++    CVector2D() : x(0.0f), y(0.0f) {}
++    CVector2D(float xx, float yy) : x(xx), y(yy) {}
++    void Normalise(void) {
++        float m = (float) std::sqrt(x * x + y * y);
++        if (m > 0.0f) { x /= m; y /= m; }
++    }
++};
++struct CVector : CVector2D {
++    float z;
++    CVector() : CVector2D(), z(0.0f) {}
++    CVector(float xx, float yy, float zz) : CVector2D(xx, yy), z(zz) {}
 +    CVector operator-(const CVector &o) const { return CVector(x - o.x, y - o.y, z - o.z); }
++    CVector operator*(float s) const { return CVector(x * s, y * s, z * s); }
 +    float Magnitude2D() const { return (float) std::sqrt(x * x + y * y); }
 +};
 +'''
 +
 +RIDE_STUBS = r'''
-+std::vector<std::string> events;
 +struct CAutoPilot {
 +    int32 m_nCarMission; int32 m_nTempAction; int32 m_nDrivingStyle; int32 m_nCruiseSpeed;
++    float m_fMaxTrafficSpeed;
++    /* an ordinary generated traffic car: conservative pace, no weaving */
 +    CAutoPilot() : m_nCarMission(MISSION_NONE), m_nTempAction(TEMPACT_NONE),
-+                   m_nDrivingStyle(0), m_nCruiseSpeed(0) {}
++                   m_nDrivingStyle(DRIVINGSTYLE_STOP_FOR_CARS), m_nCruiseSpeed(11),
++                   m_fMaxTrafficSpeed(11.0f) {}
 +};
 +struct CPed { int32 dummy; };
 +CPed driverPed;
 +bool spawnDriverFails = false;
-+struct CVehicle {
-+    eVCModRideVehicleType kind; int32 handle; CVector pos; CAutoPilot AutoPilot;
++struct CEntity {
++    CVector pos; CVector fwd; CVector right; CVector up;
++    bool isVehicle; int32 modelIndex;
++    CEntity() : fwd(0.0f, 1.0f, 0.0f), right(1.0f, 0.0f, 0.0f), up(0.0f, 0.0f, 1.0f),
++                isVehicle(false), modelIndex(MI_PLAYER) {}
++    virtual ~CEntity() {}
++    CVector GetPosition(void) { return pos; }
++    void SetPosition(const CVector &p) { pos = p; }
++    CVector &GetForward(void) { return fwd; }
++    CVector &GetRight(void) { return right; }
++    CVector &GetUp(void) { return up; }
++    bool IsVehicle(void) { return isVehicle; }
++    virtual bool IsCar(void) { return false; }
++    virtual void Teleport(CVector p) { pos = p; events.push_back("teleport"); }
++    float GetDistanceFromCentreOfMassToBaseOfModel(void) { return 1.0f; }
++    int32 GetModelIndex(void) { return modelIndex; }
++};
++struct CVehicle : CEntity {
++    eVCModRideVehicleType kind; int32 handle; CAutoPilot AutoPilot;
 +    CPed *pDriver; CPed *pPassengers[8]; int32 m_nNumMaxPassengers; int32 VehicleCreatedBy;
-+    int32 status; bool bEngineOn;
++    int32 status;
 +    CVehicle() : kind(VEH_CAR), handle(0), pDriver(nil), m_nNumMaxPassengers(4),
-+                 VehicleCreatedBy(RANDOM_VEHICLE), status(STATUS_PHYSICS), bEngineOn(false) {
++                 VehicleCreatedBy(RANDOM_VEHICLE), status(STATUS_PHYSICS) {
++        isVehicle = true;
 +        for (int i = 0; i < 8; ++i) pPassengers[i] = nil;
 +    }
 +    bool IsCar(void) { return kind == VEH_CAR; }
@@ -3580,19 +5388,20 @@ index 0000000..b76234f
 +    bool IsPlane(void) { return kind == VEH_PLANE; }
 +    bool IsHeli(void) { return kind == VEH_HELI; }
 +    bool IsTrain(void) { return kind == VEH_TRAIN; }
-+    CVector GetPosition(void) { return pos; }
 +    int32 GetStatus(void) { return status; }
++    void SetStatus(int32 s) { status = s; events.push_back("status:" + to_string(s)); }
 +    CPed *SetUpDriver(void) {
 +        if (spawnDriverFails || VehicleCreatedBy != RANDOM_VEHICLE) return nil;
 +        events.push_back("driver");
++        pDriver = &driverPed;
 +        return &driverPed;
 +    }
 +};
-+CVehicle *lookupVehicle = nil;
-+struct CPlayerPed;
-+struct CPlayerPed {
++struct CPlayerPed : CEntity {
 +    bool controlsOn; bool bInVehicle; CVehicle *m_pMyVehicle;
 +    int32 m_objective; CVehicle *m_carInObjective; int32 m_nPedState;
++    CPlayerPed() : controlsOn(true), bInVehicle(false), m_pMyVehicle(nil),
++                   m_objective(OBJECTIVE_NONE), m_carInObjective(nil), m_nPedState(PED_ON_FOOT) {}
 +    bool IsPedInControl(void) { return controlsOn; }
 +    bool InVehicle(void) { return bInVehicle && m_pMyVehicle; }
 +    void SetObjective(int32 obj, CVehicle *veh) {
@@ -3600,30 +5409,58 @@ index 0000000..b76234f
 +        m_objective = obj; m_carInObjective = veh;
 +    }
 +};
-+CPlayerPed playerPed = { true, false, nil, OBJECTIVE_NONE, nil, PED_ON_FOOT };
++CPlayerPed playerPed;
 +CPlayerPed *FindPlayerPed(void) { return &playerPed; }
++CEntity *FindPlayerEntity(void) {
++    if (playerPed.bInVehicle && playerPed.m_pMyVehicle) return playerPed.m_pMyVehicle;
++    return &playerPed;
++}
++/* a pool that can hold the car under test and one more, so a ride can be
++   replaced without the old vehicle vanishing */
++CVehicle *poolSlots[4] = { nil, nil, nil, nil };
++void poolClear(void) { for (int i = 0; i < 4; ++i) poolSlots[i] = nil; }
++void poolAdd(CVehicle *veh) {
++    for (int i = 0; i < 4; ++i)
++        if (poolSlots[i] == nil) { poolSlots[i] = veh; return; }
++}
 +struct CVehiclePool {
 +    int32 GetIndex(CVehicle *veh) { return veh->handle; }
 +    CVehicle *GetAt(int32 handle) {
-+        // only the vehicle parked in the pool resolves, so a recycled handle is nil
-+        if (handle < 0 || lookupVehicle == nil || lookupVehicle->handle != handle) return nil;
-+        return lookupVehicle;
++        // a handle, not an index: a recycled slot stops resolving
++        if (handle < 0) return nil;
++        for (int i = 0; i < 4; ++i)
++            if (poolSlots[i] != nil && poolSlots[i]->handle == handle) return poolSlots[i];
++        return nil;
 +    }
 +};
 +CVehiclePool vehiclePool;
 +struct CPools { static CVehiclePool *GetVehiclePool(void) { return &vehiclePool; } };
 +struct CCarCtrl {
-+    static int32 NumRandomCars, NumParkedCars;
++    static int32 NumRandomCars, NumParkedCars, NumMissionCars;
 +    static void JoinCarWithRoadSystem(CVehicle *veh) { events.push_back("join:" + to_string(veh->handle)); }
-+    static bool JoinCarWithRoadSystemGotoCoors(CVehicle *veh, CVector dest, bool accurate) {
++    static bool JoinCarWithRoadSystemGotoCoors(CVehicle *veh, CVector dest, bool) {
 +        events.push_back("goto:" + to_string(veh->handle) + ":" + to_string((int) dest.x) + "," + to_string((int) dest.y));
 +        return false;
++    }
++    static void SwitchVehicleToRealPhysics(CVehicle *veh) {
++        events.push_back("onrails-off:" + to_string(veh->handle));
++        veh->AutoPilot.m_nCarMission = MISSION_CRUISE;
++        veh->AutoPilot.m_nTempAction = TEMPACT_NONE;
++    }
++    static void UpdateCarCount(CVehicle *veh, bool remove) {
++        int32 *slot = nil;
++        switch (veh->VehicleCreatedBy) {
++        case RANDOM_VEHICLE: slot = &NumRandomCars; break;
++        case MISSION_VEHICLE: slot = &NumMissionCars; break;
++        case PARKED_VEHICLE: slot = &NumParkedCars; break;
++        }
++        if (slot) *slot += remove ? -1 : 1;
 +    }
 +};
 +int32 CCarCtrl::NumRandomCars = 0;
 +int32 CCarCtrl::NumParkedCars = 0;
++int32 CCarCtrl::NumMissionCars = 0;
 +/* the destination list, stubbed with the same cruise-first contract the panel has */
-+int32 rideZone = -1;
 +static bool VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos) {
 +    if (entry < 0 || entry > 3) return false;
 +    if (entry == 0) {
@@ -3637,9 +5474,8 @@ index 0000000..b76234f
 +    if (outPos) *outPos = CVector((float) (100 * entry), (float) (200 * entry), 0.0f);
 +    return true;
 +}
-+static wchar noticeBuffer[64];
 +struct CHud {
-+    static void SetHelpMessage(wchar *msg, bool quick) {
++    static void SetHelpMessage(wchar *msg, bool) {
 +        std::string text;
 +        for (int i = 0; i < 63 && msg[i] != 0; ++i) text += (char) msg[i];
 +        events.push_back("notice:" + text);
@@ -3647,43 +5483,163 @@ index 0000000..b76234f
 +};
 +'''
 +
++WORLD_STUBS = r'''
++uint32 nowMs = 10000;
++struct CTimer { static uint32 GetTimeInMilliseconds(void) { return nowMs; } };
++struct CPathNode {
++    CVector pos;
++    CVector GetPosition(void) { return pos; }
++};
++bool noRoadNodes = false;
++int32 requestedNode = -1;
++struct CPathFind {
++    CPathNode m_pathNodes[4];
++    int32 FindNodeClosestToCoors(CVector coors, uint8, float distLimit,
++                                 bool = false, bool = false, bool = false, bool = false) {
++        events.push_back("node:" + to_string((int) coors.x) + "," + to_string((int) coors.y) +
++                         ":" + to_string((int) distLimit));
++        if (noRoadNodes) return -1;
++        // node 1 is the spawn road behind Tommy, node 2 the destination road
++        if (distLimit > 100000.0f) return 2;
++        return requestedNode >= 0 ? requestedNode : 1;
++    }
++};
++CPathFind ThePaths;
++bool limoModelLoaded = true;
++bool limoPoolFull = false;
++struct CStreaming {
++    static void RequestModel(int32 model, int32) { events.push_back("request:" + to_string(model)); }
++    static void LoadAllRequestedModels(bool) { events.push_back("loadall"); }
++    static bool HasModelLoaded(int32) { return limoModelLoaded; }
++    static void LoadScene(const CVector&) { events.push_back("scene"); }
++    static void LoadSceneCollision(const CVector&) { events.push_back("scenecol"); }
++};
++struct CColStore {
++    static void RequestCollision(const CVector2D&) { events.push_back("collision"); }
++};
++struct CRadar {
++    static int32 SetEntityBlip(int32, int32 handle, uint32, int32) {
++        events.push_back("blip:" + to_string(handle));
++        return 7;
++    }
++    static void ClearBlipForEntity(int32, int32 handle) {
++        events.push_back("unblip:" + to_string(handle));
++    }
++};
++struct CWorld {
++    static void Add(CEntity*) { events.push_back("world:add"); }
++    static float FindGroundZForCoord(float, float) { return 10.0f; }
++};
++struct CTheScripts {
++    static void ClearSpaceForMissionEntity(const CVector&, CEntity*) { events.push_back("clearspace"); }
++};
++struct CCamera {
++    void RestoreWithJumpCut(void) { events.push_back("jumpcut"); }
++    void SetFadeColour(int, int, int) {}
++    void Fade(float duration, int32 direction) {
++        events.push_back("fade:" + to_string((int) duration) + ":" + to_string(direction));
++    }
++};
++CCamera TheCamera;
++struct CAutomobile : CVehicle {
++    CAutomobile(int32 id, uint8 created);
++    void *operator new(size_t sz);
++    void operator delete(void *p) { ::operator delete(p); }
++    void PlaceOnRoadProperly(void) { events.push_back("onroad"); }
++};
++CAutomobile *lastLimo = nil;
++'''
 +
-+class PassengerTests(unittest.TestCase):
-+    def test_entry_decision_table(self):
-+        entry = braced(PLAYER, "bool\nVCModPassengerEntry(CVehicle *vehicle)")
-+        notice = braced(PLAYER, "static void\nVCModRideNotice(const char *text)")
-+        seatfree = braced(PLAYER, "static bool\nVCModPassengerSeatFree(CVehicle *veh)")
-+        rundown = braced(PLAYER, "static void\nVCModRideStandDown(void)")
-+        ridevehicle = braced(PLAYER, "static CVehicle *\nVCModRideVehicle(void)")
-+        run_cpp(ENGINE_STUBS + VEHICLE_STUBS + RIDE_STUBS + r'''
++WORLD_STUBS_TAIL = r'''
++CAutomobile::CAutomobile(int32 id, uint8 created) {
++    modelIndex = id;
++    VehicleCreatedBy = created;
++    handle = 5;
++    poolAdd(this);
++    lastLimo = this;
++    CCarCtrl::UpdateCarCount(this, false);
++}
++void *CAutomobile::operator new(size_t sz) { return limoPoolFull ? nil : ::operator new(sz); }
++'''
++
++RIDE_GLOBALS = r'''
 +bool bVCModPassengerMode = true;
 +int32 nVCModRideZone = -1;
-+int32 nVCModRideHandle = -1;
-+bool bVCModRideWaiting, bVCModRideSpawnedDriver, bVCModRideHasDestination;
-+CVector vecVCModRideDestination;
-+''' + notice + "\n" + seatfree + "\n" + rundown + "\n" + ridevehicle + "\n" + entry + r'''
++int32 nVCModRideStyle = VCMOD_RIDE_SAFE;
++'''
++
++ROAD_NODES = r'''
++void placeRoadNodes(void) {
++    ThePaths.m_pathNodes[1].pos = CVector(-80.0f, 0.0f, 0.0f);
++    ThePaths.m_pathNodes[2].pos = CVector(150.0f, 250.0f, 0.0f);
++}
++'''
++
++CHECK_HELPER = r'''
 +static int checks;
 +void check(bool condition, const char *name) {
 +    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
 +    ++checks;
 +}
-+void reset(CVehicle &veh) {
-+    events.clear();
-+    veh = CVehicle(); veh.kind = VEH_CAR; veh.handle = 1; veh.VehicleCreatedBy = RANDOM_VEHICLE;
-+    playerPed.controlsOn = true; playerPed.bInVehicle = false; playerPed.m_pMyVehicle = nil;
-+    playerPed.m_objective = OBJECTIVE_NONE; playerPed.m_carInObjective = nil;
-+    nVCModRideHandle = -1; bVCModRideWaiting = false; bVCModRideSpawnedDriver = false;
-+    bVCModRideHasDestination = false; spawnDriverFails = false; lookupVehicle = &veh;
-+    bVCModPassengerMode = true; nVCModRideZone = -1;
-+}
-+bool sawObjective(const char *event) {
++bool saw(const char *event) {
 +    for (size_t i = 0; i < events.size(); ++i) if (events[i] == event) return true;
 +    return false;
 +}
-+bool sawDriver(void) {
-+    for (size_t i = 0; i < events.size(); ++i) if (events[i] == "driver") return true;
-+    return false;
++'''
++
++RESET_RIDE = r'''
++void reset(CVehicle &veh) {
++    events.clear();
++    veh = CVehicle(); veh.kind = VEH_CAR; veh.handle = 1; veh.VehicleCreatedBy = RANDOM_VEHICLE;
++    playerPed = CPlayerPed();
++    nVCModRideHandle = -1; nVCModRidePhase = VCMOD_RIDE_NONE;
++    bVCModRideSpawnedDriver = false; bVCModRideSummoned = false;
++    bVCModRideHasDestination = false; nVCModRideAppliedStyle = -1;
++    vecVCModRideDestination = CVector(); vecVCModRidePickup = CVector();
++    nVCModRideRetargetAt = 0; nowMs = 10000;
++    spawnDriverFails = false;
++    poolClear(); poolAdd(&veh);
++    limoModelLoaded = true; limoPoolFull = false; noRoadNodes = false; requestedNode = -1;
++    bVCModPassengerMode = true; nVCModRideZone = -1; nVCModRideStyle = VCMOD_RIDE_SAFE;
++    CCarCtrl::NumRandomCars = 0; CCarCtrl::NumParkedCars = 0; CCarCtrl::NumMissionCars = 0;
++    placeRoadNodes();
 +}
++'''
++
++
++def ride_functions(*names):
++    """Pull the named production functions out of PlayerPed.cpp in caller order."""
++    signatures = {
++        "notice": "static void\nVCModRideNotice(const char *text)",
++        "phase": "int32\nVCModRidePhase(void)",
++        "release": "static void\nVCModRideReleaseToTraffic(CVehicle *veh)",
++        "handback": "static void\nVCModRideHandBack(CVehicle *veh)",
++        "standdown": "static void\nVCModRideStandDown(void)",
++        "vehicle": "static CVehicle *\nVCModRideVehicle(void)",
++        "seatfree": "static bool\nVCModPassengerSeatFree(CVehicle *veh)",
++        "style": "static void\nVCModRideApplyStyle(CVehicle *veh, bool goingSomewhere)",
++        "drive": "static void\nVCModRideDrive(CVehicle *veh)",
++        "skip": "static bool\nVCModRideSkipTravel(void)",
++        "spawn": "static bool\nVCModRideSpawnLimo(CPlayerPed *player)",
++        "call": "void\nVCModCallDriver(void)",
++        "pickup": "static void\nVCModUpdatePickup(CPlayerPed *player, CVehicle *veh)",
++        "entry": "bool\nVCModPassengerEntry(CVehicle *vehicle)",
++        "update": "static void\nVCModUpdateRide(CPlayerPed *player)",
++        "skipride": "void\nVCModSkipRide(void)",
++    }
++    return "\n".join(braced(PLAYER, signatures[name]) for name in names) + "\n"
++
++
++def ride_source(*functions):
++    return (ENGINE_STUBS + VEHICLE_STUBS + ride_enums() + RIDE_STUBS + WORLD_STUBS +
++            WORLD_STUBS_TAIL + RIDE_GLOBALS + ride_statics() +
++            ride_functions(*functions) + ROAD_NODES + CHECK_HELPER + RESET_RIDE)
++
++
++class PassengerTests(unittest.TestCase):
++    def test_entry_decision_table(self):
++        run_cpp(ride_source("notice", "vehicle", "release", "handback", "standdown",
++                            "seatfree", "entry") + r'''
 +int main() {
 +    CVehicle veh;
 +    reset(veh);
@@ -3708,7 +5664,7 @@ index 0000000..b76234f
 +        check(VCModPassengerEntry(&veh), "no-seat craft still owns the press");
 +        veh.kind = VEH_CAR;
 +    }
-+    check(!sawObjective("objective:2"), "no-seat craft never boards");
++    check(!saw("objective:2"), "no-seat craft never boards");
 +    check(nVCModRideHandle == -1, "no ride starts on a plane or heli");
 +
 +    reset(veh);
@@ -3740,71 +5696,122 @@ index 0000000..b76234f
 +    check(veh.VehicleCreatedBy == RANDOM_VEHICLE &&
 +          CCarCtrl::NumRandomCars == 4 && CCarCtrl::NumParkedCars == 4,
 +          "the traffic counts follow the parked car conversion");
-+    check(sawObjective("objective:2"), "parked car boards as passenger");
++    check(saw("objective:2"), "parked car boards as passenger");
 +
 +    reset(veh);
 +    veh.pDriver = &driverPed;
 +    check(VCModPassengerEntry(&veh), "a traffic car with a driver is rideable");
-+    check(!sawDriver(), "an existing driver is not replaced");
-+    check(sawObjective("objective:2"), "objective is passenger entry");
++    check(!saw("driver"), "an existing driver is not replaced");
++    check(saw("objective:2"), "objective is passenger entry");
 +    check(veh.AutoPilot.m_nCarMission == MISSION_STOP_FOREVER && veh.AutoPilot.m_nCruiseSpeed == 0,
 +          "the car is held until Tommy is seated");
-+    check(nVCModRideHandle == veh.handle && bVCModRideWaiting, "the ride waits on the handle");
++    check(nVCModRideHandle == veh.handle && nVCModRidePhase == VCMOD_RIDE_BOARDING,
++          "the ride waits on the handle");
++    check(nVCModRideAppliedStyle == -1, "boarding always re-routes, even for a called limo");
++
++    /* the pace the car already kept is kept, so the driver carries on as traffic */
++    reset(veh);
++    veh.pDriver = &driverPed;
++    veh.AutoPilot.m_nCruiseSpeed = 13;
++    veh.AutoPilot.m_nDrivingStyle = DRIVINGSTYLE_SLOW_DOWN_FOR_CARS;
++    veh.AutoPilot.m_fMaxTrafficSpeed = 13.0f;
++    check(VCModPassengerEntry(&veh), "a car keeping its own pace is rideable");
++    check(veh.AutoPilot.m_nCruiseSpeed == 0, "held while Tommy boards");
++    VCModRideStandDown();
++    check(veh.AutoPilot.m_nCarMission == MISSION_CRUISE, "an abandoned entry resumes cruising");
++    check(veh.AutoPilot.m_nCruiseSpeed == 13 &&
++          veh.AutoPilot.m_nDrivingStyle == DRIVINGSTYLE_SLOW_DOWN_FOR_CARS &&
++          veh.AutoPilot.m_fMaxTrafficSpeed == 13.0f,
++          "with the pace it had before the press");
++
++    /* a car caught waiting must not be handed back at a standstill */
++    reset(veh);
++    veh.pDriver = &driverPed;
++    veh.AutoPilot.m_nCruiseSpeed = 0;
++    veh.AutoPilot.m_fMaxTrafficSpeed = 0.0f;
++    check(VCModPassengerEntry(&veh), "a waiting car is rideable");
++    VCModRideStandDown();
++    check(veh.AutoPilot.m_nCruiseSpeed == 12, "a waiting car is released moving");
 +
 +    reset(veh);
 +    veh.kind = VEH_BIKE; veh.m_nNumMaxPassengers = 1;
 +    check(VCModPassengerEntry(&veh), "a bike pillion seat is rideable");
++
++    /* the chauffeur's own limo is boardable with the street-car flag off */
++    reset(veh);
++    bVCModPassengerMode = false;
++    veh.pDriver = &driverPed;
++    veh.VehicleCreatedBy = MISSION_VEHICLE;
++    nVCModRideHandle = veh.handle; nVCModRidePhase = VCMOD_RIDE_PICKUP;
++    bVCModRideSummoned = true;
++    check(VCModPassengerEntry(&veh), "our own limo is boardable with passenger mode off");
++    check(nVCModRidePhase == VCMOD_RIDE_BOARDING && bVCModRideSummoned,
++          "boarding the limo keeps it ours");
++    check(veh.VehicleCreatedBy == MISSION_VEHICLE, "boarding does not hand the limo back");
++
++    /* a different street car is still refused while the flag is off */
++    reset(veh);
++    bVCModPassengerMode = false;
++    veh.pDriver = &driverPed;
++    nVCModRideHandle = 99; nVCModRidePhase = VCMOD_RIDE_PICKUP; bVCModRideSummoned = true;
++    check(!VCModPassengerEntry(&veh), "the flag still governs every other car");
++
++    /* boarding a street car hands a waiting chauffeur back to traffic */
++    reset(veh);
++    veh.pDriver = &driverPed;
++    nVCModRideHandle = 5; nVCModRidePhase = VCMOD_RIDE_PICKUP; bVCModRideSummoned = true;
++    CAutomobile *limo = new CAutomobile(MI_STRETCH, MISSION_VEHICLE);
++    CCarCtrl::NumMissionCars = 1; CCarCtrl::NumRandomCars = 2;
++    check(VCModPassengerEntry(&veh), "a street car boards over a waiting chauffeur");
++    check(limo->VehicleCreatedBy == RANDOM_VEHICLE &&
++          CCarCtrl::NumMissionCars == 0 && CCarCtrl::NumRandomCars == 3,
++          "the abandoned limo goes back to traffic with the counts");
++    check(saw("unblip:5"), "its radar blip is cleared");
++    check(nVCModRideHandle == veh.handle && !bVCModRideSummoned, "the ride is now the street car");
++    delete limo;
++
++    /* a simple car is promoted before we re-route it, or the on-rails update
++       would drag it sideways when the ride starts */
++    reset(veh);
++    veh.pDriver = &driverPed;
++    veh.status = STATUS_SIMPLE;
++    check(VCModPassengerEntry(&veh), "a simple car is still rideable");
++    check(veh.status == STATUS_PHYSICS, "it is promoted to real physics");
++    check(saw("onrails-off:1"), "through the engine's own switch");
++    check(veh.AutoPilot.m_nCarMission == MISSION_STOP_FOREVER,
++          "and then held for boarding, not left cruising");
++
++    /* a chosen destination never turns the enter press into a jump */
++    reset(veh);
++    veh.pDriver = &driverPed;
++    nVCModRideZone = 1;
++    check(VCModPassengerEntry(&veh), "a destination still lets the press board");
++    check(!saw("teleport"), "boarding never travels");
++    check(saw("objective:2"), "it boards as a passenger");
 +    std::printf("PASS: %d passenger entry checks\n", checks);
 +}
 +''')
 +
 +    def test_ride_state_machine(self):
-+        update = braced(PLAYER, "static void\nVCModUpdateRide(CPlayerPed *player)")
-+        cruise = braced(PLAYER, "static void\nVCModRideStartCruise(CVehicle *veh)")
-+        entry = braced(PLAYER, "bool\nVCModPassengerEntry(CVehicle *vehicle)")
-+        notice = braced(PLAYER, "static void\nVCModRideNotice(const char *text)")
-+        seatfree = braced(PLAYER, "static bool\nVCModPassengerSeatFree(CVehicle *veh)")
-+        rundown = braced(PLAYER, "static void\nVCModRideStandDown(void)")
-+        ridevehicle = braced(PLAYER, "static CVehicle *\nVCModRideVehicle(void)")
-+        run_cpp(ENGINE_STUBS + VEHICLE_STUBS + r'''
-+#include <math.h>
-+''' + RIDE_STUBS + r'''
-+bool bVCModPassengerMode = true;
-+int32 nVCModRideZone = -1;
-+int32 nVCModRideHandle = -1;
-+bool bVCModRideWaiting, bVCModRideSpawnedDriver, bVCModRideHasDestination;
-+CVector vecVCModRideDestination;
-+''' + notice + "\n" + seatfree + "\n" + rundown + "\n" + ridevehicle + "\n" + cruise + "\n" + entry + "\n" + update + r'''
-+static int checks;
-+void check(bool condition, const char *name) {
-+    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
-+    ++checks;
-+}
-+bool saw(const char *event) {
-+    for (size_t i = 0; i < events.size(); ++i) if (events[i] == event) return true;
-+    return false;
-+}
++        run_cpp(ride_source("notice", "vehicle", "release", "handback", "standdown", "seatfree",
++                            "style", "drive", "pickup", "entry", "update") + r'''
 +void sit(CVehicle &veh) {
 +    playerPed.bInVehicle = true; playerPed.m_pMyVehicle = &veh;
 +    playerPed.m_objective = OBJECTIVE_NONE; playerPed.m_carInObjective = nil;
 +    playerPed.m_nPedState = PED_DRIVING;
 +    veh.pDriver = &driverPed;
 +}
-+void reset(CVehicle &veh) {
-+    events.clear();
-+    veh = CVehicle(); veh.kind = VEH_CAR; veh.handle = 1; veh.VehicleCreatedBy = RANDOM_VEHICLE;
-+    playerPed.controlsOn = true; playerPed.bInVehicle = false; playerPed.m_pMyVehicle = nil;
-+    playerPed.m_objective = OBJECTIVE_NONE; playerPed.m_carInObjective = nil;
-+    playerPed.m_nPedState = PED_ON_FOOT;
-+    nVCModRideHandle = -1; bVCModRideWaiting = false; bVCModRideSpawnedDriver = false;
-+    bVCModRideHasDestination = false; spawnDriverFails = false; lookupVehicle = &veh;
-+    bVCModPassengerMode = true; nVCModRideZone = -1; vecVCModRideDestination = CVector();
-+}
 +void beginRide(CVehicle &veh, int32 zone) {
 +    reset(veh);
 +    nVCModRideZone = zone;
 +    check(VCModPassengerEntry(&veh), "ride armed");
 +    events.clear();
++}
++/* boarding takes one frame to notice the seat, then the next one routes */
++void seated(CVehicle &veh) {
++    sit(veh);
++    VCModUpdateRide(&playerPed);
++    VCModUpdateRide(&playerPed);
 +}
 +int main() {
 +    CVehicle veh;
@@ -3816,26 +5823,28 @@ index 0000000..b76234f
 +    beginRide(veh, -1);
 +    VCModUpdateRide(&playerPed);
 +    check(events.empty(), "walking to the door starts no driving");
-+    check(nVCModRideHandle == veh.handle && bVCModRideWaiting, "still waiting for the seat");
++    check(nVCModRidePhase == VCMOD_RIDE_BOARDING, "still waiting for the seat");
 +
 +    playerPed.m_objective = OBJECTIVE_LEAVE_CAR;
++    events.clear();
 +    VCModUpdateRide(&playerPed);
-+    check(nVCModRideHandle == -1 && !bVCModRideWaiting, "an entry given up releases the ride");
++    check(nVCModRideHandle == -1 && nVCModRidePhase == VCMOD_RIDE_NONE,
++          "an entry given up releases the ride");
++    check(veh.AutoPilot.m_nCarMission == MISSION_CRUISE,
++          "and the car is driving again instead of waiting forever");
 +
 +    beginRide(veh, -1);
-+    veh.AutoPilot.m_nCarMission = MISSION_NONE;
 +    sit(veh);
 +    VCModUpdateRide(&playerPed);
-+    check(!bVCModRideWaiting, "seating releases the wait");
++    check(nVCModRidePhase == VCMOD_RIDE_DRIVING, "seating moves the phase on");
++    check(events.empty(), "the journey is decided on the next frame");
++    VCModUpdateRide(&playerPed);
 +    check(saw("join:1"), "traffic ride puts the car on the road system");
-+    check(veh.AutoPilot.m_nCarMission == MISSION_CRUISE && veh.AutoPilot.m_nCruiseSpeed == 25,
-+          "the driver cruises at traffic speed");
-+    check(veh.AutoPilot.m_nDrivingStyle == DRIVINGSTYLE_AVOID_CARS, "the driver avoids other cars");
++    check(veh.AutoPilot.m_nCarMission == MISSION_CRUISE, "the mission is cruise");
 +    check(!bVCModRideHasDestination, "a cruise ride never arrives anywhere");
 +
 +    beginRide(veh, 1);
-+    sit(veh);
-+    VCModUpdateRide(&playerPed);
++    seated(veh);
 +    check(saw("goto:1:100,200"), "a zone destination routes the driver");
 +    check(veh.AutoPilot.m_nCarMission == MISSION_GOTOCOORDS, "the mission is goto coords");
 +    check(bVCModRideHasDestination, "arrival is now being watched");
@@ -3844,57 +5853,218 @@ index 0000000..b76234f
 +    check(events.empty(), "far from the destination keeps driving");
 +
 +    veh.pos = CVector(105.0f, 205.0f, 0.0f);
-+    VCModRideStandDown();
-+    check(!bVCModRideWaiting && nVCModRideHandle == -1, "stand down clears the ride");
-+    check(!bVCModRideHasDestination, "stand down clears the destination watch");
-+
-+    beginRide(veh, 2);
-+    sit(veh);
-+    VCModUpdateRide(&playerPed);
-+    check(saw("goto:1:200,400"), "the second zone routes to its own centre");
-+    veh.pos = CVector(201.0f, 401.0f, 0.0f);
 +    events.clear();
 +    VCModUpdateRide(&playerPed);
 +    check(veh.AutoPilot.m_nCarMission == MISSION_STOP_FOREVER && veh.AutoPilot.m_nCruiseSpeed == 0,
-+          "arriving parks the car");
++          "arriving parks a street car");
 +    check(saw("notice:passenger mode: arrived"), "arrival is announced");
-+    check(nVCModRideHandle == -1, "the finished ride lets go of the car");
++    check(nVCModRideHandle == -1 && nVCModRidePhase == VCMOD_RIDE_NONE,
++          "the finished ride lets go of the car");
++
++    beginRide(veh, 2);
++    seated(veh);
++    check(saw("goto:1:200,400"), "the second zone routes to its own centre");
 +
 +    beginRide(veh, -1);
-+    sit(veh);
-+    VCModUpdateRide(&playerPed);
++    seated(veh);
 +    playerPed.bInVehicle = false; playerPed.m_pMyVehicle = nil;
++    events.clear();
 +    VCModUpdateRide(&playerPed);
 +    check(nVCModRideHandle == -1, "getting out ends the ride");
++    check(veh.AutoPilot.m_nCarMission == MISSION_CRUISE,
++          "and the street car goes back to traffic");
++    check(veh.AutoPilot.m_nCruiseSpeed == 11 &&
++          veh.AutoPilot.m_nDrivingStyle == DRIVINGSTYLE_STOP_FOR_CARS &&
++          veh.AutoPilot.m_fMaxTrafficSpeed == 11.0f,
++          "at the pace the car kept before we borrowed it, not the ride's");
++    check(saw("join:1"), "and rejoins the road system");
 +
 +    beginRide(veh, -1);
-+    sit(veh);
-+    VCModUpdateRide(&playerPed);
++    seated(veh);
 +    veh.handle = 999;
 +    VCModUpdateRide(&playerPed);
 +    check(nVCModRideHandle == -1, "a recycled car handle is dropped");
 +
-+    beginRide(veh, -1);
++    reset(veh);
 +    veh.kind = VEH_BOAT; veh.handle = 2;
 +    check(VCModPassengerEntry(&veh), "an empty boat is rideable");
 +    check(bVCModRideSpawnedDriver, "we crewed the boat ourselves");
-+    sit(veh);
++    seated(veh);
 +    events.clear();
 +    VCModUpdateRide(&playerPed);
 +    check(events.empty(), "a boat we crewed waits instead of guessing a water route");
++    nVCModRideStyle = VCMOD_RIDE_FAST;
++    VCModUpdateRide(&playerPed);
++    check(events.empty(), "and a style change does not route it either");
 +
-+    beginRide(veh, -1);
++    reset(veh);
 +    veh.kind = VEH_BOAT; veh.pDriver = &driverPed;
 +    check(VCModPassengerEntry(&veh), "a boat with a driver is rideable");
-+    sit(veh);
++    check(!bVCModRideSpawnedDriver, "a boat that came with a driver is not ours to credit");
++    seated(veh);
++    events.clear();
 +    VCModUpdateRide(&playerPed);
 +    check(veh.AutoPilot.m_nCarMission == MISSION_CRUISE, "a crewed traffic boat cruises");
 +
 +    beginRide(veh, 3);
-+    sit(veh);
-+    VCModUpdateRide(&playerPed);
++    seated(veh);
 +    check(veh.AutoPilot.m_nCarMission == MISSION_CRUISE, "an unresolvable zone falls back to cruise");
 +    std::printf("PASS: %d ride state checks\n", checks);
++}
++''')
++
++    def test_style_table(self):
++        run_cpp(ride_source("notice", "vehicle", "release", "handback", "standdown", "seatfree",
++                            "style", "drive", "pickup", "entry", "update") + r'''
++void riding(CVehicle &veh) {
++    reset(veh);
++    veh.status = STATUS_SIMPLE;
++    playerPed.bInVehicle = true; playerPed.m_pMyVehicle = &veh; playerPed.m_nPedState = PED_DRIVING;
++    veh.pDriver = &driverPed;
++    nVCModRideHandle = veh.handle; nVCModRidePhase = VCMOD_RIDE_DRIVING;
++}
++int main() {
++    CVehicle veh;
++
++    riding(veh);
++    VCModUpdateRide(&playerPed);
++    check(veh.AutoPilot.m_nDrivingStyle == DRIVINGSTYLE_STOP_FOR_CARS,
++          "safe is the style that scans for traffic and stops at lights");
++    check(veh.AutoPilot.m_nCruiseSpeed == 20, "safe cruises at traffic speed");
++    check(veh.status == STATUS_PHYSICS,
++          "safe also steers with real physics so the on-rails update cannot drag it");
++
++    riding(veh);
++    nVCModRideZone = 1;
++    VCModUpdateRide(&playerPed);
++    check(veh.AutoPilot.m_nCruiseSpeed == 25, "safe drives a little faster to a destination");
++    check(veh.AutoPilot.m_nDrivingStyle == DRIVINGSTYLE_STOP_FOR_CARS, "and still obeys the lights");
++
++    riding(veh);
++    nVCModRideStyle = VCMOD_RIDE_FAST;
++    VCModUpdateRide(&playerPed);
++    check(veh.AutoPilot.m_nDrivingStyle == DRIVINGSTYLE_PLOUGH_THROUGH,
++          "fast ploughs through traffic instead of slowing for it");
++    check(veh.AutoPilot.m_nCruiseSpeed == 45, "fast cruises well above traffic");
++    check(veh.status == STATUS_PHYSICS, "fast switches the car to real physics");
++
++    riding(veh);
++    nVCModRideStyle = VCMOD_RIDE_FAST; nVCModRideZone = 2;
++    VCModUpdateRide(&playerPed);
++    check(veh.AutoPilot.m_nCruiseSpeed == 55, "fast is quicker still with somewhere to be");
++    check(saw("goto:1:200,400"), "fast still routes to the chosen zone");
++
++    /* the selector is live mid-ride */
++    riding(veh);
++    VCModUpdateRide(&playerPed);
++    events.clear();
++    nVCModRideStyle = VCMOD_RIDE_FAST;
++    VCModUpdateRide(&playerPed);
++    check(veh.AutoPilot.m_nDrivingStyle == DRIVINGSTYLE_PLOUGH_THROUGH,
++          "changing the style re-applies it without reboarding");
++    check(nVCModRideAppliedStyle == VCMOD_RIDE_FAST, "and records what was applied");
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(events.empty(), "an unchanged style does not re-route every frame");
++
++    riding(veh);
++    VCModUpdateRide(&playerPed);
++    events.clear();
++    nVCModRideZone = 1;
++    VCModUpdateRide(&playerPed);
++    check(events.empty(), "the destination is read when the ride starts");
++    std::printf("PASS: %d ride style checks\n", checks);
++}
++''')
++
++    def test_skip_action(self):
++        run_cpp(ride_source("notice", "vehicle", "release", "handback", "standdown",
++                            "seatfree", "style", "drive", "skip", "pickup", "entry",
++                            "update", "skipride") + r'''
++void riding(CVehicle &veh) {
++    reset(veh);
++    playerPed.bInVehicle = true; playerPed.m_pMyVehicle = &veh; playerPed.m_nPedState = PED_DRIVING;
++    veh.pDriver = &driverPed;
++    nVCModRideHandle = veh.handle; nVCModRidePhase = VCMOD_RIDE_DRIVING;
++    nVCModRideAppliedStyle = nVCModRideStyle;
++}
++int main() {
++    CVehicle veh;
++
++    /* on foot the button travels with no car involved */
++    reset(veh);
++    nVCModRideZone = 2;
++    playerPed.pos = CVector(10.0f, 20.0f, 0.0f);
++    events.clear();
++    VCModSkipRide();
++    check(saw("teleport"), "Tommy is moved");
++    check(playerPed.pos.x == 150.0f && playerPed.pos.y == 250.0f,
++          "to the nearest road, not the zone centre");
++    check(playerPed.pos.z == 11.0f, "on the ground plus his own height");
++    check(!saw("onroad"), "there is no car to place on the road");
++    check(saw("scenecol") && saw("scene"), "the destination is streamed in first");
++    check(saw("collision"), "with its collision");
++    check(saw("clearspace"), "and the spot cleared");
++    check(saw("jumpcut"), "the camera accepts the jump");
++    check(saw("notice:skip the ride: arrived"), "and Tommy is told");
++    check(nVCModRidePhase == VCMOD_RIDE_NONE, "no ride is involved");
++
++    /* nowhere chosen means nowhere to go */
++    reset(veh);
++    nVCModRideZone = -1;
++    VCModSkipRide();
++    check(!saw("teleport"), "cruise has no destination to skip to");
++    check(saw("notice:skip the ride: pick a destination first"), "and it says why");
++
++    /* a zone with no road in it is refused */
++    reset(veh);
++    nVCModRideZone = 1;
++    noRoadNodes = true;
++    VCModSkipRide();
++    check(!saw("teleport"), "no road means no jump");
++    check(saw("notice:skip the ride: no road there"), "and it says why");
++
++    /* riding a street car: the jump lands and the driver parks there */
++    riding(veh);
++    nVCModRideZone = 1;
++    events.clear();
++    VCModSkipRide();
++    check(saw("teleport") && saw("onroad"), "the car is placed on the road after the jump");
++    check(veh.pos.x == 150.0f && veh.pos.y == 250.0f,
++          "the jump lands on the road node, not the zone centre");
++    check(veh.pos.z == 11.0f, "at ground height plus the car's own height");
++    check(veh.AutoPilot.m_nCarMission == MISSION_STOP_FOREVER &&
++          veh.AutoPilot.m_nCruiseSpeed == 0,
++          "the driver parks instead of driving on with Tommy inside");
++    check(nVCModRideHandle == -1 && nVCModRidePhase == VCMOD_RIDE_NONE, "and the ride is over");
++
++    /* a boarded street car is let back into traffic before the jump */
++    reset(veh);
++    veh.pDriver = &driverPed;
++    nVCModRideHandle = veh.handle; nVCModRidePhase = VCMOD_RIDE_BOARDING;
++    nVCModRideZone = 1;
++    events.clear();
++    VCModSkipRide();
++    check(veh.AutoPilot.m_nCarMission == MISSION_CRUISE, "the street car is released to traffic");
++    check(nVCModRidePhase == VCMOD_RIDE_NONE, "and the boarding ride is over");
++
++    /* a summoned limo loses its mission ownership before it is parked */
++    reset(veh);
++    veh.pDriver = &driverPed;
++    veh.VehicleCreatedBy = MISSION_VEHICLE;
++    CCarCtrl::NumMissionCars = 1;
++    playerPed.bInVehicle = true; playerPed.m_pMyVehicle = &veh;
++    nVCModRideHandle = veh.handle; nVCModRidePhase = VCMOD_RIDE_DRIVING;
++    bVCModRideSummoned = true;
++    nVCModRideZone = 1;
++    events.clear();
++    VCModSkipRide();
++    check(saw("unblip:1"), "the limo is let go");
++    check(veh.VehicleCreatedBy == RANDOM_VEHICLE && CCarCtrl::NumMissionCars == 0,
++          "back to traffic with the counts");
++    check(veh.AutoPilot.m_nCarMission == MISSION_STOP_FOREVER,
++          "but parked with Tommy still inside");
++    std::printf("PASS: %d skip-button checks\n", checks);
 +}
 +''')
 +
@@ -3922,15 +6092,10 @@ index 0000000..b76234f
 +    for (int i = 0; name[i] != '\0'; ++i) zones[index].translated[i] = (wchar) name[i];
 +    zones[index].translated[std::strlen(name)] = 0;
 +}
-+''' + labelBuffer + "\n" + label + "\n" + count + "\n" + at + r'''
-+static int checks;
-+void check(bool condition, const char *name) {
-+    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
-+    ++checks;
-+}
++''' + labelBuffer + "\n" + label + "\n" + count + "\n" + at + CHECK_HELPER + r'''
 +int main() {
 +    check(VCModRideZoneCount() == 1, "only the whole-map box means cruise alone");
-+    int16 ignoreIndex; const char *name;
++    const char *name;
 +    int32 zoneIndex;
 +    check(VCModRideZoneAt(0, &zoneIndex, &name, nil) && zoneIndex == -1,
 +          "entry 0 is cruise and stores no zone");
@@ -3967,13 +6132,23 @@ index 0000000..b76234f
 +        switched = braced(PANEL, "static bool *aVCModSwitched[]")
 +        rowlist = braced(PANEL, "static int32\nVCModRowList(int32 kind)")
 +        listcount = braced(PANEL, "static int32\nVCModListCount(int32 list)")
++        anchor = braced(PANEL, "static int32\nVCModListAnchorRow(int32 list)")
 +        pick = braced(PANEL, "static void\nVCModListPick(int32 list, int32 entry)")
-+        entry = braced(PLAYER, "bool\nVCModPassengerEntry(CVehicle *vehicle)")
++        label = braced(PANEL, "static const char *\nVCModListLabel(int32 list, int32 entry, bool *selected)")
++        click = braced(PANEL, "static void\nVCModClick(CPad *pad)")
++        render = braced(PANEL, "void\nVCModPanelRender(void)")
 +        process = braced(PLAYER, "void\nCPlayerPed::ProcessControl(void)")
++        update = braced(PLAYER, "static void\nVCModUpdateRide(CPlayerPed *player)")
++        drive = braced(PLAYER, "static void\nVCModRideDrive(CVehicle *veh)")
 +        playerinfo = (ROOT / "src/core/PlayerInfo.cpp").read_text()
++        names = re.search(r"aVCModRideStyleNames\[\] = \{(.*?)\};", PANEL, re.S).group(1)
 +
 +        self.assertIn("extern bool bVCModPassengerMode;", HEAD)
 +        self.assertIn("extern int32 nVCModRideZone;", HEAD)
++        self.assertIn("extern int32 nVCModRideStyle;", HEAD)
++        self.assertIn("int32 VCModRidePhase(void);", HEAD)
++        self.assertIn("void VCModCallDriver(void);", HEAD)
++        self.assertIn("void VCModSkipRide(void);", HEAD)
 +        self.assertIn("int32 VCModRideZoneCount(void);", HEAD)
 +        self.assertIn("bool VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos);", HEAD)
 +        self.assertIn("bool VCModPassengerEntry(CVehicle *vehicle);", HEAD)
@@ -3981,21 +6156,55 @@ index 0000000..b76234f
 +
 +        self.assertIn('"PASSENGER MODE"', rows)
 +        self.assertIn('"RIDE TO"', rows)
++        self.assertIn('"RIDE STYLE"', rows)
++        self.assertIn('"SKIP RIDE"', rows)
++        self.assertIn('"CALL DRIVER"', rows)
 +        self.assertLess(rows.index('"ADRENALINE MODE"'), rows.index('"PASSENGER MODE"'))
 +        self.assertLess(rows.index('"PASSENGER MODE"'), rows.index('"RIDE TO"'))
++        self.assertLess(rows.index('"RIDE TO"'), rows.index('"RIDE STYLE"'))
++        self.assertLess(rows.index('"RIDE STYLE"'), rows.index('"SKIP RIDE"'))
++        self.assertLess(rows.index('"SKIP RIDE"'), rows.index('"CALL DRIVER"'))
 +        # a mode that changes how Tommy travels is not part of the master row
 +        self.assertNotIn("bVCModPassengerMode", switched)
++        self.assertEqual(names.count('"'), 4, "one label per ride style")
++        # street idle adds two flag rows after the ride group
++        self.assertEqual(len(re.findall(r'\{ "', rows)), 23)
++        self.assertIn("#define VCMOD_RIDE_STYLE_ROW\t18", PANEL)
++        self.assertEqual(len(re.findall(r"VCMOD_RIDE_", braced(HEAD, "enum eVCModRidePhase"))), 5)
++
 +        self.assertIn("case VCMOD_ROW_RIDEZONE:\treturn VCMOD_LIST_RIDEZONE;", rowlist)
++        self.assertIn("case VCMOD_ROW_RIDESTYLE:\treturn VCMOD_LIST_RIDESTYLE;", rowlist)
 +        self.assertIn("case VCMOD_LIST_RIDEZONE:\treturn VCModRideZoneCount();", listcount)
++        self.assertIn("case VCMOD_LIST_RIDESTYLE:\treturn NUM_VCMOD_RIDE_STYLES;", listcount)
++        # three entries sit beside their own row; the long zone list still anchors high
++        self.assertIn("case VCMOD_LIST_RIDESTYLE:\treturn VCMOD_RIDE_STYLE_ROW;", anchor)
++        self.assertNotIn("VCMOD_LIST_RIDEZONE", anchor)
 +        self.assertIn("nVCModRideZone = zoneIndex", pick)
-+        update = braced(PLAYER, "static void\nVCModUpdateRide(CPlayerPed *player)")
-+        self.assertIn("VCModRideZoneAt(nVCModRideZone", update)
++        self.assertIn("nVCModRideStyle = entry;", pick)
++        self.assertIn("*selected = entry == nVCModRideStyle;", label)
++        self.assertIn("case VCMOD_ROW_CALLDRIVER:\n\t\t\tVCModCallDriver();", click)
++        self.assertIn("case VCMOD_ROW_SKIPRIDE:\n\t\t\tVCModSkipRide();", click)
++        self.assertIn("value = VCModDriverCell();", render)
++        self.assertIn("value = aVCModRideStyleNames[nVCModRideStyle];", render)
++        self.assertIn("H driver", render)
++
++        self.assertIn("VCModRideZoneAt(nVCModRideZone", drive)
++        self.assertIn("VCModUpdatePickup(player, veh);", update)
 +        self.assertIn("VCModUpdateRide(this);", process)
++        self.assertIn("KEYJUSTDOWN(VCMOD_DRIVERKEY)", process)
++        self.assertIn("#define VCMOD_DRIVERKEY 'H'", PLAYER)
 +        self.assertIn("!VCModPassengerEntry(carBelow)", playerinfo)
 +        self.assertIn('ReadIniIfExists("VC Mods", "PassengerMode", &bVCModPassengerMode);', INI)
 +        self.assertIn('ReadIniIfExists("VC Mods", "RideZone", &nVCModRideZone);', INI)
++        self.assertIn('ReadIniIfExists("VC Mods", "RideStyle", &nVCModRideStyle);', INI)
 +        self.assertIn("bool bVCModPassengerMode;", PANEL)
++        self.assertIn("int32 nVCModRideStyle;", PANEL)
 +        self.assertIn("TWEAKINT32(nVCModRideZone, -1, NUMMAPZONES - 1, 1);", PANEL)
++        self.assertIn("TWEAKINT32(nVCModRideStyle, 0, NUM_VCMOD_RIDE_STYLES - 1, 1);", PANEL)
++        self.assertIn('TWEAKFUNCN(VCModCallDriver, "call driver (H)");', PANEL)
++        self.assertIn('TWEAKFUNCN(VCModSkipRide, "skip ride (travel)");', PANEL)
++        self.assertNotIn("VCMOD_RIDE_SKIP", HEAD)
++        self.assertNotIn("VCMOD_RIDE_SKIP", PLAYER)
 +
 +
 +if __name__ == "__main__":
