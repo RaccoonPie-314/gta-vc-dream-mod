@@ -3,6 +3,7 @@
 Built against [https://github.com/mrxenginner/reVC](https://github.com/mrxenginner/reVC), branch `miami`, commit `a26fff4`.
 Mod commits on top of it:
 
+    d01bb3c Add traffic AI, path probe and interior mods
     d812138 Mount asset mods from a portable mods folder
     287138f Name the crime and its dispatch line per tier
     d61bfd3 Give the player's ride its own seat rule for later backup cars
@@ -41,9 +42,9 @@ Usage record for the build of this folder:
 
     System:   macOS arm64
     Operator: RaccoonPie-314
-    Date:     2026-11-08T05:25:45Z
+    Date:     2026-11-08T05:30:57Z
     Target:   https://github.com/mrxenginner/reVC
-    Hash:     4e956b1bddaaf73474563ea3d33e2bfb9f386c3f268c1068ab0e258afeea07a4
+    Hash:     a25a03b84d00fe22658c39aabb89b6460562428af19571772ed4d624a7d8caf6
 
 ## Rebuilding
 
