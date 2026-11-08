@@ -256,22 +256,27 @@ touched.
 With **PASSENGER MODE** on, the enter-vehicle key puts Tommy in a passenger seat
 and an NPC in the driver seat. Bikes use the pillion seat; planes, helis and
 trains are refused with a message, because there is no passenger seat to take.
-An empty car gets a driver through the engine's own `SetUpDriver()`, with the
-parked-car counters moved the same way the game moves them; a car a script or a
-mission owns is left alone, and if no driver can be made the press falls back to
-the stock driver entry rather than doing nothing.
+An unoccupied vehicle is left exactly as it is — passenger mode never puts a
+driver in it — so the press goes back to the game and Tommy gets in as the driver.
+Only a vehicle someone is already driving can be ridden along in.
 
 The car is held with `MISSION_STOP_FOREVER` until Tommy is actually seated, the
-same trick the shortcut taxi uses, so it cannot drive off without him. A car the
+same trick the shortcut taxi uses, so it cannot drive off without him. That hold is
+never left behind: walking more than 30 m from the car, fifteen seconds without
+getting in, getting into another car, or pressing the enter key beside a different
+car all hand the held car back to traffic at once, and the entry objective is
+cleared so Tommy does not chase a car that drove off. A car the
 traffic system is still simulating on rails (`STATUS_SIMPLE`) is promoted to real
 physics before its route is touched: entering as the driver does that when the
 player sits down, but entering as a passenger never does, and the on-rails update
 writes the car's position directly — it would drag the car sideways onto the path
 lane the moment the ride re-routes. **RIDE TO**
 then chooses what the driver does: cruise with traffic indefinitely, or route to a
-named district from the game's zone table and park on arrival. Getting out is the
-normal exit key; the street car is then handed back to traffic with the cruise
-speed, driving style and `m_fMaxTrafficSpeed` it had before the press, so its
+named district from the game's zone table and park on arrival. Arriving keeps the
+ride open with Tommy still in the car — the driver waits where he stopped, and
+getting out is what ends the ride. The street car is then handed back to traffic
+with the cruise speed, driving style and `m_fMaxTrafficSpeed` it had before the
+press, so its
 driver carries on like the traffic around him — generated traffic runs
 `STOP_FOR_CARS` at 9–14, and handing it back on the ride's faster `AVOID_CARS`
 setting made the driver look like he was bolting. A summoned limo, which never had
@@ -291,9 +296,11 @@ than 120 m away while it waits calls it off, the shortcut taxi's own rule.
 Boarding is the ordinary enter key. Your own limo is always boardable even with
 **PASSENGER MODE** off, because that flag governs street cars, not the one you
 called. Once Tommy is in the back seat the limo drives to **RIDE TO** with the
-selected **RIDE STYLE**. Calling again dismisses him; at the end of a ride he is
-handed back to traffic rather than deleted, with the counters and the blip moved
-the way `ClearShortCut` moves them.
+selected **RIDE STYLE**. Arriving parks him there until Tommy gets out; getting
+out hands the limo back to traffic rather than deleting it, with the counters and
+the blip moved the way `ClearShortCut` moves them. Calling again dismisses him —
+from the kerb he drives off at once, and from the back seat he waits for Tommy to
+get out before going back to ordinary traffic.
 
 **RIDE STYLE** applies to ordinary passenger rides too, and it can be changed
 mid-ride:

@@ -54,6 +54,223 @@ index 71b28f7..130aa70 100644
  #ifdef FIX_BUGS
  	for (int i = 0; i < NUMPLAYERS; i++)
  		nHandleOfPlayerPed[i] = CPools::GetPedPool()->GetIndex(CWorld::Players[i].m_pPed);
+diff --git a/src/core/FileMgr.cpp b/src/core/FileMgr.cpp
+index 7eaeb32..4236cff 100644
+--- a/src/core/FileMgr.cpp
++++ b/src/core/FileMgr.cpp
+@@ -31,6 +31,9 @@ struct myFILE
+ #define NUMFILES 20
+ static myFILE myfiles[NUMFILES];
+ 
++char CFileMgr::ms_modNames[CFileMgr::MAX_MODS][CFileMgr::MOD_NAME_SIZE];
++int CFileMgr::ms_numMods = 0;
++
+ 
+ #if !defined(_WIN32)
+ #include <dirent.h>
+@@ -208,6 +211,125 @@ FindGameRoot(char *path, size_t pathSize)
+ }
+ #endif
+ 
++static bool
++IsRelativeGamePath(const char *file)
++{
++	if(file[0] == '\0' || file[0] == '/' || file[0] == '\\')
++		return false;
++	if(((file[0] >= 'a' && file[0] <= 'z') || (file[0] >= 'A' && file[0] <= 'Z')) &&
++	   file[1] == ':')
++		return false;
++	return true;
++}
++
++static bool
++StartsWithMods(const char *file)
++{
++	static const char prefix[] = "mods/";
++	for(int i = 0; i < 5; i++){
++		char c = file[i];
++		if(c >= 'A' && c <= 'Z')
++			c += 'a' - 'A';
++		if(c != prefix[i])
++			return false;
++	}
++	return true;
++}
++
++static bool
++ValidModName(const char *name)
++{
++	if(name[0] == '\0')
++		return false;
++	for(; *name; name++){
++		char c = *name;
++		if(!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
++		     (c >= '0' && c <= '9') || c == '_' || c == '-'))
++			return false;
++	}
++	return true;
++}
++
++void
++CFileMgr::LoadMods(void)
++{
++	ms_numMods = 0;
++
++	FILE *file = fcaseopen("mods/mods.ini", "rb");
++	if(file == nil)
++		return;
++
++	char line[128];
++	while(fgets(line, sizeof(line), file)){
++		char *start = line;
++		while(*start == ' ' || *start == '\t')
++			start++;
++		char *end = start + strlen(start);
++		while(end > start && (end[-1] == '\n' || end[-1] == '\r' ||
++		                      end[-1] == ' ' || end[-1] == '\t'))
++			*--end = '\0';
++
++		if(*start == '\0' || *start == '#' || *start == ';' || *start == '[')
++			continue;
++		if(!ValidModName(start))
++			continue;
++		if(ms_numMods >= MAX_MODS){
++			debug("mods.ini: over %d mods, ignoring %s\n", MAX_MODS, start);
++			break;
++		}
++
++		strncpy(ms_modNames[ms_numMods], start, MOD_NAME_SIZE - 1);
++		ms_modNames[ms_numMods][MOD_NAME_SIZE - 1] = '\0';
++		ms_numMods++;
++	}
++
++	fclose(file);
++}
++
++bool
++CFileMgr::FindModFile(const char *file, char *path, size_t pathSize)
++{
++	if(ms_numMods == 0 || !IsRelativeGamePath(file) || StartsWithMods(file))
++		return false;
++
++	char normalized[FILEMGR_PATH_SIZE];
++	size_t length = strlen(file);
++	if(length >= sizeof(normalized))
++		return false;
++	for(size_t i = 0; i <= length; i++)
++		normalized[i] = file[i] == '\\' ? '/' : file[i];
++
++	// later entries in mods.ini win, so walk the list backwards
++	for(int i = ms_numMods - 1; i >= 0; i--){
++		int written = snprintf(path, pathSize, "mods/%s/%s", ms_modNames[i], normalized);
++		if(written < 0 || written >= (int)pathSize)
++			continue;
++		FILE *found = fcaseopen(path, "rb");
++		if(found){
++			fclose(found);
++			return true;
++		}
++	}
++	return false;
++}
++
++bool
++CFileMgr::FindModOverlay(int index, char *path, size_t pathSize)
++{
++	if(index < 0 || index >= ms_numMods)
++		return false;
++
++	int written = snprintf(path, pathSize, "mods/%s/overlay.img", ms_modNames[index]);
++	if(written < 0 || written >= (int)pathSize)
++		return false;
++
++	FILE *found = fcaseopen(path, "rb");
++	if(found == nil)
++		return false;
++	fclose(found);
++	return true;
++}
++
+ /* Force file to open as binary but remember if it was text mode */
+ static int
+ myfopen(const char *filename, const char *mode)
+@@ -215,11 +337,18 @@ myfopen(const char *filename, const char *mode)
+ 	int fd;
+ 	char realmode[10], *p;
+ 	const char *openPath = filename;
++	char modPath[FILEMGR_PATH_SIZE];
++	bool readOnly = mode[0] == 'r' && strchr(mode, '+') == nil;
++
++	if(readOnly && CFileMgr::FindModFile(filename, modPath, sizeof(modPath)))
++		openPath = modPath;
+ #ifdef __APPLE__
+-	char bundledPath[FILEMGR_PATH_SIZE];
+-	if(mode[0] == 'r' && strchr(mode, '+') == nil &&
+-	   CFileMgr::ResolveBundledGameFile(filename, bundledPath, sizeof(bundledPath)))
+-		openPath = bundledPath;
++	else {
++		char bundledPath[FILEMGR_PATH_SIZE];
++		if(readOnly &&
++		   CFileMgr::ResolveBundledGameFile(filename, bundledPath, sizeof(bundledPath)))
++			openPath = bundledPath;
++	}
+ #endif
+ 
+ 	for(fd = 1; fd < NUMFILES; fd++)
+@@ -382,6 +511,8 @@ CFileMgr::Initialise(void)
+ 	_getcwd(ms_rootDirName, sizeof(ms_rootDirName));
+ 	strcat(ms_rootDirName, "\\");
+ #endif
++
++	LoadMods();
+ }
+ 
+ bool
+diff --git a/src/core/FileMgr.h b/src/core/FileMgr.h
+index 745b44b..035eaa7 100644
+--- a/src/core/FileMgr.h
++++ b/src/core/FileMgr.h
+@@ -7,6 +7,9 @@ class CFileMgr
+ {
+ 	static char ms_rootDirName[FILEMGR_PATH_SIZE];
+ 	static char ms_dirName[FILEMGR_PATH_SIZE];
++	enum { MAX_MODS = 8, MOD_NAME_SIZE = 40 };
++	static char ms_modNames[MAX_MODS][MOD_NAME_SIZE];
++	static int ms_numMods;
+ public:
+ 	static void Initialise(void);
+ 	static void ChangeDir(const char *dir);
+@@ -24,6 +27,10 @@ public:
+ 	static int GetErrorReadWrite(int fd);
+ 	static bool ResolveBundledGameFile(const char *file, char *path, size_t pathSize);
+ 	static char *GetRootDirName() { return ms_rootDirName; }
++	static void LoadMods(void);
++	static int GetModCount(void) { return ms_numMods; }
++	static bool FindModFile(const char *file, char *path, size_t pathSize);
++	static bool FindModOverlay(int index, char *path, size_t pathSize);
+ };
+ 
+ #ifdef __APPLE__
+diff --git a/src/core/Game.cpp b/src/core/Game.cpp
+index 4248f14..8b615a7 100644
+--- a/src/core/Game.cpp
++++ b/src/core/Game.cpp
+@@ -1,5 +1,6 @@
+ #include "common.h"
+ #include "platform.h"
++#include "vcmodchase.h"
+ 
+ #include "Game.h"
+ #include "main.h"
+@@ -934,6 +935,8 @@ void CGame::Process(void)
+ 		CWorld::Process();
+ 		POP_MEMID();
+ 
++		VCModChaseUpdate();
++
+ 		gAccidentManager.Update();
+ 		CPacManPickups::Update();
+ 		CPickups::Update();
 diff --git a/src/core/PlayerInfo.cpp b/src/core/PlayerInfo.cpp
 index 36d05b8..b159fc0 100644
 --- a/src/core/PlayerInfo.cpp
@@ -77,10 +294,32 @@ index 36d05b8..b159fc0 100644
  						m_pPed->SetObjective(OBJECTIVE_ENTER_CAR_AS_PASSENGER, carBelow);
  					} else if (carBelow->IsBoat()) {
 diff --git a/src/core/Streaming.cpp b/src/core/Streaming.cpp
-index 83bb21b..ee418aa 100644
+index 83bb21b..af3a864 100644
 --- a/src/core/Streaming.cpp
 +++ b/src/core/Streaming.cpp
-@@ -1063,6 +1063,16 @@ CStreaming::HasSpecialCharLoaded(int32 id)
+@@ -203,6 +203,21 @@ CStreaming::Init2(void)
+ 	ms_loadedGangs = 0;
+ 	ms_currentPedLoading = NUMMODELSPERPEDGROUP;	// unused, whatever it is
+ 
++	// asset mods: each enabled mod may ship one overlay image. They mount after
++	// the stock archives, and LoadCdDirectory walks images from the last index
++	// down, so the last entry in mods/mods.ini wins on a name clash.
++	for(i = 0; i < CFileMgr::GetModCount(); i++){
++		char path[FILEMGR_PATH_SIZE];
++		if(!CFileMgr::FindModOverlay(i, path, sizeof(path)))
++			continue;
++		if(CdStreamGetNumImages() >= MAX_CDIMAGES){
++			debug("mods: no image slot left for %s\n", path);
++			continue;
++		}
++		debug("mods: mounting %s\n", path);
++		CdStreamAddImage(path);
++	}
++
+ 	LoadCdDirectory();
+ 
+ 	// allocate streaming buffers
+@@ -1063,6 +1078,16 @@ CStreaming::HasSpecialCharLoaded(int32 id)
  	return HasModelLoaded(id + MI_SPECIAL01);
  }
  
@@ -223,6 +462,1215 @@ index a160c06..e25b3a9 100644
  
  
  // Some overloads for simplicity
+diff --git a/src/extras/vcmodchase.cpp b/src/extras/vcmodchase.cpp
+new file mode 100644
+index 0000000..ebfc264
+--- /dev/null
++++ b/src/extras/vcmodchase.cpp
+@@ -0,0 +1,1140 @@
++#include "common.h"
++
++#include "vcmodchase.h"
++#include "vcmodpanel.h"
++#include "ModelIndices.h"
++#include "PlayerPed.h"
++#include "Wanted.h"
++#include "Pad.h"
++#include "ControllerConfig.h"
++#include "Hud.h"
++#include "World.h"
++#include "SpecialFX.h"
++#include "Radar.h"
++#include "Timer.h"
++#include "Automobile.h"
++#include "Boat.h"
++#include "WaterLevel.h"
++#include "CarCtrl.h"
++#include "PathFind.h"
++#include "Pools.h"
++#include "Population.h"
++#include "Script.h"
++#include "Streaming.h"
++#include "WeaponInfo.h"
++
++#include <stdio.h>
++
++#define VCMOD_CHASE_SPOTKEY		'J'
++#define VCMOD_CHASE_CAPTUREKEY	'U'
++#define VCMOD_CHASE_MARKER_ID	0x56434348
++#define VCMOD_CHASE_ENTER_NEAR	2.0f
++
++#define KEYJUSTDOWN(k)	ControlsManager.GetIsKeyboardKeyJustDown((RsKeyCodes)(k))
++
++// VCPD HQ forecourt, captured from the running game
++static const CVector vecVCModChaseStationHome = CVector(405.97f, -468.07f, 10.11f);
++// Debug spawn in front of the station, captured while standing outside
++static const CVector vecVCModChaseTeleport = CVector(398.57f, -470.29f, 11.75f);
++static CVector vecVCModChaseStation = vecVCModChaseStationHome;
++static bool bVCModChaseSpotSet = true;
++static int32 nVCModChaseBlip = -1;
++
++static int32 nVCModChaseTier;
++static int32 nVCModChaseVariant;	// VICE model 1-8
++static int32 nVCModChaseRank = 5;	// P0: every tier; P4 reads the ini
++static eVCModChaseCrime nVCModChaseCrime;
++static bool bVCModChaseUniformWanted;
++static bool bVCModChaseRestorePending;
++static int16 nVCModChasePreModel = -1;
++static bool bVCModChasePreNpcAnims;
++static uint32 nVCModChaseCooldownUntil;
++
++#define VCMOD_CHASE_LEADER_MODEL	MI_MALE01
++#define VCMOD_CHASE_LEADER_CAR		MI_SENTINEL
++#define VCMOD_CHASE_LEASH			350.0f
++#define VCMOD_CHASE_LEASH_TIME		3000
++#define VCMOD_CHASE_LEAD_START		200.0f	// head start along the road
++#define VCMOD_CHASE_BEAT_GAP		90.0f
++#define VCMOD_CHASE_GO_DELAY		10000
++#define VCMOD_CHASE_BEATS			3
++
++// a driving ped that dies is flagged for destruction by the engine, so the
++// leader is held by handle and re-resolved every use
++static int32 nVCModChaseLeaderHandle = -1;
++static CVehicle *pVCModChaseLeaderCar;
++static int32 nVCModChaseLeaderBlip = -1;
++static uint32 nVCModChaseAwaySince;
++
++#define VCMOD_CHASE_BEAT_NEAR	7.0f
++#define VCMOD_CHASE_STOP_TIME	5000
++
++static const CVector vecVCModChaseBeatAnchor[2] = {
++	CVector(398.57f, -560.00f, 11.75f),
++	CVector(398.57f, -650.00f, 11.75f),
++};
++static CVector vecVCModChaseLeaderSpawn;
++static CVector vecVCModChaseBeat[VCMOD_CHASE_BEATS];
++static int32 nVCModChaseBeatCount;
++static int32 nVCModChaseBeat;
++static CVector vecVCModChaseDock;
++static CVector vecVCModChaseWater;
++static CVehicle *pVCModChaseBoat;
++static bool bVCModChaseBoating;
++static uint32 nVCModChaseBoatAt;
++static uint32 nVCModChaseBoatDeadline;
++static uint32 nVCModChaseStopUntil;
++static bool bVCModChaseAtStop;
++static uint32 nVCModChaseGoTime;
++static bool bVCModChaseGo;
++
++#define VCMOD_CHASE_SWAP_CAR			MI_CHEETAH
++#define VCMOD_CHASE_ACCOMPLICE_MODEL	MI_HMYST	// smartly dressed male, fits the crew
++#define VCMOD_CHASE_SQUAD_MAX			6	// upper bound; the car's seats decide
++#define VCMOD_CHASE_SQUAD_RANGE			120.0f
++#define VCMOD_CHASE_BOAT				MI_SPEEDER
++#define VCMOD_CHASE_BOAT_ESCAPE			12000
++
++static CVehicle *pVCModChaseSwapCar;
++static CVehicle *pVCModChaseAbandonedCar;
++static int32 nVCModChaseAccompliceHandle = -1;
++static CVehicle *pVCModChaseSquadCar;
++static int32 nVCModChaseSquadHandle[VCMOD_CHASE_SQUAD_MAX] = { -1, -1, -1, -1, -1, -1 };
++static int32 nVCModChaseSquadCount;
++static bool bVCModChaseSquadEngaged;
++static bool bVCModChaseSwapping;
++static uint32 nVCModChaseSwapDeadline;
++static bool bVCModChaseNeverWantedOn;
++static bool bVCModChasePreNeverWanted;
++static bool bVCModChaseWantedMuted;
++static bool bVCModChasePreIgnoredByCops;
++static bool bVCModChasePreIgnoredByEveryone;
++
++bool
++VCModChaseNextState(eVCModChaseState *state, eVCModChaseEvent event)
++{
++	eVCModChaseState old = *state;
++
++	switch (old) {
++	case VCMOD_CHASE_OFF:
++		if (event == VCMOD_CHASE_EV_ENTER_MARKER)
++			*state = VCMOD_CHASE_TIER_SELECT;
++		break;
++	case VCMOD_CHASE_TIER_SELECT:
++		if (event == VCMOD_CHASE_EV_CONFIRM)
++			*state = VCMOD_CHASE_BRIEFING;
++		else if (event == VCMOD_CHASE_EV_CANCEL)
++			*state = VCMOD_CHASE_OFF;
++		break;
++	case VCMOD_CHASE_BRIEFING:
++		if (event == VCMOD_CHASE_EV_CONFIRM)
++			*state = VCMOD_CHASE_RUNNING;
++		else if (event == VCMOD_CHASE_EV_CANCEL)
++			*state = VCMOD_CHASE_OFF;
++		break;
++	case VCMOD_CHASE_RUNNING:
++		if (event == VCMOD_CHASE_EV_FINISH || event == VCMOD_CHASE_EV_CANCEL)
++			*state = VCMOD_CHASE_OFF;
++		break;
++	}
++	return *state != old;
++}
++
++eVCModChaseUnit
++VCModChaseUnitForTier(int32 tier)
++{
++	switch (tier) {
++	case 1: return VCMOD_UNIT_COP;
++	case 2: return VCMOD_UNIT_SWAT;
++	case 3: return VCMOD_UNIT_VICE;
++	case 4: return VCMOD_UNIT_FBI;
++	case 5: return VCMOD_UNIT_ARMY;
++	default: return VCMOD_UNIT_NONE;
++	}
++}
++
++int16
++VCModChaseUnitModel(eVCModChaseUnit unit)
++{
++	switch (unit) {
++	case VCMOD_UNIT_COP: return MI_COP;
++	case VCMOD_UNIT_SWAT: return MI_SWAT;
++	case VCMOD_UNIT_VICE: return MI_VICE1;
++	case VCMOD_UNIT_FBI: return MI_FBI;
++	case VCMOD_UNIT_ARMY: return MI_ARMY;
++	default: return -1;
++	}
++}
++
++// One crime per tier for now; the dispatch text and the rating come from it.
++eVCModChaseCrime
++VCModChaseCrimeForTier(int32 tier)
++{
++	switch (tier) {
++	case 2: return VCMOD_CRIME_JEWELRY;
++	case 3: return VCMOD_CRIME_PROTECTION;
++	case 4: return VCMOD_CRIME_BANK;
++	case 5: return VCMOD_CRIME_DRUG_PLANE;
++	default: return VCMOD_CRIME_STORE;
++	}
++}
++
++const char *
++VCModChaseCrimeName(eVCModChaseCrime crime)
++{
++	switch (crime) {
++	case VCMOD_CRIME_STORE: return "store till";
++	case VCMOD_CRIME_JEWELRY: return "jewelry grab";
++	case VCMOD_CRIME_PROTECTION: return "protection round";
++	case VCMOD_CRIME_BANK: return "bank job";
++	case VCMOD_CRIME_DRUG_PLANE: return "drug plane";
++	default: return "job";
++	}
++}
++
++const char *
++VCModChaseCrimeDispatch(eVCModChaseCrime crime)
++{
++	switch (crime) {
++	case VCMOD_CRIME_STORE: return "armed robbery at a 24/7";
++	case VCMOD_CRIME_JEWELRY: return "smash and grab downtown";
++	case VCMOD_CRIME_PROTECTION: return "extortion round on Vice Point";
++	case VCMOD_CRIME_BANK: return "bank job, shots fired";
++	case VCMOD_CRIME_DRUG_PLANE: return "smuggler plane down at Escobar";
++	default: return "armed robbery";
++	}
++}
++
++int16
++VCModChaseViceModel(int32 variant)
++{
++	if (variant < 0)
++		variant = 0;
++	if (variant > 7)
++		variant = 7;
++	return MI_VICE1 + variant;
++}
++
++bool
++VCModChaseTierAllowed(int32 tier, int32 rank)
++{
++	return tier >= 1 && tier <= 5 && tier <= rank;
++}
++
++bool
++VCModChaseHasEscaped(float dist, uint32 awaySince, uint32 now)
++{
++	return dist > VCMOD_CHASE_LEASH && awaySince != 0 && now - awaySince > VCMOD_CHASE_LEASH_TIME;
++}
++
++bool
++VCModChaseLeaderPressured(float dist, bool lineOfSight)
++{
++	return dist < 25.0f && lineOfSight;
++}
++
++int32
++VCModChaseSquadForThreat(int32 tier, int32 crew, int32 seats, bool withPlayer)
++{
++	// the leader counts as crew; each rating step and each extra body pulls in
++	// another partner
++	int32 want = tier * 2 - 1 + (crew - 1);
++	if (want < 1)
++		want = 1;
++	// the player takes a seat in his own ride; a backup crew fills the whole
++	// car, driver included, because the player is already with the first team
++	int32 free = seats - (withPlayer ? 1 : 0);
++	if (free < 0)
++		free = 0;
++	if (want > free)
++		want = free;
++	return want;
++}
++
++bool
++VCModChaseRestoreDue(bool pending, bool inControl, bool playerExists)
++{
++	return pending && inControl && playerExists;
++}
++
++bool
++VCModChaseShouldShowMarker(eVCModChaseState state, bool spotSet)
++{
++	return spotSet && state == VCMOD_CHASE_OFF;
++}
++
++static eVCModChaseState nVCModChaseState;
++
++static void
++VCModChaseNotice(const char *text)
++{
++	static wchar notice[96];
++	int32 i;
++	for (i = 0; i < (int32) ARRAY_SIZE(notice) - 1 && text[i] != '\0'; i++)
++		notice[i] = (wchar) text[i];
++	notice[i] = 0;
++	CHud::SetHelpMessage(notice, false);
++}
++
++static const char *
++VCModChaseUnitName(eVCModChaseUnit unit)
++{
++	switch (unit) {
++	case VCMOD_UNIT_COP: return "COP";
++	case VCMOD_UNIT_SWAT: return "SWAT";
++	case VCMOD_UNIT_VICE: return "VICE";
++	case VCMOD_UNIT_FBI: return "FBI";
++	case VCMOD_UNIT_ARMY: return "ARMY";
++	default: return "none";
++	}
++}
++
++static void
++VCModChaseApplyUniform(void)
++{
++	CPlayerPed *player = FindPlayerPed();
++	if (player == nil || !player->IsPedInControl())
++		return;
++
++	if (nVCModChasePreModel < 0) {
++		nVCModChasePreModel = player->GetModelIndex();
++		bVCModChasePreNpcAnims = bVCModPlayerNpcAnims;
++	}
++	bVCModPlayerNpcAnims = false;
++
++	eVCModChaseUnit unit = VCModChaseUnitForTier(nVCModChaseTier);
++	int16 model = unit == VCMOD_UNIT_VICE ? VCModChaseViceModel(nVCModChaseVariant)
++	                                      : VCModChaseUnitModel(unit);
++	if (model >= 0 && VCModApplyPedModel(model))
++		bVCModChaseUniformWanted = false;
++}
++
++static void
++VCModChaseRestoreUniform(void)
++{
++	if (nVCModChasePreModel >= 0)
++		bVCModChaseRestorePending = true;
++}
++
++static CPed *
++VCModChaseLeader(void)
++{
++	return nVCModChaseLeaderHandle >= 0 ? CPools::GetPedPool()->GetAt(nVCModChaseLeaderHandle) : nil;
++}
++
++static void
++VCModChaseRemovePed(CPed *&ped)
++{
++	if (ped == nil)
++		return;
++	fprintf(stderr, "VCMOD CHASE cleanup ped %p\n", (void*)ped);
++	CWorld::Remove(ped);
++	CWorld::RemoveReferencesToDeletedObject(ped);
++	delete ped;
++	ped = nil;
++}
++
++// The squad is on the player's side, but the game still treats the player as a
++// car thief for taking a law-enforcement vehicle, and a cop then walks him in.
++static void
++VCModChaseMuteWanted(bool mute)
++{
++	CPlayerPed *player = FindPlayerPed();
++	CWanted *wanted = player != nil ? player->m_pWanted : nil;
++	if (mute) {
++		if (wanted != nil && !bVCModChaseWantedMuted) {
++			bVCModChasePreIgnoredByCops = wanted->m_bIgnoredByCops;
++			bVCModChasePreIgnoredByEveryone = wanted->m_bIgnoredByEveryone;
++			wanted->m_bIgnoredByCops = true;
++			wanted->m_bIgnoredByEveryone = true;
++			bVCModChaseWantedMuted = true;
++		}
++	} else if (bVCModChaseWantedMuted) {
++		if (wanted != nil) {
++			wanted->m_bIgnoredByCops = bVCModChasePreIgnoredByCops;
++			wanted->m_bIgnoredByEveryone = bVCModChasePreIgnoredByEveryone;
++		}
++		bVCModChaseWantedMuted = false;
++	}
++}
++
++static void
++VCModChaseRemoveVehicle(CVehicle *&veh)
++{
++	if (veh == nil)
++		return;
++	fprintf(stderr, "VCMOD CHASE cleanup car %p\n", (void*)veh);
++	CPlayerPed *player = FindPlayerPed();
++	if (player != nil && player->m_pMyVehicle == veh) {
++		// never free a car the player is sitting in; let traffic own it instead
++		veh->VehicleCreatedBy = RANDOM_VEHICLE;
++		CCarCtrl::NumMissionCars--;
++		CCarCtrl::NumRandomCars++;
++		veh = nil;
++		return;
++	}
++	CWorld::Remove(veh);
++	CWorld::RemoveReferencesToDeletedObject(veh);
++	delete veh;
++	veh = nil;
++}
++
++static void
++VCModChaseClearScenario(void)
++{
++	if (nVCModChaseLeaderBlip >= 0) {
++		CRadar::ClearBlip(nVCModChaseLeaderBlip);
++		nVCModChaseLeaderBlip = -1;
++	}
++	if (nVCModChaseAccompliceHandle >= 0) {
++		CPed *ped = CPools::GetPedPool()->GetAt(nVCModChaseAccompliceHandle);
++		VCModChaseRemovePed(ped);
++		nVCModChaseAccompliceHandle = -1;
++	}
++	for (int32 i = 0; i < VCMOD_CHASE_SQUAD_MAX; i++) {
++		if (nVCModChaseSquadHandle[i] < 0)
++			continue;
++		CPed *ped = CPools::GetPedPool()->GetAt(nVCModChaseSquadHandle[i]);
++		VCModChaseRemovePed(ped);
++		nVCModChaseSquadHandle[i] = -1;
++	}
++	nVCModChaseSquadCount = 0;
++	VCModChaseRemoveVehicle(pVCModChaseSquadCar);
++	VCModChaseRemoveVehicle(pVCModChaseBoat);
++	bVCModChaseBoating = false;
++	nVCModChaseBoatAt = 0;
++	nVCModChaseBoatDeadline = 0;
++	CPed *leader = VCModChaseLeader();
++	VCModChaseRemovePed(leader);
++	nVCModChaseLeaderHandle = -1;
++	VCModChaseRemoveVehicle(pVCModChaseAbandonedCar);
++	VCModChaseRemoveVehicle(pVCModChaseSwapCar);
++	VCModChaseRemoveVehicle(pVCModChaseLeaderCar);
++	bVCModChaseSwapping = false;
++	nVCModChaseSwapDeadline = 0;
++	bVCModChaseSquadEngaged = false;
++	nVCModChaseAwaySince = 0;
++	nVCModChaseBeat = 0;
++	nVCModChaseStopUntil = 0;
++	bVCModChaseAtStop = false;
++	nVCModChaseGoTime = 0;
++	bVCModChaseGo = false;
++	if (bVCModChaseNeverWantedOn) {
++		bVCModNeverWanted = bVCModChasePreNeverWanted;
++		bVCModChaseNeverWantedOn = false;
++	}
++	VCModChaseMuteWanted(false);
++}
++
++static CVector
++VCModChaseBeatCoors(int32 beat)
++{
++	return vecVCModChaseBeat[beat];
++}
++
++// A node at or below the water line is a boat lane, not a road.
++static bool
++VCModChaseInWater(CVector p)
++{
++	float level = 0.0f;
++	return CWaterLevel::GetWaterLevel(p.x, p.y, p.z, &level, true) && p.z <= level + 1.0f;
++}
++
++// Road nodes are chosen by distance from the station. Walking the path links
++// is not reliable in this data, and the car only has to drive to the point.
++static int32
++VCModChaseRoadNode(float distance, CVector *dir, bool keepBearing)
++{
++	int32 best = -1;
++	float bestErr = 1.0e6f;
++	for (int32 i = 0; i < ThePaths.m_numCarPathNodes; i++) {
++		CPathNode *n = &ThePaths.m_pathNodes[i];
++		if (n->bWaterPath || n->bDisabled || n->bBetweenLevels)
++			continue;
++		CVector np = n->GetPosition();
++		if (VCModChaseInWater(np))
++			continue;
++		CVector off = np - vecVCModChaseStation;
++		off.z = 0.0f;
++		float d = off.Magnitude();
++		if (d < 1.0f)
++			continue;
++		if (keepBearing && dir != nil && (off.x*dir->x + off.y*dir->y) < 0.5f * d)
++			continue;
++		float err = Abs(d - distance);
++		if (err < bestErr) {
++			bestErr = err;
++			best = i;
++		}
++	}
++	return best;
++}
++
++// A dock is a car node that ends beside a water path; the boat leaves from there.
++static bool
++VCModChaseFindDock(CVector near)
++{
++	float best = 700.0f;
++	bool found = false;
++	for (int32 i = 0; i < ThePaths.m_numPathNodes; i++) {
++		CPathNode *w = &ThePaths.m_pathNodes[i];
++		if (!w->bWaterPath)
++			continue;
++		CVector wp = w->GetPosition();
++		if ((wp - near).Magnitude2D() > 600.0f)
++			continue;
++		int32 c = ThePaths.FindNodeClosestToCoors(wp, PATH_CAR, 25.0f, true, true);
++		if (c < 0)
++			continue;
++		CPathNode *d = &ThePaths.m_pathNodes[c];
++		if (d->bWaterPath)
++			continue;
++		CVector dp = d->GetPosition();
++		float dist = (dp - near).Magnitude2D();
++		if (dist < best) {
++			best = dist;
++			vecVCModChaseDock = dp;
++			vecVCModChaseWater = wp;
++			found = true;
++		}
++	}
++	return found;
++}
++
++// Head start and two stops, laid out at 200/290/380 m from the station along
++// the bearing of the spawn node, so the leader never starts on top of the
++// squad car parked at the station.
++static bool
++VCModChaseBuildRoute(void)
++{
++	int32 spawn = VCModChaseRoadNode(VCMOD_CHASE_LEAD_START, nil, false);
++	if (spawn < 0)
++		return false;
++	vecVCModChaseLeaderSpawn = ThePaths.m_pathNodes[spawn].GetPosition();
++
++	CVector dir = vecVCModChaseLeaderSpawn - vecVCModChaseStation;
++	dir.z = 0.0f;
++	dir.Normalise2D();
++
++	int32 b0 = VCModChaseRoadNode(VCMOD_CHASE_LEAD_START + VCMOD_CHASE_BEAT_GAP, &dir, true);
++	int32 b1 = VCModChaseRoadNode(VCMOD_CHASE_LEAD_START + VCMOD_CHASE_BEAT_GAP * 2.0f, &dir, true);
++	if (b0 < 0)
++		b0 = VCModChaseRoadNode(VCMOD_CHASE_LEAD_START + VCMOD_CHASE_BEAT_GAP, &dir, false);
++	if (b1 < 0)
++		b1 = VCModChaseRoadNode(VCMOD_CHASE_LEAD_START + VCMOD_CHASE_BEAT_GAP * 2.0f, &dir, false);
++	if (b0 < 0 || b1 < 0)
++		return false;
++	vecVCModChaseBeat[0] = ThePaths.m_pathNodes[b0].GetPosition();
++	vecVCModChaseBeat[1] = ThePaths.m_pathNodes[b1].GetPosition();
++
++	if (VCModChaseFindDock(vecVCModChaseStation)) {
++		vecVCModChaseBeat[2] = vecVCModChaseDock;
++		nVCModChaseBeatCount = 3;
++	} else {
++		nVCModChaseBeatCount = 2;
++	}
++	return true;
++}
++
++static void
++VCModChaseDriveTo(CVector dest)
++{
++	CCarCtrl::JoinCarWithRoadSystemGotoCoors(pVCModChaseLeaderCar, dest, false);
++	pVCModChaseLeaderCar->AutoPilot.m_nCarMission = MISSION_GOTOCOORDS;
++	pVCModChaseLeaderCar->AutoPilot.m_nCruiseSpeed = 40;
++	pVCModChaseLeaderCar->AutoPilot.m_nTempAction = TEMPACT_NONE;
++	pVCModChaseLeaderCar->SetStatus(STATUS_PHYSICS);
++}
++
++static void
++VCModChaseStopHere(void)
++{
++	pVCModChaseLeaderCar->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
++	pVCModChaseLeaderCar->AutoPilot.m_nCruiseSpeed = 0;
++	pVCModChaseLeaderCar->AutoPilot.m_nTempAction = TEMPACT_NONE;
++}
++
++static CVehicle *
++VCModChaseSpawnMissionCar(int16 model, CVector pos)
++{
++	CStreaming::RequestModel(model, 0);
++	CStreaming::LoadAllRequestedModels(false);
++	if (!CStreaming::HasModelLoaded(model)) {
++		VCModChaseNotice("chase: a mission car cannot be loaded");
++		return nil;
++	}
++
++	CAutomobile *car = new CAutomobile(model, RANDOM_VEHICLE);
++	if (car == nil)
++		return nil;
++	// the constructor locks police cars until a cop opens them; the player has
++	// to be able to get into the squad car
++	car->m_nDoorLock = CARLOCK_UNLOCKED;
++	pos.z += car->GetDistanceFromCentreOfMassToBaseOfModel();
++	CTheScripts::ClearSpaceForMissionEntity(pos, car);
++	car->SetPosition(pos);
++	car->PlaceOnRoadProperly();
++	car->SetStatus(STATUS_PHYSICS);
++	car->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
++	car->AutoPilot.m_nCruiseSpeed = 0;
++	car->VehicleCreatedBy = MISSION_VEHICLE;
++	CCarCtrl::NumRandomCars--;
++	CCarCtrl::NumMissionCars++;
++	CWorld::Add(car);
++	return car;
++}
++
++static bool
++VCModChaseStartSwap(void)
++{
++	CPed *leader = VCModChaseLeader();
++	if (leader == nil)
++		return false;
++	CVector pos = pVCModChaseLeaderCar->GetPosition() + pVCModChaseLeaderCar->GetRight() * 6.0f;
++	pVCModChaseSwapCar = VCModChaseSpawnMissionCar(VCMOD_CHASE_SWAP_CAR, pos);
++	if (pVCModChaseSwapCar == nil)
++		return false;
++	leader->SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, pVCModChaseSwapCar);
++	nVCModChaseSwapDeadline = CTimer::GetTimeInMilliseconds() + 4000;
++	bVCModChaseSwapping = true;
++	return true;
++}
++
++static void
++VCModChaseFinishSwap(void)
++{
++	CPed *leader = VCModChaseLeader();
++	CVehicle *old = pVCModChaseLeaderCar;
++	if (leader != nil && leader->m_pMyVehicle != pVCModChaseSwapCar) {
++		// the walk over did not finish in time; seat him rather than stall the beat
++		if (old->pDriver == leader)
++			old->pDriver = nil;
++		leader->SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, pVCModChaseSwapCar);
++		leader->WarpPedIntoCar(pVCModChaseSwapCar);
++	}
++	pVCModChaseAbandonedCar = old;
++	pVCModChaseLeaderCar = pVCModChaseSwapCar;
++	pVCModChaseSwapCar = nil;
++	bVCModChaseSwapping = false;
++	bVCModChaseAtStop = false;
++	nVCModChaseBeat++;
++	VCModChaseDriveTo(VCModChaseBeatCoors(nVCModChaseBeat));
++}
++
++static CPed *
++VCModChaseSquadPed(int32 i)
++{
++	return nVCModChaseSquadHandle[i] >= 0 ? CPools::GetPedPool()->GetAt(nVCModChaseSquadHandle[i]) : nil;
++}
++
++static CPed *
++VCModChaseAccomplice(void)
++{
++	return nVCModChaseAccompliceHandle >= 0 ? CPools::GetPedPool()->GetAt(nVCModChaseAccompliceHandle) : nil;
++}
++
++// The patrol tier is the teaching run: the leader works alone, every higher
++// tier brings the partner he picks up later.
++static int32
++VCModChaseCrewSize(int32 tier)
++{
++	return tier >= 2 ? 2 : 1;
++}
++
++static int16
++VCModChaseTransportModel(eVCModChaseUnit unit)
++{
++	switch (unit) {
++	case VCMOD_UNIT_COP: return MI_POLICE;
++	case VCMOD_UNIT_SWAT: return MI_ENFORCER;
++	case VCMOD_UNIT_VICE: return MI_CHEETAH;
++	case VCMOD_UNIT_FBI: return MI_FBIRANCH;
++	case VCMOD_UNIT_ARMY: return MI_BARRACKS;
++	default: return MI_ENFORCER;
++	}
++}
++
++static void
++VCModChaseSpawnSquad(CPlayerPed *player)
++{
++	eVCModChaseUnit unit = VCModChaseUnitForTier(nVCModChaseTier);
++	int16 pedModel = unit == VCMOD_UNIT_VICE ? VCModChaseViceModel(nVCModChaseVariant)
++	                                         : VCModChaseUnitModel(unit);
++	int16 carModel = VCModChaseTransportModel(unit);
++	CStreaming::RequestModel(pedModel, 0);
++	CStreaming::RequestModel(carModel, 0);
++	CStreaming::RequestModel(CWeaponInfo::GetWeaponInfo(WEAPONTYPE_UZI)->m_nModelId, 0);
++	CStreaming::LoadAllRequestedModels(false);
++
++	if (CStreaming::HasModelLoaded(carModel)) {
++		int32 node = ThePaths.FindNodeClosestToCoors(player->GetPosition(), PATH_CAR, 60.0f, true, true);
++		CVector at = node >= 0 ? ThePaths.m_pathNodes[node].GetPosition() : player->GetPosition();
++		pVCModChaseSquadCar = VCModChaseSpawnMissionCar(carModel, at);
++	}
++	if (pVCModChaseSquadCar == nil || !CStreaming::HasModelLoaded(pedModel))
++		return;
++
++	// the response scales with the crew and the tier, so a heavy chase fills
++	// every seat while a patrol call rides as a pair; seats include the wheel
++	int32 seats = pVCModChaseSquadCar->m_nNumMaxPassengers + 1;
++	if (seats > VCMOD_CHASE_SQUAD_MAX + 1)
++		seats = VCMOD_CHASE_SQUAD_MAX + 1;
++	// the vice car is a two seater, so that tier always rides as a pair
++	if (unit == VCMOD_UNIT_VICE && seats > 2)
++		seats = 2;
++	int32 want = VCModChaseSquadForThreat(nVCModChaseTier, VCModChaseCrewSize(nVCModChaseTier), seats, true);
++	int32 made = 0;
++	for (int32 i = 0; i < want; i++) {
++		CVector at = pVCModChaseSquadCar->GetPosition()
++			+ pVCModChaseSquadCar->GetRight() * ((i - (want - 1) * 0.5f) * 2.0f)
++			- pVCModChaseSquadCar->GetForward() * 2.0f;
++		CPed *ped = CPopulation::AddPed(PEDTYPE_COP, pedModel, at);
++		if (ped == nil)
++			continue;
++		ped->CharCreatedBy = MISSION_CHAR;
++		ped->bIsPlayerFriend = true;
++		ped->GiveWeapon(WEAPONTYPE_UZI, 1000);
++		ped->SetCurrentWeapon(WEAPONTYPE_UZI);
++		ped->SetObjective(OBJECTIVE_ENTER_CAR_AS_PASSENGER, pVCModChaseSquadCar);
++		nVCModChaseSquadHandle[made++] = CPools::GetPedPool()->GetIndex(ped);
++	}
++	nVCModChaseSquadCount = made;
++	fprintf(stderr, "VCMOD CHASE squad car %p seats %d crew %d\n",
++		(void*)pVCModChaseSquadCar, seats, made);
++}
++
++static void
++VCModChaseSpawnAccomplice(void)
++{
++	CStreaming::RequestModel(VCMOD_CHASE_ACCOMPLICE_MODEL, 0);
++	CStreaming::LoadAllRequestedModels(false);
++	if (!CStreaming::HasModelLoaded(VCMOD_CHASE_ACCOMPLICE_MODEL))
++		return;
++
++	CVector pos = pVCModChaseLeaderCar->GetPosition() + pVCModChaseLeaderCar->GetRight() * 4.0f;
++	CPed *ped = CPopulation::AddPed(PEDTYPE_CIVMALE, VCMOD_CHASE_ACCOMPLICE_MODEL, pos);
++	if (ped == nil)
++		return;
++	ped->CharCreatedBy = MISSION_CHAR;
++	ped->bIsPlayerFriend = false;
++	ped->SetObjective(OBJECTIVE_ENTER_CAR_AS_PASSENGER, pVCModChaseLeaderCar);
++	nVCModChaseAccompliceHandle = CPools::GetPedPool()->GetIndex(ped);
++}
++
++static bool
++VCModChaseSpawnBoat(void)
++{
++	CStreaming::RequestModel(VCMOD_CHASE_BOAT, 0);
++	CStreaming::LoadAllRequestedModels(false);
++	if (!CStreaming::HasModelLoaded(VCMOD_CHASE_BOAT))
++		return false;
++
++	CVector pos = vecVCModChaseWater;
++	float water = pos.z;
++	CWaterLevel::GetWaterLevel(pos.x, pos.y, pos.z + 2.0f, &water, false);
++	pos.z = water;
++
++	CBoat *boat = new CBoat(VCMOD_CHASE_BOAT, RANDOM_VEHICLE);
++	if (boat == nil)
++		return false;
++	boat->SetPosition(pos);
++	boat->SetStatus(STATUS_PHYSICS);
++	boat->bEngineOn = false;
++	boat->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
++	boat->AutoPilot.m_nCruiseSpeed = 0;
++	boat->VehicleCreatedBy = MISSION_VEHICLE;
++	CCarCtrl::NumRandomCars--;
++	CCarCtrl::NumMissionCars++;
++	CWorld::Add(boat);
++
++	pVCModChaseBoat = boat;
++	CPed *leader = VCModChaseLeader();
++	if (leader != nil)
++		leader->SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, boat);
++	nVCModChaseBoatDeadline = CTimer::GetTimeInMilliseconds() + 2000;
++	return true;
++}
++
++static void
++VCModChaseBoatEscape(void)
++{
++	CPed *leader = VCModChaseLeader();
++	CVehicle *old = pVCModChaseLeaderCar;
++	if (leader != nil && leader->m_pMyVehicle != pVCModChaseBoat) {
++		// the walk to the dock did not finish in time; seat him rather than stall
++		if (old->pDriver == leader)
++			old->pDriver = nil;
++		leader->SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, pVCModChaseBoat);
++		leader->WarpPedIntoCar(pVCModChaseBoat);
++	}
++	VCModChaseRemoveVehicle(old);
++
++	CVector dir = vecVCModChaseWater - vecVCModChaseDock;
++	dir.z = 0.0f;
++	dir.Normalise();
++	pVCModChaseBoat->AutoPilot.m_vecDestinationCoors = vecVCModChaseWater + dir * 150.0f;
++	pVCModChaseBoat->AutoPilot.m_nCarMission = MISSION_GOTOCOORDS_ASTHECROWSWIMS;
++	pVCModChaseBoat->AutoPilot.m_nCruiseSpeed = 30;
++	pVCModChaseBoat->AutoPilot.m_nAntiReverseTimer = CTimer::GetTimeInMilliseconds();
++	pVCModChaseBoat->SetStatus(STATUS_PHYSICS);
++	pVCModChaseBoat->bEngineOn = true;
++
++	pVCModChaseLeaderCar = pVCModChaseBoat;
++	pVCModChaseBoat = nil;
++	bVCModChaseBoating = true;
++	nVCModChaseBoatAt = CTimer::GetTimeInMilliseconds();
++}
++
++static void
++VCModChaseBoardAccomplice(void)
++{
++	CPed *ped = VCModChaseAccomplice();
++	if (ped == nil || ped->m_pMyVehicle == pVCModChaseLeaderCar)
++		return;
++	ped->SetObjective(OBJECTIVE_ENTER_CAR_AS_PASSENGER, pVCModChaseLeaderCar);
++	ped->WarpPedIntoCar(pVCModChaseLeaderCar);
++}
++
++// One frame of the chase. Returns true when the run is over because the
++// leader escaped; the caller owns the state change and cleanup.
++static bool
++VCModChaseTickLeader(CPlayerPed *player)
++{
++	CPed *leader = VCModChaseLeader();
++	if (leader == nil)
++		return true;
++	float dist = (leader->GetPosition() - player->GetPosition()).Magnitude2D();
++	uint32 now = CTimer::GetTimeInMilliseconds();
++	if (bVCModChaseBoating) {
++		if (now - nVCModChaseBoatAt > VCMOD_CHASE_BOAT_ESCAPE) {
++			VCModChaseNotice("chase: he escaped by boat");
++			return true;
++		}
++		return false;
++	}
++	if (dist > VCMOD_CHASE_LEASH && nVCModChaseAwaySince == 0)
++		nVCModChaseAwaySince = now;
++	else if (dist <= VCMOD_CHASE_LEASH)
++		nVCModChaseAwaySince = 0;
++	if (VCModChaseHasEscaped(dist, nVCModChaseAwaySince, now)) {
++		VCModChaseNotice("chase: the leader got away");
++		return true;
++	}
++
++	// when the leader stops, the squad gets out and goes for him
++	if (!bVCModChaseSquadEngaged && bVCModChaseAtStop && dist < VCMOD_CHASE_SQUAD_RANGE) {
++		bVCModChaseSquadEngaged = true;
++		for (int32 i = 0; i < nVCModChaseSquadCount; i++) {
++			CPed *ped = VCModChaseSquadPed(i);
++			if (ped != nil && !ped->DyingOrDead())
++				ped->SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, leader);
++		}
++	}
++
++	if (bVCModChaseAtStop) {
++		if (bVCModChaseSwapping) {
++			if (leader->m_pMyVehicle == pVCModChaseSwapCar || now > nVCModChaseSwapDeadline)
++				VCModChaseFinishSwap();
++			return false;
++		}
++		if (pVCModChaseBoat != nil) {
++			if (leader->m_pMyVehicle == pVCModChaseBoat || now > nVCModChaseBoatDeadline)
++				VCModChaseBoatEscape();
++			return false;
++		}
++		if (now <= nVCModChaseStopUntil)
++			return false;
++		if (nVCModChaseBeat == 0 && VCModChaseStartSwap()) {
++			nVCModChaseStopUntil = now + 5000;
++			return false;
++		}
++		if (nVCModChaseBeat == 1)
++			VCModChaseBoardAccomplice();
++		bVCModChaseAtStop = false;
++		nVCModChaseBeat++;
++	} else if ((pVCModChaseLeaderCar->GetPosition() - VCModChaseBeatCoors(nVCModChaseBeat)).Magnitude2D() >= VCMOD_CHASE_BEAT_NEAR) {
++		return false;
++	} else {
++		float pdist = (leader->GetPosition() - player->GetPosition()).Magnitude2D();
++		bool sight = CWorld::GetIsLineOfSightClear(leader->GetPosition(),
++			player->GetPosition(), true, false, false, false, false, false, false);
++		if (!VCModChaseLeaderPressured(pdist, sight)) {
++			VCModChaseStopHere();
++			bVCModChaseAtStop = true;
++			nVCModChaseStopUntil = now + VCMOD_CHASE_STOP_TIME;
++			if (nVCModChaseBeat == 0)
++				VCModChaseStartSwap();
++			// the patrol tier has no crew to pick up
++			if (nVCModChaseBeat == 1 && nVCModChaseTier >= 2 && VCModChaseAccomplice() == nil)
++				VCModChaseSpawnAccomplice();
++			if (nVCModChaseBeat == 2)
++				VCModChaseSpawnBoat();
++			return false;
++		}
++		VCModChaseNotice("chase: the leader skipped his stop");
++		nVCModChaseBeat++;
++	}
++
++	if (nVCModChaseBeat >= nVCModChaseBeatCount) {
++		VCModChaseNotice("chase: the leader got away");
++		return true;
++	}
++	VCModChaseDriveTo(VCModChaseBeatCoors(nVCModChaseBeat));
++	return false;
++}
++
++static bool
++VCModChaseSpawnLeader(CVector at)
++{
++	CStreaming::RequestModel(VCMOD_CHASE_LEADER_MODEL, 0);
++	CStreaming::RequestModel(VCMOD_CHASE_LEADER_CAR, 0);
++	CStreaming::LoadAllRequestedModels(false);
++	if (!CStreaming::HasModelLoaded(VCMOD_CHASE_LEADER_MODEL) ||
++	    !CStreaming::HasModelLoaded(VCMOD_CHASE_LEADER_CAR)) {
++		VCModChaseNotice("chase: the leader cannot be loaded");
++		return false;
++	}
++
++	if (!VCModChaseBuildRoute()) {
++		fprintf(stderr, "VCMOD CHASE route fallback\n");
++		vecVCModChaseLeaderSpawn = at;
++		vecVCModChaseBeat[0] = vecVCModChaseBeatAnchor[0];
++		vecVCModChaseBeat[1] = vecVCModChaseBeatAnchor[1];
++		nVCModChaseBeatCount = 2;
++	}
++	int32 node = ThePaths.FindNodeClosestToCoors(vecVCModChaseLeaderSpawn, PATH_CAR, 80.0f, true, true);
++	CVector pos = vecVCModChaseLeaderSpawn;
++	if (node >= 0) {
++		CVector np = ThePaths.m_pathNodes[node].GetPosition();
++		if (!ThePaths.m_pathNodes[node].bWaterPath && !VCModChaseInWater(np))
++			pos = np;
++	}
++	// the origin means the route walk never found a road; never put him there
++	if (pos.Magnitude2D() < 1.0f)
++		pos = at;
++	fprintf(stderr, "VCMOD CHASE route spawn %.1f %.1f %.1f beat0 %.1f %.1f %.1f beat1 %.1f %.1f %.1f beats %d\n",
++		pos.x, pos.y, pos.z,
++		vecVCModChaseBeat[0].x, vecVCModChaseBeat[0].y, vecVCModChaseBeat[0].z,
++		vecVCModChaseBeat[1].x, vecVCModChaseBeat[1].y, vecVCModChaseBeat[1].z,
++		nVCModChaseBeatCount);
++
++	CAutomobile *car = new CAutomobile(VCMOD_CHASE_LEADER_CAR, RANDOM_VEHICLE);
++	if (car == nil) {
++		VCModChaseNotice("chase: no room for the leader's car");
++		return false;
++	}
++	car->m_nDoorLock = CARLOCK_UNLOCKED;
++	pos.z += car->GetDistanceFromCentreOfMassToBaseOfModel();
++	CTheScripts::ClearSpaceForMissionEntity(pos, car);
++	car->SetPosition(pos);
++	car->PlaceOnRoadProperly();
++	car->SetStatus(STATUS_PHYSICS);
++	car->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
++	car->AutoPilot.m_nCruiseSpeed = 0;
++
++	if (car->SetUpDriver() == nil) {
++		CWorld::Remove(car);
++		delete car;
++		VCModChaseNotice("chase: nobody to drive the leader's car");
++		return false;
++	}
++	// SetUpDriver refuses cars that already have mission ownership
++	car->VehicleCreatedBy = MISSION_VEHICLE;
++	CCarCtrl::NumRandomCars--;
++	CCarCtrl::NumMissionCars++;
++	CWorld::Add(car);
++
++	CPed *leader = car->pDriver;
++	pVCModChaseLeaderCar = car;
++	nVCModChaseLeaderHandle = CPools::GetPedPool()->GetIndex(leader);
++	leader->CharCreatedBy = MISSION_CHAR;
++	leader->bIsPlayerFriend = false;
++	nVCModChaseLeaderBlip = CRadar::SetEntityBlip(BLIP_CHAR,
++		nVCModChaseLeaderHandle, 0, BLIP_DISPLAY_BOTH);
++	nVCModChaseAwaySince = 0;
++	nVCModChaseBeat = 0;
++	nVCModChaseStopUntil = 0;
++	bVCModChaseAtStop = false;
++	nVCModChaseGoTime = CTimer::GetTimeInMilliseconds() + VCMOD_CHASE_GO_DELAY;
++	bVCModChaseGo = false;
++	// the player is the law now; a wanted level would put the squad on him
++	if (!bVCModChaseNeverWantedOn) {
++		bVCModChasePreNeverWanted = bVCModNeverWanted;
++		bVCModChaseNeverWantedOn = true;
++		bVCModNeverWanted = true;
++	}
++	VCModChaseMuteWanted(true);
++	nVCModChaseCrime = VCModChaseCrimeForTier(nVCModChaseTier);
++	fprintf(stderr, "VCMOD CHASE leader %p car %p crime %s\n",
++		(void*)leader, (void*)car, VCModChaseCrimeName(nVCModChaseCrime));
++	char text[96];
++	snprintf(text, sizeof(text), "chase: %s, he pulls out in 10 seconds",
++		VCModChaseCrimeDispatch(nVCModChaseCrime));
++	VCModChaseNotice(text);
++	return true;
++}
++
++static void
++VCModChaseEnd(void)
++{
++	fprintf(stderr, "VCMOD CHASE end\n");
++	nVCModChaseTier = 0;
++	nVCModChaseVariant = 0;
++	bVCModChaseUniformWanted = false;
++	VCModChaseRestoreUniform();
++	VCModChaseClearScenario();
++	nVCModChaseCooldownUntil = CTimer::GetTimeInMilliseconds() + 2000;
++}
++
++void
++VCModChaseUpdate(void)
++{
++	CPlayerPed *player = FindPlayerPed();
++	if (player == nil)
++		return;
++
++	if (bVCModChaseRestorePending &&
++	    VCModChaseRestoreDue(true, player->IsPedInControl(), true)) {
++		bVCModPlayerNpcAnims = bVCModChasePreNpcAnims;
++		if (VCModApplyPedModel(nVCModChasePreModel)) {
++			nVCModChasePreModel = -1;
++			bVCModChaseRestorePending = false;
++		}
++	}
++
++	if (KEYJUSTDOWN(VCMOD_CHASE_CAPTUREKEY)) {
++		CVector here = player->GetPosition();
++		fprintf(stderr, "VCMOD CHASE spot %.2f %.2f %.2f\n", here.x, here.y, here.z);
++		VCModChaseNotice("chase: spot logged");
++	}
++
++	if (KEYJUSTDOWN(VCMOD_CHASE_SPOTKEY)) {
++		if (player->m_pMyVehicle != nil) {
++			VCModChaseNotice("chase: leave the vehicle to teleport");
++		} else {
++			player->Teleport(vecVCModChaseTeleport);
++			VCModChaseNotice("chase: teleported to VCPD HQ");
++			fprintf(stderr, "VCMOD CHASE teleport %.2f %.2f %.2f\n",
++				vecVCModChaseTeleport.x, vecVCModChaseTeleport.y, vecVCModChaseTeleport.z);
++		}
++	}
++
++	if (VCModChaseShouldShowMarker(nVCModChaseState, bVCModChaseSpotSet)) {
++		C3dMarkers::PlaceMarkerSet(VCMOD_CHASE_MARKER_ID, MARKERTYPE_CYLINDER, vecVCModChaseStation,
++			2.0f, 255, 105, 180, 180, 1024, 0.25f, 0);
++		if (nVCModChaseBlip < 0)
++			nVCModChaseBlip = CRadar::SetCoordBlip(BLIP_COORD, vecVCModChaseStation, 0, BLIP_DISPLAY_BOTH);
++	} else if (nVCModChaseBlip >= 0) {
++		CRadar::ClearBlip(nVCModChaseBlip);
++		nVCModChaseBlip = -1;
++	}
++
++	switch (nVCModChaseState) {
++	case VCMOD_CHASE_OFF:
++		if (!bVCModChaseRestorePending &&
++		    CTimer::GetTimeInMilliseconds() > nVCModChaseCooldownUntil &&
++		    bVCModChaseSpotSet &&
++		    (FindPlayerCoors() - vecVCModChaseStation).Magnitude() < VCMOD_CHASE_ENTER_NEAR) {
++			VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_ENTER_MARKER);
++			VCModChaseNotice("chase: 1 COP, 2 SWAT, 3 VICE (tap to cycle), 4 FBI, 5 ARMY. ENTER to confirm");
++		}
++		break;
++	case VCMOD_CHASE_TIER_SELECT:
++		for (int32 tier = 1; tier <= 5; tier++) {
++			if (!KEYJUSTDOWN('0' + tier) || !VCModChaseTierAllowed(tier, nVCModChaseRank))
++				continue;
++			if (tier == 3 && nVCModChaseTier == 3)
++				nVCModChaseVariant = (nVCModChaseVariant + 1) % 8;
++			else
++				nVCModChaseVariant = 0;
++			nVCModChaseTier = tier;
++			bVCModChaseUniformWanted = true;
++
++			char text[96];
++			if (tier == 3)
++				snprintf(text, sizeof(text), "chase: VICE %d of 8 selected. ENTER to confirm",
++					nVCModChaseVariant + 1);
++			else
++				snprintf(text, sizeof(text), "chase: %s selected. ENTER to confirm",
++					VCModChaseUnitName(VCModChaseUnitForTier(tier)));
++			VCModChaseNotice(text);
++		}
++		if (bVCModChaseUniformWanted)
++			VCModChaseApplyUniform();
++		if (KEYJUSTDOWN(rsENTER)) {
++			if (nVCModChaseTier == 0) {
++				VCModChaseNotice("chase: pick a tier first");
++			} else {
++				VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_CONFIRM);
++				VCModChaseNotice("chase: ENTER to start, BACKSPACE to cancel");
++			}
++		} else if (KEYJUSTDOWN(rsBACKSP)) {
++			VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_CANCEL);
++			VCModChaseEnd();
++			VCModChaseNotice("chase: cancelled");
++		}
++		break;
++	case VCMOD_CHASE_BRIEFING:
++		if (KEYJUSTDOWN(rsENTER)) {
++			VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_CONFIRM);
++			VCModChaseNotice("chase: the leader is fleeing. BACKSPACE to end");
++		} else if (KEYJUSTDOWN(rsBACKSP)) {
++			VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_CANCEL);
++			VCModChaseEnd();
++			VCModChaseNotice("chase: cancelled");
++		}
++		break;
++	case VCMOD_CHASE_RUNNING:
++		if (pVCModChaseLeaderCar == nil) {
++			if (!VCModChaseSpawnLeader(vecVCModChaseStation))
++				break;
++			VCModChaseSpawnSquad(player);
++		}
++		CPed *leader = VCModChaseLeader();
++		if (leader == nil || leader->DyingOrDead()) {
++			// a driver who dies is destroyed by the engine inside the same world
++			// update, so a nil handle here means he is already gone
++			fprintf(stderr, "VCMOD CHASE leader lost %s\n", leader == nil ? "gone" : "dead");
++			VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_FINISH);
++			VCModChaseEnd();
++			VCModChaseNotice("chase: the leader is down");
++			break;
++		}
++		if (!bVCModChaseGo) {
++			if (CTimer::GetTimeInMilliseconds() >= nVCModChaseGoTime) {
++				bVCModChaseGo = true;
++				VCModChaseDriveTo(VCModChaseBeatCoors(0));
++				VCModChaseNotice("chase: he is moving");
++			}
++		} else if (VCModChaseTickLeader(player)) {
++			VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_FINISH);
++			VCModChaseEnd();
++			break;
++		}
++		if (KEYJUSTDOWN(rsBACKSP)) {
++			VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_FINISH);
++			VCModChaseEnd();
++			VCModChaseNotice("chase: ended");
++		}
++		break;
++	}
++}
++
++void
++VCModChaseReset(void)
++{
++	nVCModChaseState = VCMOD_CHASE_OFF;
++	nVCModChaseTier = 0;
++	nVCModChaseVariant = 0;
++	VCModChaseClearScenario();
++	vecVCModChaseStation = vecVCModChaseStationHome;
++	bVCModChaseSpotSet = true;
++	bVCModChaseUniformWanted = false;
++	bVCModChaseRestorePending = false;
++	nVCModChasePreModel = -1;
++	if (nVCModChaseBlip >= 0) {
++		CRadar::ClearBlip(nVCModChaseBlip);
++		nVCModChaseBlip = -1;
++	}
++	nVCModChaseCooldownUntil = 0;
++}
+diff --git a/src/extras/vcmodchase.h b/src/extras/vcmodchase.h
+new file mode 100644
+index 0000000..87ba15d
+--- /dev/null
++++ b/src/extras/vcmodchase.h
+@@ -0,0 +1,57 @@
++#ifndef __VCMODCHASE_H__
++#define __VCMODCHASE_H__
++
++#include "common.h"
++
++enum eVCModChaseState
++{
++	VCMOD_CHASE_OFF,
++	VCMOD_CHASE_TIER_SELECT,
++	VCMOD_CHASE_BRIEFING,
++	VCMOD_CHASE_RUNNING
++};
++
++enum eVCModChaseEvent
++{
++	VCMOD_CHASE_EV_ENTER_MARKER,
++	VCMOD_CHASE_EV_CONFIRM,
++	VCMOD_CHASE_EV_CANCEL,
++	VCMOD_CHASE_EV_FINISH
++};
++
++enum eVCModChaseUnit
++{
++	VCMOD_UNIT_NONE,
++	VCMOD_UNIT_COP,
++	VCMOD_UNIT_SWAT,
++	VCMOD_UNIT_VICE,
++	VCMOD_UNIT_FBI,
++	VCMOD_UNIT_ARMY
++};
++
++enum eVCModChaseCrime
++{
++	VCMOD_CRIME_STORE,
++	VCMOD_CRIME_JEWELRY,
++	VCMOD_CRIME_PROTECTION,
++	VCMOD_CRIME_BANK,
++	VCMOD_CRIME_DRUG_PLANE
++};
++
++bool VCModChaseNextState(eVCModChaseState *state, eVCModChaseEvent event);
++eVCModChaseUnit VCModChaseUnitForTier(int32 tier);
++eVCModChaseCrime VCModChaseCrimeForTier(int32 tier);
++const char *VCModChaseCrimeName(eVCModChaseCrime crime);
++const char *VCModChaseCrimeDispatch(eVCModChaseCrime crime);
++int16 VCModChaseUnitModel(eVCModChaseUnit unit);
++int16 VCModChaseViceModel(int32 variant);
++bool VCModChaseTierAllowed(int32 tier, int32 rank);
++bool VCModChaseHasEscaped(float dist, uint32 awaySince, uint32 now);
++bool VCModChaseLeaderPressured(float dist, bool lineOfSight);
++int32 VCModChaseSquadForThreat(int32 tier, int32 crew, int32 seats, bool withPlayer);
++bool VCModChaseRestoreDue(bool pending, bool inControl, bool playerExists);
++bool VCModChaseShouldShowMarker(eVCModChaseState state, bool spotSet);
++void VCModChaseUpdate(void);
++void VCModChaseReset(void);
++
++#endif
 diff --git a/src/extras/vcmodpanel.cpp b/src/extras/vcmodpanel.cpp
 new file mode 100644
 index 0000000..b426fa6
@@ -1630,10 +3078,10 @@ index aa63c32..1574724 100644
  					break;
  				default:
 diff --git a/src/peds/PedFight.cpp b/src/peds/PedFight.cpp
-index 8a3b971..456e1d2 100644
+index 8a3b971..e3df7fa 100644
 --- a/src/peds/PedFight.cpp
 +++ b/src/peds/PedFight.cpp
-@@ -25,6 +25,8 @@
+@@ -25,10 +25,15 @@
  #include "Bike.h"
  #include "Glass.h"
  #include "SpecialFX.h"
@@ -1642,7 +3090,14 @@ index 8a3b971..456e1d2 100644
  
  uint16 nPlayerInComboMove;
  RpClump* flyingClumpTemp;
-@@ -157,6 +159,27 @@ CheckForPedsOnGroundToAttack(CPed *attacker, CPed **pedOnGround)
+ 
++// a move the player asked for by name, waiting for the next attack slot
++static PedFightMoves VCModForcedFightMove = FIGHTMOVE_NULL;
++
+ FightMove tFightMoves[NUM_FIGHTMOVES] =
+ {
+   { ANIM_STD_NUM,  0.0f,  0.0f,  0.0f,  0.0f,  1.0f, HITLEVEL_NULL, 0, 0 },
+@@ -157,6 +162,27 @@ CheckForPedsOnGroundToAttack(CPed *attacker, CPed **pedOnGround)
  	return stateToReturn;
  }
  
@@ -1670,7 +3125,7 @@ index 8a3b971..456e1d2 100644
  void
  CPed::SetPointGunAt(CEntity *to)
  {
-@@ -178,18 +201,19 @@ CPed::SetPointGunAt(CEntity *to)
+@@ -178,18 +204,19 @@ CPed::SetPointGunAt(CEntity *to)
  	SetMoveState(PEDMOVE_STILL);
  
  	CAnimBlendAssociation *aimAssoc;
@@ -1692,7 +3147,7 @@ index 8a3b971..456e1d2 100644
  		}
  
  		aimAssoc->blendAmount = 0.0f;
-@@ -203,8 +227,11 @@ void
+@@ -203,8 +230,11 @@ void
  CPed::PointGunAt(void)
  {
  	CWeaponInfo *weaponInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
@@ -1706,7 +3161,7 @@ index 8a3b971..456e1d2 100644
  	if (!weaponAssoc || weaponAssoc->blendDelta < 0.0f) {
  		if (weaponInfo->IsFlagSet(WEAPONFLAG_CROUCHFIRE)) {
  			weaponAssoc = RpAnimBlendClumpGetAssociation(GetClump(), GetCrouchFireAnim(weaponInfo));
-@@ -240,7 +267,7 @@ CPed::ClearPointGunAt(void)
+@@ -240,7 +270,7 @@ CPed::ClearPointGunAt(void)
  		RestorePreviousState();
  	}
  	weaponInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
@@ -1715,7 +3170,7 @@ index 8a3b971..456e1d2 100644
  	if (!animAssoc || animAssoc->blendDelta < 0.0f) {
  		if (weaponInfo->IsFlagSet(WEAPONFLAG_CROUCHFIRE)) {
  			animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), GetCrouchFireAnim(weaponInfo));
-@@ -417,10 +444,10 @@ CPed::SetAttack(CEntity *victim)
+@@ -417,10 +447,10 @@ CPed::SetAttack(CEntity *victim)
  					if (pedOnGround > PED_IN_FRONT_OF_ATTACKER || pedOnGround == NO_PED && bIsStanding && m_pCurSurface && m_pCurSurface->IsVehicle()) {
  						fireAnim = GetFireAnimGround(curWeapon, false);
  					} else {
@@ -1728,7 +3183,7 @@ index 8a3b971..456e1d2 100644
  				}
  
  				CAnimBlendAssociation* curFireAssoc = RpAnimBlendClumpGetAssociation(GetClump(), fireAnim);
-@@ -788,7 +815,7 @@ CPed::Attack(void)
+@@ -788,7 +818,7 @@ CPed::Attack(void)
  					          !GetFireAnimGround(ourWeapon, false) || 
  						 CheckForPedsOnGroundToAttack(this, nil) < PED_ON_THE_FLOOR) {
  
@@ -1737,6 +3192,79 @@ index 8a3b971..456e1d2 100644
  
  					} else {
  						weaponAnimAssoc = CAnimManager::BlendAnimation(GetClump(), ourWeapon->m_AnimToPlay, GetFireAnimGround(ourWeapon, false), 8.0f);
+@@ -1058,12 +1088,15 @@ CPed::Attack(void)
+ }
+ 
+ void
+-CPed::StartFightAttack(uint8 buttonPressure)
++CPed::StartFightAttack(uint8 buttonPressure, PedFightMoves forceMove)
+ {
+ 	if (!IsPedInControl() || (m_attackTimer > CTimer::GetTimeInMilliseconds() && buttonPressure != 0))
+ 		return;
+ 
+ 	if (m_nPedState == PED_FIGHT) {
++		// the next move is chosen inside Fight(); leave the request for it
++		if (forceMove != FIGHTMOVE_NULL)
++			VCModForcedFightMove = forceMove;
+ 		m_fightButtonPressure = buttonPressure;
+ 		return;
+ 	}
+@@ -1100,7 +1133,10 @@ CPed::StartFightAttack(uint8 buttonPressure)
+ 		fightIdleAssoc = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_FIGHT_IDLE, 1000.0f);
+ 	}
+ 	m_lastFightMove = FIGHTMOVE_IDLE;
++	if (forceMove != FIGHTMOVE_NULL && IsPlayer())
++		VCModForcedFightMove = forceMove;
+ 	m_curFightMove = IsPlayer() ? ChooseAttackPlayer(buttonPressure, fightWithWeapon) : ChooseAttackAI(buttonPressure, fightWithWeapon);
++	VCModForcedFightMove = FIGHTMOVE_NULL;
+ 
+ 	SetPedState(PED_FIGHT);
+ 	m_fightButtonPressure = 0;
+@@ -1708,6 +1744,12 @@ CPed::ChooseAttackAI(uint8 buttonPressure, bool fightWithWeapon)
+ int32
+ CPed::ChooseAttackPlayer(uint8 buttonPressure, bool fightWithWeapon)
+ {
++	if (VCModForcedFightMove != FIGHTMOVE_NULL) {
++		PedFightMoves forcedMove = VCModForcedFightMove;
++		VCModForcedFightMove = FIGHTMOVE_NULL;
++		return forcedMove;
++	}
++
+ 	CWeaponInfo *weaponInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
+ 	const float maxAttackDist = 2.7f;
+ 	float weaponAttackDist = 2.0f;
+@@ -1950,6 +1992,8 @@ CPed::EndFight(uint8 endType)
+ {
+ 	if (m_nPedState != PED_FIGHT)
+ 		return;
++	if (IsPlayer())
++		VCModForcedFightMove = FIGHTMOVE_NULL;
+ 
+ 	m_curFightMove = FIGHTMOVE_NULL;
+ 	RestorePreviousState();
+@@ -2658,6 +2702,22 @@ CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPi
+ 	bool willLinger = false;
+ 	int random;
+ 
++	// mission friends never damage the player or each other, and the player
++	// never damages them; a vehicle attacker counts as its driver
++	if (damagedBy != nil) {
++		CEntity *attacker = damagedBy;
++		if (attacker->IsVehicle())
++			attacker = ((CVehicle*)attacker)->pDriver;
++		bool victimFriend = this == player ||
++			(CharCreatedBy == MISSION_CHAR && bIsPlayerFriend);
++		bool attackerFriend = attacker != nil &&
++			(attacker == player ||
++			 (attacker->IsPed() && ((CPed*)attacker)->CharCreatedBy == MISSION_CHAR &&
++			  ((CPed*)attacker)->bIsPlayerFriend));
++		if (victimFriend && attackerFriend)
++			return false;
++	}
++
+ 	if (damagedBy == FindPlayerPed() && damagedBy != this && damage > 3.0f)
+ 		++CWorld::Players[CWorld::PlayerInFocus].m_nHavocLevel;
+ 
 diff --git a/src/peds/PlayerPed.cpp b/src/peds/PlayerPed.cpp
 index cd8da42..5096581 100644
 --- a/src/peds/PlayerPed.cpp
@@ -4514,6 +6042,182 @@ index 0000000..55e9be8
 +        self.assertIn("VCModApplyPedModelDefault();", braced(PLAYER, "void\nCPlayerPed::ProcessControl(void)"))
 +        self.assertIn("VCModReconcilePedModel(this);", braced(PLAYER, "void\nCPlayerPed::ProcessControl(void)"))
 +        self.assertTrue(chooser)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/utils/test_vc_chase.py b/utils/test_vc_chase.py
+new file mode 100644
+index 0000000..3df4fae
+--- /dev/null
++++ b/utils/test_vc_chase.py
+@@ -0,0 +1,170 @@
++#!/usr/bin/env python3
++"""Pure chase-mission logic, brace-extracted from vcmodchase.cpp and run
++against C++98 stubs. Mirrors the shape of test_vc_driver.py."""
++import pathlib
++import re
++import subprocess
++import tempfile
++import unittest
++
++SRC = pathlib.Path(__file__).resolve().parents[1] / "src/extras/vcmodchase.cpp"
++
++PRELUDE = r'''
++#include <stdio.h>
++typedef int int32;
++typedef short int16;
++typedef unsigned int uint32;
++#define MI_VICE1 100
++#define VCMOD_CHASE_LEASH 220.0f
++#define VCMOD_CHASE_LEASH_TIME 3000
++enum eVCModChaseState { VCMOD_CHASE_OFF, VCMOD_CHASE_TIER_SELECT, VCMOD_CHASE_BRIEFING, VCMOD_CHASE_RUNNING };
++enum eVCModChaseEvent { VCMOD_CHASE_EV_ENTER_MARKER, VCMOD_CHASE_EV_CONFIRM, VCMOD_CHASE_EV_CANCEL, VCMOD_CHASE_EV_FINISH };
++enum eVCModChaseUnit { VCMOD_UNIT_NONE, VCMOD_UNIT_COP, VCMOD_UNIT_SWAT, VCMOD_UNIT_VICE, VCMOD_UNIT_FBI, VCMOD_UNIT_ARMY };
++enum eVCModChaseCrime { VCMOD_CRIME_STORE, VCMOD_CRIME_JEWELRY, VCMOD_CRIME_PROTECTION, VCMOD_CRIME_BANK, VCMOD_CRIME_DRUG_PLANE };
++static int failed = 0;
++#define CHECK(c, m) do { if (!(c)) { printf("FAIL: %s\n", m); failed++; } } while (0)
++'''
++
++MAIN = r'''
++int main() {
++    eVCModChaseState s;
++
++    s = VCMOD_CHASE_OFF;
++    CHECK(VCModChaseNextState(&s, VCMOD_CHASE_EV_ENTER_MARKER) && s == VCMOD_CHASE_TIER_SELECT,
++          "marker enters tier select");
++    s = VCMOD_CHASE_TIER_SELECT;
++    CHECK(!VCModChaseNextState(&s, VCMOD_CHASE_EV_ENTER_MARKER) && s == VCMOD_CHASE_TIER_SELECT,
++          "marker is ignored while selecting");
++    s = VCMOD_CHASE_TIER_SELECT;
++    CHECK(VCModChaseNextState(&s, VCMOD_CHASE_EV_CANCEL) && s == VCMOD_CHASE_OFF,
++          "cancel leaves tier select");
++    s = VCMOD_CHASE_TIER_SELECT;
++    CHECK(VCModChaseNextState(&s, VCMOD_CHASE_EV_CONFIRM) && s == VCMOD_CHASE_BRIEFING,
++          "confirm opens the briefing");
++    s = VCMOD_CHASE_BRIEFING;
++    CHECK(VCModChaseNextState(&s, VCMOD_CHASE_EV_CONFIRM) && s == VCMOD_CHASE_RUNNING,
++          "confirm starts the run");
++    s = VCMOD_CHASE_RUNNING;
++    CHECK(VCModChaseNextState(&s, VCMOD_CHASE_EV_FINISH) && s == VCMOD_CHASE_OFF,
++          "finish returns to off");
++    s = VCMOD_CHASE_RUNNING;
++    CHECK(VCModChaseNextState(&s, VCMOD_CHASE_EV_CANCEL) && s == VCMOD_CHASE_OFF,
++          "cancel ends the run");
++    s = VCMOD_CHASE_OFF;
++    CHECK(!VCModChaseNextState(&s, VCMOD_CHASE_EV_FINISH) && s == VCMOD_CHASE_OFF,
++          "finish is ignored when off");
++
++    CHECK(VCModChaseUnitForTier(1) == VCMOD_UNIT_COP, "tier 1 is COP");
++    CHECK(VCModChaseUnitForTier(2) == VCMOD_UNIT_SWAT, "tier 2 is SWAT");
++    CHECK(VCModChaseUnitForTier(3) == VCMOD_UNIT_VICE, "tier 3 is VICE");
++    CHECK(VCModChaseUnitForTier(4) == VCMOD_UNIT_FBI, "tier 4 is FBI");
++    CHECK(VCModChaseUnitForTier(5) == VCMOD_UNIT_ARMY, "tier 5 is ARMY");
++    CHECK(VCModChaseUnitForTier(0) == VCMOD_UNIT_NONE, "tier 0 is none");
++    CHECK(VCModChaseUnitForTier(6) == VCMOD_UNIT_NONE, "tier 6 is none");
++
++    CHECK(VCModChaseViceModel(0) == 100, "vice variant 1 is the base model");
++    CHECK(VCModChaseViceModel(7) == 107, "vice variant 8 is the last model");
++    CHECK(VCModChaseViceModel(-1) == 100, "vice variant clamps low");
++    CHECK(VCModChaseViceModel(8) == 107, "vice variant clamps high");
++
++    CHECK(VCModChaseTierAllowed(1, 1), "rank 1 allows tier 1");
++    CHECK(VCModChaseTierAllowed(2, 2), "rank 2 allows tier 2");
++    CHECK(VCModChaseTierAllowed(3, 3), "rank 3 allows tier 3");
++    CHECK(!VCModChaseTierAllowed(4, 3), "rank 3 denies tier 4");
++    CHECK(VCModChaseTierAllowed(5, 5), "rank 5 allows tier 5");
++    CHECK(!VCModChaseTierAllowed(0, 5), "tier 0 is never allowed");
++    CHECK(!VCModChaseTierAllowed(6, 5), "tier 6 is never allowed");
++
++    CHECK(VCModChaseRestoreDue(true, true, true), "restore when pending and in control");
++    CHECK(!VCModChaseRestoreDue(true, false, true), "no restore out of control");
++    CHECK(!VCModChaseRestoreDue(true, true, false), "no restore without a player");
++    CHECK(!VCModChaseRestoreDue(false, true, true), "no restore when not pending");
++
++    CHECK(VCModChaseShouldShowMarker(VCMOD_CHASE_OFF, true), "marker shows when off");
++    CHECK(!VCModChaseShouldShowMarker(VCMOD_CHASE_OFF, false), "no marker without a spot");
++    CHECK(!VCModChaseShouldShowMarker(VCMOD_CHASE_TIER_SELECT, true), "no marker while selecting");
++
++    CHECK(!VCModChaseHasEscaped(100.0f, 0, 5000), "no escape inside the leash");
++    CHECK(!VCModChaseHasEscaped(300.0f, 1000, 2000), "no escape before the timer");
++    CHECK(VCModChaseHasEscaped(300.0f, 1000, 5000), "escape after the timer");
++    CHECK(!VCModChaseHasEscaped(300.0f, 0, 9999), "no escape without a start time");
++
++    CHECK(VCModChaseLeaderPressured(10.0f, true), "pressure inside 25 m with sight");
++    CHECK(!VCModChaseLeaderPressured(10.0f, false), "no pressure without sight");
++    CHECK(!VCModChaseLeaderPressured(40.0f, true), "no pressure beyond 25 m");
++
++    CHECK(VCModChaseCrimeForTier(1) == VCMOD_CRIME_STORE, "tier 1 is a store till");
++    CHECK(VCModChaseCrimeForTier(2) == VCMOD_CRIME_JEWELRY, "tier 2 is a jewelry grab");
++    CHECK(VCModChaseCrimeForTier(3) == VCMOD_CRIME_PROTECTION, "tier 3 is a protection round");
++    CHECK(VCModChaseCrimeForTier(4) == VCMOD_CRIME_BANK, "tier 4 is a bank job");
++    CHECK(VCModChaseCrimeForTier(5) == VCMOD_CRIME_DRUG_PLANE, "tier 5 is the drug plane");
++    CHECK(VCModChaseCrimeForTier(0) == VCMOD_CRIME_STORE, "tier 0 falls back to the store");
++    CHECK(VCModChaseCrimeName(VCMOD_CRIME_BANK) && VCModChaseCrimeName(VCMOD_CRIME_BANK)[0], "the bank has a name");
++    CHECK(VCModChaseCrimeDispatch(VCMOD_CRIME_BANK) && VCModChaseCrimeDispatch(VCMOD_CRIME_BANK)[0], "the bank has a dispatch line");
++
++    CHECK(VCModChaseSquadForThreat(1, 1, 4, true) == 1, "patrol rides as a pair");
++    CHECK(VCModChaseSquadForThreat(1, 1, 2, true) == 1, "patrol fits a two seater");
++    CHECK(VCModChaseSquadForThreat(2, 2, 4, true) == 3, "swat fills the enforcer around the player");
++    CHECK(VCModChaseSquadForThreat(2, 2, 4, false) == 4, "backup fills the whole car with no player");
++    CHECK(VCModChaseSquadForThreat(2, 6, 4, false) == 4, "backup caps at the car");
++    CHECK(VCModChaseSquadForThreat(3, 2, 2, true) == 1, "vice rides as a pair");
++    CHECK(VCModChaseSquadForThreat(3, 2, 2, false) == 2, "vice backup rides as a pair too");
++    CHECK(VCModChaseSquadForThreat(4, 2, 4, true) == 3, "fbi fills the rancher");
++    CHECK(VCModChaseSquadForThreat(5, 2, 6, false) == 6, "army backup fills a larger ride");
++    CHECK(VCModChaseSquadForThreat(5, 2, 1, true) == 0, "a one seater leaves no seat for a partner");
++    CHECK(VCModChaseSquadForThreat(0, 0, 4, true) == 1, "threat clamps low");
++
++    return failed ? 1 : 0;
++}
++'''
++
++
++def cut(name):
++    text = SRC.read_text()
++    match = re.search(r"((?:[A-Za-z_][A-Za-z0-9_]*[\s*]+)+)" + re.escape(name) + r"\s*\([^;{]*\)\s*\{", text)
++    if match is None:
++        raise AssertionError(f"{name} not found in {SRC}")
++    start = match.end() - 1
++    depth = 0
++    for i in range(start, len(text)):
++        if text[i] == "{":
++            depth += 1
++        elif text[i] == "}":
++            depth -= 1
++            if depth == 0:
++                return text[match.start():i + 1]
++    raise AssertionError(f"unbalanced braces in {name}")
++
++
++def source():
++    return PRELUDE + "\n".join(cut(n) for n in (
++        "VCModChaseNextState",
++        "VCModChaseUnitForTier",
++        "VCModChaseCrimeForTier",
++        "VCModChaseCrimeName",
++        "VCModChaseCrimeDispatch",
++        "VCModChaseViceModel",
++        "VCModChaseTierAllowed",
++        "VCModChaseHasEscaped",
++        "VCModChaseLeaderPressured",
++        "VCModChaseSquadForThreat",
++        "VCModChaseRestoreDue",
++        "VCModChaseShouldShowMarker",
++    )) + MAIN
++
++
++class ChaseTests(unittest.TestCase):
++    def test_pure_core(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            exe = pathlib.Path(tmp) / "chase"
++            build = subprocess.run(
++                ["c++", "-std=c++98", "-x", "c++", "-", "-o", str(exe)],
++                input=source(), text=True, capture_output=True)
++            self.assertEqual(build.returncode, 0, build.stderr)
++            run = subprocess.run([str(exe)], text=True, capture_output=True)
++            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
++            self.assertNotIn("FAIL:", run.stdout)
 +
 +
 +if __name__ == "__main__":

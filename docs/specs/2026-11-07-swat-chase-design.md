@@ -6,7 +6,7 @@ Target: reVC `miami` `a26fff4`, branch `vcmods`, distributed as `vc-mods.patch`
 
 ## 1. Summary
 
-A native mission system for playing the police response instead of the wanted suspect. The v1 mission, **The Getaway**, launches from a pink marker at the police station, lets the player choose a ground or air approach, and runs a pursuit against an NPC criminal with a purpose. A rank ladder unlocks SWAT, FBI and Army tiers, each with its own uniform, vehicles, squad and finite force pools.
+A native mission system for playing the police response instead of the wanted suspect. The v1 mission, **The Getaway**, launches from a pink marker at the police station, lets the player choose a ground or air approach, and runs a pursuit against an NPC criminal with a purpose. A rank ladder unlocks five tiers — patrol, SWAT, Vice, FBI and Army — each with its own uniform, vehicles, squad and finite force pools.
 
 The same director is intended to drive a mirrored criminal mode later, where the player is the suspect and the stock wanted ladder escalates from police to helicopter to SWAT to FBI to Army.
 
@@ -41,10 +41,10 @@ The same director is intended to drive a mirrored criminal mode later, where the
 
 ## 5. Experience flow (v1)
 
-1. A pink cylinder marker sits at the police station with a radar blip.
+1. A pink cylinder marker and radar blip sit on the VCPD HQ forecourt (`405.97 -468.07 10.11`), always present in free roam.
 2. Entering it opens the tier picker, limited to unlocked ranks, then a briefing.
 3. Two approach markers appear: the garage for the ground start, a street marker under a hovering Maverick for the air start.
-4. Ground: the player boards or drives the tier's Enforcer/Rancher/Barracks with the AI squad.
+4. Ground: the player boards or drives the tier's transport (cruiser, Enforcer, Vice car, Rancher or Barracks) with the AI squad.
    Air: the player and the AI squad climb ropes into the hovering Maverick, which flies to the scene, then rappels down.
 5. The leader is already fleeing the robbery. The route has three beats: car swap, accomplice pickup, marina boat.
 6. Pressure rule: the leader only completes a stop when no SWAT is within about 25 m with line of sight. Otherwise he skips to the next beat.
@@ -65,16 +65,19 @@ The same director is intended to drive a mirrored criminal mode later, where the
 
 | Rank | Squad | Player model | Ground | Air | AI squad |
 |---|---|---|---|---|---|
-| 1-2 | VCPD SWAT | `MI_SWAT` | Enforcer | Maverick | `COP_SWAT`, `COP_HELI_SWAT` |
-| 3 | FBI | `MI_FBI` | FBI Rancher | Maverick | `COP_FBI` |
-| 4 | Army | `MI_ARMY` | Barracks/Enforcer | Hunter | `COP_ARMY` |
+| 1 | VCPD patrol | `MI_COP` | Police cruiser | Maverick | `COP_STREET` |
+| 2 | VCPD SWAT | `MI_SWAT` | Enforcer | Maverick | `COP_SWAT`, `COP_HELI_SWAT` |
+| 3 | Vice squad | `MI_VICE1` | Cheetah/Stinger | Maverick | `COP_MIAMIVICE` (modifier 0-7 picks `MI_VICE1..8`) |
+| 4 | FBI | `MI_FBI` | FBI Rancher | Maverick | `COP_FBI` |
+| 5 | Army | `MI_ARMY` | Barracks/Enforcer | Hunter | `COP_ARMY` |
 
 - The uniform is applied at tier selection, while the player is on foot.
+- VICE has eight outfits (`MI_VICE1..8`). Pressing its key again while VICE is already selected cycles to the next outfit, wrapping after the eighth; the notice names the variant.
 - `VCModApplyPedModel` is the swap path. It already resolves the model's animation group through `VCModPedAnimGroupFor` (`src/extras/vcmodpanel.cpp:298`) and rejects unplayable groups.
 - The mission saves the pre-mission model, the `bVCModPlayerNpcAnims` toggle and the pinned model request.
 - While the mission runs, the NPC animation picker is forced off so the squad's own animation group applies. It is restored afterwards.
 - The AI squad spawns with the faction's cop type, which supplies its model and weapons.
-- Rank 4's air choice is the Hunter, whose pilot weapons are already implemented. Under an AI pilot it is transport only; the guns are pilot-fired, so they matter if the player takes the controls later.
+- Rank 5's air choice is the Hunter, whose pilot weapons are already implemented. Under an AI pilot it is transport only; the guns are pilot-fired, so they matter if the player takes the controls later.
 - Rank persists in `reVC.ini` under `[VC Mods]`, for example `SwatRank=2`. It must not touch the savegame.
 
 ### 6.3 Director
@@ -125,10 +128,11 @@ Two finite pools, one per side. This is the difficulty axis.
 
 | Rank | Squad active / reserve | Crew active / reserve (excludes leader) | Notes |
 |---|---|---|---|
-| 1 | 2 / 0 | 0 / 0 | leader only, teaching mission |
-| 2 | 2 / 2 | 1 / 2 | the picked-up accomplice plus two reserves |
-| 3 | 4 / 4 | 4 / 4 | FBI tier, crew arrives in cars |
-| 4 | 6 / 6 | 6 / 6 | Army tier, convoy and armed heli |
+| 1 | 2 / 0 | 0 / 0 | patrol tier, leader only, teaching mission |
+| 2 | 2 / 2 | 1 / 2 | SWAT tier, the picked-up accomplice plus two reserves |
+| 3 | 4 / 4 | 4 / 4 | Vice tier, crew arrives in fast cars |
+| 4 | 5 / 5 | 5 / 5 | FBI tier, crew arrives in cruisers |
+| 5 | 6 / 6 | 6 / 6 | Army tier, convoy and armed heli |
 
 Rules:
 
@@ -166,13 +170,38 @@ Rules:
 - The player's vehicle is a separate path (`CVehicle::InflictDamage`, `src/vehicles/Vehicle.cpp:1126`). Add the same check if squad fire into the player's heli proves possible.
 - Test both directions and the ram case: player shoots a squad mate, squad fire crosses the player, a squad car clips the player. Crew damage must still apply normally.
 
+### 6.11 Crimes and purpose
+
+The chase machinery is the same every run; what changes is what the crew did and what they are carrying. A crime is data: a name, a dispatch line, a base threat, a stop pattern, and an optional loot modifier.
+
+- Crime tableau: the crime is staged where the player can see it. At the first stop the crew walks into the shop, the alarm sounds, and they come back out with bags; when the mission opens in view, the same tableau plays at spawn. Stock props, stock alarm samples and existing walk animations, no new art.
+- Dispatch line: the briefing and the start notice name the crime and its rating ("bank job, threat rating 4, FBI responding"). The crime's base threat feeds the same response rule as the tier, so the number of cops follows what the crew did as well as the unit the player picked.
+- Stop patterns are permutations of the existing stop types: swap, pickup, drop, short stop, and the boat finale. A drop is a stop with no pickup, where the crew leaves something in a parked car or stash and drives on. A short stop is a collection that resolves in a couple of seconds, so pressure can skip it.
+- Ordering constraint: a pickup placed before a swap leaves the accomplice in the abandoned car until passengers are transferred, so the first slice keeps swap, pickup, boat.
+- Loot is a modifier, not a new system: cash or a crate slows the leader and keeps him out of two-seaters until the handoff, which is why a bank job does not play like a car theft.
+- A rival faction is a third car that also wants the leader (gang peds with a chase objective). The player can shadow it, let it soften him up, or get caught between.
+
+| Scenario | Where | The crime | Stops | Twist |
+|---|---|---|---|---|
+| Store till | 24/7, Washington Beach | clerk hit the alarm, crew out with duffels | swap, pickup, boat | the collection is short, so pressure skips it |
+| Jewelry grab | Downtown | smashed window, bags handed on | swap, pickup, boat | the handoff car leaves with the loot |
+| Protection round | Vice Point shops | envelope collections | short stops, boat | each stop is brief; the round is the variety |
+| Weapons deal | Prawn Island | deal goes loud | pickup, swap, boat | the crate takes a seat |
+| Armored truck | Viceport | Securicar hit | swap, drop, boat | the loot slows him until the drop |
+| Bank job | El Banco Corrupto Grande | shotguns, alarm, cash bags | swap, pickup, boat | the crew rides with him; losing the crew drops the response a tier |
+| Drug plane | Escobar International | cargo off a landed smuggler plane | swap, drop, boat | the drop is timed; miss it and the plane leaves with the shipment |
+| Boat transfer | Viceport docks | product from warehouse to speedboat | pickup, boat | two boats, pick the right one |
+| Studio smuggling | InterGlobal Films | cargo in film cans | swap, pickup, boat | the prop truck blocks the alley |
+
+- First slice: store till, jewelry grab, protection round, bank job and drug plane, one per tier, which covers the dispatch and tableau before stop patterns change.
+
 ## 7. Technical design
 
 - New module: `src/extras/vcmodchase.cpp` and `.h` for the mission state machine, director, scenario, force pools and HUD. Small hooks in `PlayerPed.cpp` for the uniform, climb control and seats; small hooks in the animation code for reverse time.
 - Reuse: `CPopulation::AddPed` with cop types for the squad; gang ped types for the crew; `SetUpDriver` and `CCarAI::AddPoliceCarOccupants` for vehicles; `C3dMarkers` and `CRadar` for presentation; the mod's existing character swap and ini plumbing.
-- Mission data: tier table, route waypoints, spawn nodes and the station, garage and pad coordinates. Author coordinates with a debug "capture spot" key rather than guessing.
+- Mission data: tier table, route waypoints, spawn nodes and the station, garage and pad coordinates. Author coordinates with a debug teleport key rather than guessing.
 - Streaming: request every tier model during the briefing so the swap and spawns do not hitch.
-- Population budget: `NUMPEDS = 140`, `NUMVEHICLES = 110` (`src/core/config.h:39`). Tier 4's active caps plus traffic fit, provided mission-owned vehicles are despawned promptly.
+- Population budget: `NUMPEDS = 140`, `NUMVEHICLES = 110` (`src/core/config.h:39`). Tier 5's active caps plus traffic fit, provided mission-owned vehicles are despawned promptly.
 - Tests: brace-extract drivers for the mission state machine, pressure rule, force-pool reserve accounting and rank restore. In-game verification for the climb, rappel, seats, uniform restore and markers. Follow the repo's existing harness style; shipped code stays C++.
 
 ## 8. Risks and unknowns
@@ -187,7 +216,7 @@ Rules:
 - Friendly fire from mission-owned cops.
 - Uniform restore after death or arrest, including the pinned model request.
 - Marker coordinates and a station location with a usable garage and enough street clearance for a hovering heli.
-- Traffic and population pressure at tier 4.
+- Traffic and population pressure at tier 5.
 
 ## 9. Phases and acceptance
 
@@ -196,15 +225,19 @@ Mission state machine, station marker and blip, tier picker, uniform apply/resto
 Accept: marker appears; the tier pick changes the model and animation; the mission ends cleanly; free roam is left untouched.
 
 **P1, ground mission.**
-Leader spawn, route, pressure, swap, marina boat, win/fail; Enforcer; AI squad; blips; ranks 1-2.
+Leader spawn, route, pressure, swap, marina boat, win/fail; patrol and SWAT transport; AI squad; blips; ranks 1-2.
 Accept: a full ground run can be won or lost from the marker and cleaned up, with friendly fire inert in both directions.
+
+**P1a, crimes and variety.**
+Crime table with a name, dispatch line and base threat per tier; start notice names the crime and its rating; staged tableau at the first stop.
+Accept: one crime per tier with distinct dispatch text and ratings; the tableau is visible at the first stop; the response size follows the crime as well as the pick; no new art.
 
 **P2, air insertion.**
 Flyable Maverick with AI pilot, climb up, flight, rappel down, AI SWAT, reverse animation.
 Accept: both approaches reach the same mission, the NPC pilot holds and follows via the stock autopilot, and the ropes and seats behave.
 
 **P3, force pools and high tiers.**
-Finite reinforcements for both sides, HUD counters, FBI and Army tiers, Rancher/Barracks/Hunter, ranks 3-4.
+Finite reinforcements for both sides, HUD counters, Vice/FBI/Army tiers, fast cars/Rancher/Barracks/Hunter, ranks 3-5.
 Accept: losses trigger replacements until each reserve is empty; the pools are visibly finite; the high-tier vehicles and uniforms work.
 
 **P4, polish.**
@@ -218,7 +251,7 @@ Criminal mode with the stock star ladder; gunner seat; arrest interaction.
 
 - Exact tier values: active caps, reserves, delays and spawn distances.
 - Whether the squad pool should be automatic or callable by radio; v1 assumes automatic.
-- Whether rank 4's air start should always be the Hunter or a choice between Maverick and Hunter.
+- Whether rank 5's air start should always be the Hunter or a choice between Maverick and Hunter.
 - HUD style for the two reserve counts.
 - Marina location and whether the boat AI needs authored approach points.
 - Whether the arrest verb is worth building after v1, since "stopped" already ends the mission.

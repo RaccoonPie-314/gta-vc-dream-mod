@@ -96,6 +96,27 @@ offered through the panel or the debug menu, and the choice is live — no resta
   and parking on arrival. The car waits with `MISSION_STOP_FOREVER` until Tommy is
   seated. Harness.
 
+## Uncommitted — 2026-11-07
+
+### Passenger riding
+
+- **Fix:** passenger mode no longer puts a driver into an unoccupied vehicle. Any
+  driverless car, boat or the player's own parked car is left exactly as it was,
+  and the enter press falls back to the stock entry, so Tommy gets in as the
+  driver. Only a vehicle that already has someone driving can be ridden along in.
+  Harness.
+- **Fix:** a street car held for boarding could stay at `MISSION_STOP_FOREVER`
+  with its driver frozen if the boarding was abandoned — walking away, a door that
+  never opened, a press on a different car, or getting into another car. The hold
+  now ends after 30 m of separation, 15 s without boarding, another car, or a new
+  enter press, and the entry objective is cleared so Tommy stops chasing the car
+  that drove off. Harness.
+- **Fix:** arriving at a destination ended the ride and left the parked car
+  stopped for the session. Arrival now parks with the ride still open; getting out
+  is what ends it, and the ordinary release puts the car back on the road. **SKIP
+  RIDE** from a passenger seat works the same way. A chauffeur dismissed from the
+  back seat is released when Tommy gets out instead of staying stopped. Harness.
+
 ## Shipped — 2026-11-07, `ca60b70`
 
 ### Locomotion animations
@@ -138,20 +159,90 @@ offered through the panel or the debug menu, and the choice is live — no resta
 
 ### Street idle
 
-- `IDLE GESTURES` gives Tommy the peds' own waiting pose: still on foot, unarmed and
-  off the tarmac for four seconds, he blends `idle_hbhb` for 3–5 s, then idles again.
-  The stock bored fidget (stretch, watch, scratch) keeps its slot, and the waiting
-  pose steps aside while it plays. Compiles; not yet seen at the keyboard.
-- `CHATTER` starts the peds' pair chat with a wandering civilian within 1.8 m who can
-  see him: both sides enter `PED_CHAT`, the `idle_chat`/scratch loop runs, and any
-  movement, weapon, aim or jump ends it on the frame it is pressed. Cops, gangs and
-  mission actors are not candidates, and the ped still has to pass `WillChat`'s own
-  surface and road checks. Compiles; not yet seen at the keyboard.
-- Both start on, because they are flavour rather than cheats; the ini's `StreetIdle`
-  and `Chatter` keys turn them off. When a gate refuses, one line per distinct
-  refusal reaches the log (`VCMOD street idle held: 0x…` with state, weapon,
-  surface and speed), so a silent feature names its blocker instead of only
-  failing to start.
+- `STREET IDLE` is one switch for the whole scene, the waiting pose and the pair
+  chat together: they were two flags for a difference the player cannot act on. It
+  still starts on (flavour, not a cheat), the ini's `StreetIdle` key turns it off,
+  and when a gate refuses, one line per distinct refusal reaches the log
+  (`VCMOD street idle held: 0x…` with state, weapon, surface and speed), so a
+  silent feature names its blocker instead of only failing to start.
+- The waiting pose is exactly one `idle_hbhb` cycle. Still on foot, unarmed and off
+  the tarmac for four seconds, Tommy blends into the clip at 2.0 and fades out where
+  the cycle has already carried the arms back to the pose it started from. The old
+  3–5 s hold faded the pose at a random point, often just after the clip had looped
+  back into raising the arms, which is the snap the ped wait states never show. The
+  stock bored fidget (stretch, watch, scratch) keeps its slot and the pose steps
+  aside while it plays. Half the time the pose is followed by the head scratch: the
+  ped's DOUBLEBACK wait goes from the hands-behind-back pose into `XPRESSscratch`,
+  so Tommy plays its own cycle and fades it where it ends.
+- `C` on a chair or bench sits Tommy instead of crouching. The seat is the map's
+  own `ATTRACTOR_SEAT` 2dfx, and the sit runs the same `SEAT_down`/`SEAT_idle`/
+  `SEAT_up` sequence the ped wait states run, landing on the effect position at
+  ground level and facing the seat's use direction. The seat owns him while the
+  clips play: the on-foot mouse camera normally aims the ped at the lens every
+  frame, so a seated ped is taken out of that path and pinned to the anchor he sat
+  down on, letting the camera orbit on its own instead of swinging him off the
+  bench. The scan covers the dummy
+  entity list as well as buildings and objects, because map props (park benches
+  included) are placed as dummies and the ped attractor scan never looks there. A
+  seat is taken only while a living ped's attractor points at that effect and that
+  instance's position, read from the peds rather than the manager's slot count:
+  that count is per effect, so a ped on any other bench of the same model reads as
+  every instance being full, and it can outlive a sitter killed on the bench. A
+  body left on the seat no longer blocks the press (`VCMOD sit: dead sitter
+  ignored`), and a living holder is named in the log (`VCMOD sit: seat held by
+  ped …`). The press is refused while armed, crouched, in a car, in the air or in
+  water — each refusal names itself in the log (`VCMOD sit: …`), because C is also
+  the crouch key. Any walk key, jump or a second `C` stands him up; without a free
+  seat in reach the press stays the stock crouch. It is part of the same `STREET
+  IDLE` switch, and switching the mod off while seated stands him up rather than
+  leaving the controls locked.
+- The chat no longer ends when another pedestrian bumps in. The break tests are the
+  player's own: a walk press, fire, aim, jump, crouch, a car, a death, lost
+  controls, or being knocked down. A shove changes the move speed and the touched
+  surface for a frame or two and is ignored; either side dropping out of `PED_CHAT`
+  for a frame is put back with the clock unchanged, and the reason reaches the log
+  (`chat ended (…)`). Cops, gangs and mission actors are still not candidates, and
+  the ped still has to pass `WillChat`'s own surface and road checks.
+- The pair faces each other for the whole conversation. `Chat()` only turns the
+  body while the look flag is up and `SetChat` gives that a three second timer, so
+  the look is re-armed after the control and camera code each frame. The chat also
+  opens with the partner's own `SOUND_PED_CHAT` straight into their voice: the
+  engine's `Say()` waits a beat and can be swallowed while the camera moves, and
+  the ped's bank is the only side of the pair that has chat lines at all.
+- The chat gestures on its own turns. A line measures ~1.6 s in the voice bank, so
+  the speaker plays `idle_chat` from the clip's own first pose for 1.8 s and the
+  hands rest until the next turn; the listener stands in its stance. `Chat()`'s own
+  cycle re-blended the clip at a random 0–3 s offset and faded it out a second or
+  two later, which restarted the arms mid-pose every couple of seconds of a
+  face-to-face conversation. The hands follow the turn even when the body has no
+  chat bank and the partner's voice answers.
+- The chat ends on a rest beat, not a timer cut. A ped's chat runs out inside
+  `Chat()` and that frame clears the clip at 8.0 and walks the pair apart; the
+  player has no path to walk back onto, so the cut was the whole ending. The pair
+  now finishes its last line's gesture, lets the hands come down at the gesture's
+  4.0, holds the facing for 0.6 s and parts, and a line that would run past the
+  clock moves the clock instead of being cut. The engine's per-ped chat timer is
+  out of the loop for the pair so it cannot clear the conversation a second early,
+  and the 30 s gap it would have set is set when the pair parts.
+- Street idle no longer asks for fists: the waiting pose, the pair chat and `C` on
+  a bench all work with a weapon selected. The spin kick still wants fists, being a
+  melee attack rather than part of the scene. The on-screen "step off the road"
+  reminder is gone; the tarmac refusal still reaches the gate log.
+  **Compiles, not verified** — a weapon's own stance stays under the partial pose
+  and chat clips, which is the part to look at in game.
+- Seen in game: the waiting pose, the scratch follow-up, the pair chat and sitting
+  on a bench. The seat camera lock still needs a retest. Harness green.
+
+### Melee
+
+- `K` throws the peds' spinning roundhouse: `FIGHT_ROUNDHOUSE`, the move the AI
+  uses at arm's length, chosen by name instead of letting the fight code roll a
+  punch. It runs through `StartFightAttack`, so the clip, spin, strike window, foot
+  hit height and damage come from the fight table. From a standstill it starts a
+  fight; mid-fight the request waits for the next attack slot. Unarmed only —
+  anything in the hands names itself in the log and on the help line — and the
+  sitting pose and a chat are dropped when the kick starts. Compiles; not yet seen
+  at the keyboard.
 
 ### Ride style
 
@@ -192,7 +283,7 @@ offered through the panel or the debug menu, and the choice is live — no resta
 - Panel row hit-testing at resolutions and window sizes other than the one used
   during development.
 - Passenger riding end to end, including whether a bike pillion seat behaves with
-  an NPC rider, and what a boat driver does when we crewed it ourselves.
+  an NPC rider.
 - The story characters on the mission shelf: the resolution path is tested, but
   nobody has worn them in play yet.
 - Zone routing: the destination is a zone centre, so a district whose centre lands
@@ -201,6 +292,11 @@ offered through the panel or the debug menu, and the choice is live — no resta
   the Stretch's rear door reads correctly.
 - `SKIP RIDE` travel in play: scene streaming and the landing height at the road node.
 - Changing `RIDE STYLE` mid-approach and mid-ride from the panel.
+- The `K` spin kick: whether the dropped-in `FIGHT_ROUNDHOUSE` reads right on
+  Tommy and whether a ped at arm's length takes the hit.
+- The seat camera lock on a bench.
+- Sitting on the Miami apartment bench after an NPC was killed on it, and after a
+  corpse was left there.
 
 ## Ideas not started
 

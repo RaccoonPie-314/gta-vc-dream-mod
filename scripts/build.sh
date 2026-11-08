@@ -2,6 +2,7 @@
 # Configure and build. Plain CMake: the Conan 2 / premake 5.0.0 route both fail here.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 cd "$HERE/reVC"
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release > /dev/null
