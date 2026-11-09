@@ -3,6 +3,7 @@
 Built against [https://github.com/mrxenginner/reVC](https://github.com/mrxenginner/reVC), branch `miami`, commit `a26fff4`.
 Mod commits on top of it:
 
+    57f4568 Ship the vanilla fixes, world fixes, tabbed panel and two-hand stance
     d01bb3c Add traffic AI, path probe and interior mods
     d812138 Mount asset mods from a portable mods folder
     287138f Name the crime and its dispatch line per tier
@@ -42,9 +43,9 @@ Usage record for the build of this folder:
 
     System:   macOS arm64
     Operator: RaccoonPie-314
-    Date:     2026-11-08T05:30:57Z
+    Date:     2026-11-09T03:01:06Z
     Target:   https://github.com/mrxenginner/reVC
-    Hash:     a25a03b84d00fe22658c39aabb89b6460562428af19571772ed4d624a7d8caf6
+    Hash:     99a637c73d80ce7dea9c36368d266534977e14c337966393222100e182fe3cfc
 
 ## Rebuilding
 

@@ -93,6 +93,7 @@ if [ -x "$REPO/scripts/build.sh" ]; then
 		echo "=== $(date '+%Y-%m-%d %H:%M:%S') $(git -C "$REPO/reVC" log --oneline -1)"
 		"$REPO/scripts/build.sh" &&
 		"$REPO/scripts/install.sh" &&
+		(strings "$DIR/reVC.app/Contents/MacOS/reVC" | grep -m1 '^vcmods build ' || true) &&
 		shasum -a 256 "$DIR/reVC.app/Contents/MacOS/reVC"
 	} >> "$LOG" 2>&1
 	if [ $? -ne 0 ]; then

@@ -8,9 +8,9 @@ itself, every one of them a live toggle.
 `vc-mods.patch` against reVC `miami` commit `a26fff4`.
 Built and run on macOS arm64 (Apple clang 21, CMake + vendored librw GL3/GLFW)
 against licensed game data. Everything described as seen was turned on at the
-keyboard; the personal driver is harness-tested and waiting on a live run. Two
-older things remain unverified: the ini seeding at startup and panel row clicks at
-other window sizes. See `CHANGELOG.md`.
+keyboard; the rest says what it got, in `CHANGELOG.md`. Still unverified: the ini
+seeding at startup, panel hit-testing at other window sizes, and the items the
+changelog lists as built but unplayed.
 
 ## Apply
 
@@ -104,6 +104,17 @@ all live there, so `PlayerPed.cpp` keeps only the behaviour hooks.
   Picking a name sets it (marked `>` in green) and turns the swap on; clicking the
   row again, or anywhere outside both panels, closes the list. It opens beside the
   panel rather than pushing rows down so the panel keeps one shape.
+- Five tabs — **COMBAT**, **PLAYER**, **DRIVING**, **WORLD**, **DEBUG** — split the
+  rows so the panel stays one screen high; DEBUG holds the two read-only path
+  probes. Clicking a tab switches page and closes any open list, and the last tab is
+  kept for the session. The master switch sits at the right end of the title bar as
+  `[ALL ON]` / `[MIXED]` / `[ALL OFF]`, and still leaves WALK MODE and NO STRAFE
+  alone.
+- `PERMA` column: the first three columns of a row are a pin cell, `[ ]` or `[x]`.
+  Clicking it pins the row, which writes the current value into `[VC Mods]` at once
+  and rewrites it on every later change; clicking it again deletes the key. The rest
+  of the row flips the switch or opens its list. Rows with nothing to remember
+  (call driver, skip ride, the path read-outs, ped category) leave the cell blank.
 - The cursor is geometry, not a glyph — a charset `+` at 8px was unreadable. Two
   filled `RwIm2DRenderPrimitive` triangles (dark edge under a white one, ~20px),
   drawn *after* `RtCharsetBufferFlush()` so it sits on top of the panel instead of
@@ -143,6 +154,23 @@ PedModel = -1
 PassengerMode = 0
 RideZone = -1
 RideStyle = 0
+NoStrafe = 0
+CopPistol = 0
+ManualReload = 1
+CopCrouchCover = 1
+WheelLoss = 1
+RotorsAfterBail = 1
+ShootProjectiles = 1
+ExplosionCover = 1
+FbiLights = 1
+FireTruckCannon = 1
+SteeringWheel = 1
+TrafficAI = 1
+VanillaFixes = 1
+HudCleanup = 1
+KeepWheelAngle = 1
+ExitHoldOff = 1
+LongerFx = 1
 ```
 
 `1`/`0`, and `AnimChoice` is the index into `aVCModAnimGroups` (0 = man, 8 = woman,
@@ -150,9 +178,12 @@ RideStyle = 0
 an index into the ride destination list, `-1` meaning cruise with traffic.
 `RideStyle` is `0` safe or `1` fast and aggressive; an old ini that still says `2`
 for the removed skip style is clamped to safe. Section and key names are case sensitive — `MINI_CASE_SENSITIVE`
-is on in this build. Precedence is one sentence: **the ini seeds it, the panel owns
-it from then on** — flipping a row in play does not write back to the ini, so the
-file stays a preset rather than a second live state to keep in sync.
+is on in this build. A plain key is a preset: **the ini seeds it, the panel owns it
+from then on**, and flipping an unpinned row in play does not write back. A pinned
+row works the other way — pinning writes it at once and every later change to it is
+written too, so the file remembers what you left the row at. An absent key means
+"not pinned", which matters for the switches that default on: deleting their key
+turns them on again at the next launch, it does not turn them off.
 
 ## Toggles
 
@@ -172,12 +203,28 @@ file stays a preset rather than a second live state to keep in sync.
 | `bVCModAdrenaline` | off | Reproduces the native adrenaline pill without picking it up: the flag-driven perks, sprint without stamina, and the melee damage multipliers |
 | `bVCModAdrenalineSlowMo` | on | With adrenaline on, `SLOW-MO` keeps the native `SetTimeScale(1/3)`; `NORMAL` keeps every other effect and leaves the world at full speed and the legs at their normal rate |
 | `nVCModPedModel` | -1 | Character to wear, as a model index; `-1` is Tommy |
-| `bVCModCopPistol` | off | Two-handed colt hold. **Paused**: it shoots correctly, the arm still tracks the old target. Left out of ALL ON/OFF so it cannot come on during other testing |
+| `bVCModCopPistol` | off | Two-handed colt hold using the cop's own fire, aim and stance clips. Left out of ALL ON/OFF so it cannot come on during other testing |
 | `bVCModPassengerMode` | off | The enter-vehicle key takes the passenger seat while an NPC drives |
 | `nVCModRideZone` | -1 | Where that NPC goes: `-1` cruises with traffic, otherwise a map zone from the destination list |
 | `nVCModRideStyle` | 0 | How he drives there: `0` safe — stops for traffic and for red lights; `1` fast and aggressive — ploughs through both |
 | `SKIP RIDE` row | — | One-shot travel to the **RIDE TO** destination, on foot or from a passenger seat. Never bound to the enter key |
 | `CALL DRIVER` row | — | Calls the chauffeur, or dismisses one already coming. `H` does the same |
+| `bVCModNoStrafe` | off | The direction keys choose the body's heading — `A`/`D` turn instead of side-stepping. Aiming or firing hands the heading back to the camera |
+| `bVCModManualReload` | on | `R` starts the reload on foot instead of waiting for the clip to empty. `R` is the car radio key, so it does nothing while driving |
+| `bVCModVanillaFixes` | on | Master switch for the four fixes below |
+| `bVCModHudCleanup` | on | Money shows as `$42` instead of `$00000042`, and empty wanted stars are not drawn |
+| `bVCModKeepWheelAngle` | on | The front wheels keep their last steering angle when the car is abandoned instead of snapping straight |
+| `bVCModExitHoldOff` | on | Holding the exit key while driving cuts the engine instead of getting out |
+| `bVCModLongerFx` | on | Blood and foot-dust particles live twice as long |
+| `bVCModCopCrouchCover` | on | A wanted cop who takes fire drops into a firing crouch for a beat before running to cover |
+| `bVCModWheelLoss` | on | A very hard impact tears the nearest wheel off and throws it as a loose object |
+| `bVCModRotorBlades` | on | A heli's rotor keeps cutting while it spins down after the pilot bails |
+| `bVCModShootableProjectiles` | on | A shot that passes through a live grenade, molotov or rocket sets it off |
+| `bVCModExplosionCover` | on | A building between a blast and a target stops both the damage and any chain detonation behind it |
+| `bVCModFBILights` | on | The FBI Car and FBI Rancher get the cruiser light bar on the roof |
+| `bVCModFireTruckCannon` | on | The water jet starts at the tower mount whether the player or the AI drives, and the arrow keys aim it |
+| `bVCModSteeringWheel` | on | The pack car models' steering wheel node turns with the front wheels |
+| `bVCModTrafficAI` | on | The traffic layer: right-lane driving, horn on a blocked road, and the path fixes from `mods/` |
 
 Three keys are checked directly in `CPlayerPed::ProcessControl`:
 

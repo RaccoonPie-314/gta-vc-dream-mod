@@ -1,7 +1,7 @@
 # Change log
 
-All the work sits on branch `vcmods` in the reVC checkout, three commits
-ahead of the upstream `miami` commit `a26fff4` it was written against. `vc-mods.patch` is
+All the work sits on branch `vcmods` in the reVC checkout, ahead of the upstream `miami` commit
+`a26fff4` it was written against. `vc-mods.patch` is
 generated from `git diff miami..vcmods` by `scripts/sync.sh`. Don't hand-edit the
 patch; regenerate it.
 
@@ -276,12 +276,98 @@ offered through the panel or the debug menu, and the choice is live — no resta
   and compile them as C++98 against stubs. The repo has no test target, so this is
   the shape they take; nothing in the shipped build comes from them.
 
+## Shipped — 2026-11-09
+
+The Vice Extended review, the panel rebuild and the two-hand colt rework. "Seen"
+means somebody turned it on at the keyboard on this machine; everything else says
+what it actually got.
+
+### Vanilla fixes
+
+- `VANILLA FIXES` master with `HUD CLEANUP`, `KEEP WHEEL ANGLE`, `EXIT HOLD OFF` and
+  `LONGER BLOOD/SAND`: money without zero padding, no empty wanted slots, the front
+  wheels keep their angle when the car is abandoned, a held exit key cuts the engine
+  instead of getting out, and blood and foot dust live twice as long. Seen, including
+  the revert with the master off.
+- `RELOAD ON R` starts the engine's own reload on demand instead of after the clip
+  empties. Seen.
+- `WHEEL FALLS OFF`: an impact above 700 impulse marks the nearest wheel missing,
+  hides its node and throws a loose wheel object; a simple car is promoted to real
+  physics first. Seen.
+- `COP CROUCH+COVER`: a wanted cop shot at by an armed player drops into a firing
+  crouch for a beat before the stock run to cover. Seen.
+- `BLADES AFTER BAIL` and `SHOOT PROJECTILES`: blade collision keeps running while a
+  heli spins down with nobody aboard, and a shot through a live grenade, molotov or
+  rocket sets it off. Built, unplayed; both kept deliberately.
+
+### World and vehicles
+
+- `EXPLOSION COVER`: a building between a blast and an entity stops that entity's
+  damage and its chain detonation. Built, unplayed.
+- `FBI LIGHT BARS`: the FBI Car and FBI Rancher get the cruiser bar on the roof, sized
+  from the model's own bounding box. Built, unplayed.
+- `FIRETRUCK CANNON`: the water jet starts at the tower mount for the AI driver too,
+  and the arrow keys aim it on a keyboard, where the stock accessors always read
+  zero. Built, unplayed after the mount was raised once.
+- `STEERING WHEEL`: pack car models carry a real `steeringwheel` node; it turns at
+  four times the road-wheel angle about its own rest orientation, and recaptures that
+  orientation when the clump is set up. Shipped with the pack cars, unplayed.
+- A loose `mods/` file now also wins for streamed models and texture dictionaries,
+  which open through `RwStreamOpen` rather than `myfopen`. Harness.
+- A model with its own `reversinglights` dummy keeps its red tail corona in reverse
+  instead of washing it white. Harness.
+
+### Driving camera
+
+- In a car or boat the mouse and right stick swing the third-person camera around
+  the vehicle, holding the angle relative to the car, and it eases back behind after
+  1.5 s with no camera input. Unplayed.
+
+### Two-hand colt
+
+- The shot keeps the cop clip's stance: the lowered hold stays upper-body only, the
+  fire clip restores its own legs from the group template, and the body turns on the
+  target instead of the IK twisting the spine. Settled in play.
+- The lowering tail plays out after a burst instead of snapping the gun down. Seen.
+
+### No strafe
+
+- `NO STRAFE` gives the direction keys the body's heading, the way a ped walks, and
+  hands it back to the mouse camera while aiming or firing. Harness.
+
+### Panel
+
+- Five tabs — COMBAT, PLAYER, DRIVING, WORLD, DEBUG — a `PERMA` pin column, and the
+  master switch moved from the first row into the title bar. A pinned row is written
+  back to `[VC Mods]` at once and on every later change; unpinned rows stay presets.
+  Not verified in play.
+- `TRAFFIC AI` is read from the ini at startup, which it never was, so that row could
+  not have survived a restart.
+
+### Street idle
+
+- The kerbside look: a waiting ped whose pavement node carries the crossing flag
+  looks both ways with `roadcross` instead of playing the waiting idle, and the same
+  beat follows the exhausted pose and a stopped run. The probe logs its misses once
+  per 30 s so a silent rule can name itself. Compiles, unverified.
+
+### Tests
+
+- Nineteen drivers under `reVC/utils/`, all passing. The five that brace-extract panel
+  code were updated for the tabbed panel: page-relative row indices, the title-bar
+  master, the pin cell as its own click target, and the list anchor coming from the
+  row that opened it.
+
 ## Not verified
 
 - ini seeding end to end: set `NpcAnims = true` in the ini, launch, and check the
-  panel shows it on without touching a toggle.
+  panel shows it on without touching a toggle. The pinned-row writer has not been
+  exercised across a restart either.
 - Panel row hit-testing at resolutions and window sizes other than the one used
-  during development.
+  during development, and the tab strip and pin cell at any size.
+- The driving orbit camera, the pack car models and wheels, the steering wheel node,
+  explosion cover, the FBI bars and the firetruck cannon: built, installed, unplayed.
+- `NO STRAFE` and the kerbside look in play; both have harnesses only.
 - Passenger riding end to end, including whether a bike pillion seat behaves with
   an NPC rider.
 - The story characters on the mission shelf: the resolution path is tested, but
