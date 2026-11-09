@@ -341,6 +341,12 @@ what it actually got.
   master switch moved from the first row into the title bar. A pinned row is written
   back to `[VC Mods]` at once and on every later change; unpinned rows stay presets.
   Not verified in play.
+- A row with modes cycles on click instead of taking a second row. `ADRENALINE` steps
+  `OFF` → `NORMAL` → `SLOW-MO` and `VANILLA FIXES` steps `OFF` → `ON` for its four
+  items, which keep their flags, ini keys and Ctrl-M entries but lose their own rows.
+  Adrenaline is one `int32` (`Adrenaline = 0/1/2`) shared by the panel, the Ctrl-M
+  page and the ini; an old ini's `AdrenalineSlowMo` key is folded in once, then
+  dropped so a pinned normal-speed value cannot come back as slow-mo.
 - `TRAFFIC AI` is read from the ini at startup, which it never was, so that row could
   not have survived a restart.
 
@@ -357,6 +363,28 @@ what it actually got.
   code were updated for the tabbed panel: page-relative row indices, the title-bar
   master, the pin cell as its own click target, and the list anchor coming from the
   row that opened it.
+
+## Shipped — 2026-11-09, `d6070c5`
+
+### Weapon recovery and moving with a lock
+
+- `GUN RECOVERY`: every firearm clip has the same shape — a loop window
+  `weapon.dat` parks on, then a tail that returns the arms to the lowered pose.
+  NPCs always played it and the player cut it. A burst now hands the player the
+  same tail, and the lowered pose it ends on is the hold until the next shot.
+  Seen.
+- `AIM WALK`: a locked-on target rooted the player for every gun without
+  `CANAIM_WITHARM` in `weapon.dat` — only Colt45, Tec9 and Silenced Ingram could
+  walk, because only they aim with the arm IK. With the row on, any gun walks:
+  the parked aim pose fades out while he moves and comes back when he stops, and
+  the facing follows the direction keys instead of the target. The shot still
+  plants him, and so does the recovery tail, so the lowering always lands before
+  the walk starts. Seen — the first pass let movement cut the tail and dropped
+  the gun at once, which play rejected.
+- The lock survives the walk: a torso that cannot reach the target no longer
+  drops it while the gun is down.
+- `reVC/utils/test_vc_aimwalk.py` covers the two predicates and the wiring;
+  twenty-one drivers now pass.
 
 ## Not verified
 

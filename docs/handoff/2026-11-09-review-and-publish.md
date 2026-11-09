@@ -56,3 +56,24 @@ the production bundle id after the rsync; `make-launcher.sh` logs the build line
 - `reVC/utils/test_vc_*.py` extract production code by marker. Renaming a panel
   helper or changing a row's shape breaks a harness first — update the harness in the
   same change.
+
+## Addendum — compressed panel rows (uncommitted)
+
+Same session, after the publish. `ADRENALINE` is one row that cycles
+`OFF` → `NORMAL` → `SLOW-MO`; `VANILLA FIXES` is one row that cycles `OFF` → `ON`
+over its four items. Both are `VCMOD_ROW_CYCLE`, a new row kind with a
+`VCModCycleDef` (get / set / labels), so the click and render paths stay one branch
+each.
+
+- `bVCModAdrenaline` and `bVCModAdrenalineSlowMo` are gone. The single value is
+  `int32 nVCModAdrenalineMode` (0/1/2) in `vcmodpanel`, read by `PlayerPed.cpp` and
+  written by the panel, the Ctrl-M page (`TWEAKINT32N`, one entry) and the ini
+  (`Adrenaline = 0/1/2`).
+- `AdrenalineSlowMo` from an older ini is folded into the mode at load and then
+  removed from the file, so a later normal-speed pin cannot come back as slow-mo.
+- `HUD CLEANUP`, `KEEP WHEEL ANGLE`, `EXIT HOLD OFF` and `LONGER BLOOD/SAND` lost
+  their rows; their flags, ini keys and Ctrl-M entries stay. `VANILLA FIXES` reads
+  `[ON]` only when all four are on, and switching it on restores the set.
+- `ADRENALINE` left `aVCModSwitched`: ALL ON/OFF no longer touches a mode row.
+- Build **vcmods build 154**, clean; `19/19` harnesses pass. Not installed, not
+  committed, not published.

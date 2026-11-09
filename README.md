@@ -104,6 +104,10 @@ all live there, so `PlayerPed.cpp` keeps only the behaviour hooks.
   Picking a name sets it (marked `>` in green) and turns the swap on; clicking the
   row again, or anywhere outside both panels, closes the list. It opens beside the
   panel rather than pushing rows down so the panel keeps one shape.
+- A row with modes cycles instead of flipping: **ADRENALINE** steps
+  `OFF` → `NORMAL` → `SLOW-MO` → `OFF` on each click, and **VANILLA FIXES** steps
+  `OFF` → `ON`. One row per feature is the rule now — a switch and its mode used to
+  be two rows, which is two clicks and two states to reconcile.
 - Five tabs — **COMBAT**, **PLAYER**, **DRIVING**, **WORLD**, **DEBUG** — split the
   rows so the panel stays one screen high; DEBUG holds the two read-only path
   probes. Clicking a tab switches page and closes any open list, and the last tab is
@@ -149,13 +153,13 @@ LockOnVehicles = 0
 NeverWanted = 0
 LockOnLatch = 0
 Adrenaline = 0
-AdrenalineSlowMo = 1
 PedModel = -1
 PassengerMode = 0
 RideZone = -1
 RideStyle = 0
 NoStrafe = 0
 CopPistol = 0
+WeaponRecovery = 1
 ManualReload = 1
 CopCrouchCover = 1
 WheelLoss = 1
@@ -200,10 +204,11 @@ turns them on again at the next launch, it does not turn them off.
 | `bVCModLockOnVehicles` | off | Lock-on also considers driven vehicles — cars, bikes, boats, helis |
 | `bVCModLockOnLatch` | off | Aim button latches: one two-finger press locks on and stays, the next releases |
 | `bVCModNeverWanted` | off | Wanted level is forced back to 0 every frame |
-| `bVCModAdrenaline` | off | Reproduces the native adrenaline pill without picking it up: the flag-driven perks, sprint without stamina, and the melee damage multipliers |
-| `bVCModAdrenalineSlowMo` | on | With adrenaline on, `SLOW-MO` keeps the native `SetTimeScale(1/3)`; `NORMAL` keeps every other effect and leaves the world at full speed and the legs at their normal rate |
+| `nVCModAdrenalineMode` (key `Adrenaline`) | 0 | One row cycling `OFF` → `NORMAL` → `SLOW-MO`: reproduces the native adrenaline pill without picking it up. `NORMAL` keeps every effect and leaves the world at full speed with the legs at their normal rate; `SLOW-MO` adds the native `SetTimeScale(1/3)`. An old ini's `AdrenalineSlowMo` key is folded into the mode once and then dropped |
 | `nVCModPedModel` | -1 | Character to wear, as a model index; `-1` is Tommy |
 | `bVCModCopPistol` | off | Two-handed colt hold using the cop's own fire, aim and stance clips. Left out of ALL ON/OFF so it cannot come on during other testing |
+| `bVCModWeaponRecovery` | on | After a burst while still aiming, the fire clip plays out its authored tail — the same lowering an NPC runs — and the lowered pose becomes the hold until the next shot. Every firearm clip has one; the two-hand colt keeps its own path |
+| `bVCModAimWalk` | on | A locked-on target no longer roots the player. Any gun walks — the parked aim pose fades out while he moves and comes back when he stops — while the shot and its recovery tail still plant him, so the lowering lands before the walk starts |
 | `bVCModPassengerMode` | off | The enter-vehicle key takes the passenger seat while an NPC drives |
 | `nVCModRideZone` | -1 | Where that NPC goes: `-1` cruises with traffic, otherwise a map zone from the destination list |
 | `nVCModRideStyle` | 0 | How he drives there: `0` safe — stops for traffic and for red lights; `1` fast and aggressive — ploughs through both |
@@ -211,11 +216,11 @@ turns them on again at the next launch, it does not turn them off.
 | `CALL DRIVER` row | — | Calls the chauffeur, or dismisses one already coming. `H` does the same |
 | `bVCModNoStrafe` | off | The direction keys choose the body's heading — `A`/`D` turn instead of side-stepping. Aiming or firing hands the heading back to the camera |
 | `bVCModManualReload` | on | `R` starts the reload on foot instead of waiting for the clip to empty. `R` is the car radio key, so it does nothing while driving |
-| `bVCModVanillaFixes` | on | Master switch for the four fixes below |
-| `bVCModHudCleanup` | on | Money shows as `$42` instead of `$00000042`, and empty wanted stars are not drawn |
-| `bVCModKeepWheelAngle` | on | The front wheels keep their last steering angle when the car is abandoned instead of snapping straight |
-| `bVCModExitHoldOff` | on | Holding the exit key while driving cuts the engine instead of getting out |
-| `bVCModLongerFx` | on | Blood and foot-dust particles live twice as long |
+| `bVCModVanillaFixes` (row `VANILLA FIXES`) | on | One row for the four fixes below. It reads `[ON]` only when all four are on, and switching it on restores the whole set |
+| `bVCModHudCleanup` | on | Money shows as `$42` instead of `$00000042`, and empty wanted stars are not drawn. Ini and Ctrl-M only — the row is the master above |
+| `bVCModKeepWheelAngle` | on | The front wheels keep their last steering angle when the car is abandoned instead of snapping straight. Ini and Ctrl-M only |
+| `bVCModExitHoldOff` | on | Holding the exit key while driving cuts the engine instead of getting out. Ini and Ctrl-M only |
+| `bVCModLongerFx` | on | Blood and foot-dust particles live twice as long. Ini and Ctrl-M only |
 | `bVCModCopCrouchCover` | on | A wanted cop who takes fire drops into a firing crouch for a beat before running to cover |
 | `bVCModWheelLoss` | on | A very hard impact tears the nearest wheel off and throws it as a loose object |
 | `bVCModRotorBlades` | on | A heli's rotor keeps cutting while it spins down after the pilot bails |

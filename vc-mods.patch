@@ -883,7 +883,7 @@ index 28fa9cc..988d956 100644
  
  #ifdef NEW_RENDERER
 diff --git a/src/core/re3.cpp b/src/core/re3.cpp
-index d16088f..a147d8a 100644
+index d16088f..f0000be 100644
 --- a/src/core/re3.cpp
 +++ b/src/core/re3.cpp
 @@ -32,6 +32,18 @@
@@ -932,7 +932,7 @@ index d16088f..a147d8a 100644
  const char *iniControllerActions[] = { "PED_FIREWEAPON", "PED_CYCLE_WEAPON_RIGHT", "PED_CYCLE_WEAPON_LEFT", "GO_FORWARD", "GO_BACK", "GO_LEFT", "GO_RIGHT", "PED_SNIPER_ZOOM_IN",
  	"PED_SNIPER_ZOOM_OUT", "VEHICLE_ENTER_EXIT", "CAMERA_CHANGE_VIEW_ALL_SITUATIONS", "PED_JUMPING", "PED_SPRINT", "PED_LOOKBEHIND", "PED_DUCK", "PED_ANSWER_PHONE", 
  #ifdef BIND_VEHICLE_FIREWEAPON
-@@ -622,6 +654,46 @@ bool LoadINISettings()
+@@ -622,6 +654,59 @@ bool LoadINISettings()
  	}
  #endif
  
@@ -948,10 +948,23 @@ index d16088f..a147d8a 100644
 +	ReadIniIfExists("VC Mods", "LockOnVehicles", &bVCModLockOnVehicles);
 +	ReadIniIfExists("VC Mods", "NeverWanted", &bVCModNeverWanted);
 +	ReadIniIfExists("VC Mods", "LockOnLatch", &bVCModLockOnLatch);
-+	ReadIniIfExists("VC Mods", "Adrenaline", &bVCModAdrenaline);
-+	ReadIniIfExists("VC Mods", "AdrenalineSlowMo", &bVCModAdrenalineSlowMo);
++	ReadIniIfExists("VC Mods", "Adrenaline", &nVCModAdrenalineMode);
++	if (nVCModAdrenalineMode < 0 || nVCModAdrenalineMode > 2)
++		nVCModAdrenalineMode = 0;
++	// an ini written before ADRENALINE became one row: the switch said on or off
++	// and AdrenalineSlowMo said which mode. Fold it in and drop the old key, so a
++	// pinned normal-speed value can never be read back as slow-mo.
++	if (IniHasKey("VC Mods", "AdrenalineSlowMo")) {
++		bool slowMo = true;
++		ReadIniIfExists("VC Mods", "AdrenalineSlowMo", &slowMo);
++		if (nVCModAdrenalineMode != 0 && slowMo)
++			nVCModAdrenalineMode = 2;
++		IniRemoveKey("VC Mods", "AdrenalineSlowMo");
++	}
 +	ReadIniIfExists("VC Mods", "CopPistol", &bVCModCopPistol);
 +	ReadIniIfExists("VC Mods", "CopHoldFrame", &nVCModCopHoldFrame);
++	ReadIniIfExists("VC Mods", "WeaponRecovery", &bVCModWeaponRecovery);
++	ReadIniIfExists("VC Mods", "AimWalk", &bVCModAimWalk);
 +	ReadIniIfExists("VC Mods", "PedModel", &nVCModPedModel);
 +	ReadIniIfExists("VC Mods", "PassengerMode", &bVCModPassengerMode);
 +	ReadIniIfExists("VC Mods", "StreetIdle", &bVCModStreetIdle);
@@ -979,7 +992,7 @@ index d16088f..a147d8a 100644
  	// Fetched in above block, but needs evaluation
  #ifdef PED_CAR_DENSITY_SLIDERS
  	CPopulation::MaxNumberOfPedsInUse = DEFAULT_MAX_NUMBER_OF_PEDS * CIniFile::PedNumberMultiplier;
-@@ -720,6 +792,10 @@ void SaveINISettings()
+@@ -720,6 +805,10 @@ void SaveINISettings()
  	}
  #endif
  
@@ -5227,10 +5240,10 @@ index 0000000..00bf3cd
 +#endif
 diff --git a/src/extras/vcmodpanel.cpp b/src/extras/vcmodpanel.cpp
 new file mode 100644
-index 0000000..d4852f8
+index 0000000..851daef
 --- /dev/null
 +++ b/src/extras/vcmodpanel.cpp
-@@ -0,0 +1,1573 @@
+@@ -0,0 +1,1651 @@
 +#include "common.h"
 +
 +#include <stdio.h>
@@ -5280,9 +5293,16 @@ index 0000000..d4852f8
 +bool bVCModLockOnVehicles;
 +bool bVCModNeverWanted;
 +bool bVCModLockOnLatch;
-+bool bVCModAdrenaline;
-+bool bVCModAdrenalineSlowMo = true;
++// 0 off, 1 normal, 2 slow-mo. One value serves the panel row, the debug-menu
++// entry and the ini, so the mode cannot disagree with the switch next to it.
++int32 nVCModAdrenalineMode;
 +bool bVCModCopPistol;
++// ambient behaviour rather than a cheat: NPCs always play the tail out, so the
++// player does too until the row is flipped off
++bool bVCModWeaponRecovery = true;
++// walking with a lock is the same freedom the arm-aim pistols always had, so it
++// starts on; the row turns the stock freeze back on for anyone who wants it
++bool bVCModAimWalk = true;
 +// weapon.dat has no loop window for the cop animation, so the frame it is held at
 +// has to come from somewhere the player can see and change. 0 is the clip's
 +// lowered stance, which is where a locked-on two-hand hold sits between bursts.
@@ -5603,8 +5623,8 @@ index 0000000..d4852f8
 +enum eVCModRowKind
 +{
 +	VCMOD_ROW_FLAG,		// flips the flag it points at
++	VCMOD_ROW_CYCLE,	// steps through a fixed set of states
 +	VCMOD_ROW_ANIMSET,	// opens the animation list
-+	VCMOD_ROW_ADRENALINE_MODE,	// flips the flag, but reads as a mode
 +	VCMOD_ROW_PEDCAT,	// opens the category list
 +	VCMOD_ROW_PEDCHAR,	// opens that category's roster
 +	VCMOD_ROW_RIDEZONE,	// opens the ride destination list
@@ -5615,6 +5635,18 @@ index 0000000..d4852f8
 +	VCMOD_ROW_PATHPROBE_LANE	// read-only: what its path node is doing to it
 +};
 +
++// A row that steps through states instead of flipping: the old layout needed one
++// row for a switch and another for its mode, which is two clicks and two states
++// to reconcile. get/set work on the live value, so the panel, the debug menu and
++// the ini all read the same thing.
++struct VCModCycleDef
++{
++	int32 (*get)(void);
++	void (*set)(int32 value);
++	int32 count;
++	const char *const *labels;	// count of them, the current one is the cell
++};
++
 +struct VCModRowDef
 +{
 +	const char *name;
@@ -5622,6 +5654,58 @@ index 0000000..d4852f8
 +	bool *state;
 +	const char *iniKey;	// nil when the row has nothing to remember
 +	eVCModPage page;
++	const VCModCycleDef *cycle;	// CYCLE rows only
++};
++
++static int32
++VCModAdrenalineGet(void)
++{
++	return nVCModAdrenalineMode;
++}
++
++static void
++VCModAdrenalineSet(int32 value)
++{
++	nVCModAdrenalineMode = value;
++}
++
++static const char *aVCModAdrenalineLabels[] = {
++	"[OFF]", "[NORMAL]", "[SLOW-MO]"
++};
++
++static const VCModCycleDef aVCModAdrenalineCycle = {
++	VCModAdrenalineGet, VCModAdrenalineSet,
++	ARRAY_SIZE(aVCModAdrenalineLabels), aVCModAdrenalineLabels
++};
++
++// the four vanilla fixes were one master row plus a row each, which is five
++// clicks to turn on what the master already means. The row reads ON only when
++// all four are on, and switching it on restores the whole set; an individual
++// item turned off in the debug menu still shows here as OFF.
++static int32
++VCModVanillaFixGet(void)
++{
++	return bVCModVanillaFixes && bVCModHudCleanup && bVCModKeepWheelAngle
++		&& bVCModExitHoldOff && bVCModLongerFx;
++}
++
++static void
++VCModVanillaFixSet(int32 value)
++{
++	bVCModVanillaFixes = value != 0;
++	if (value) {
++		bVCModHudCleanup = true;
++		bVCModKeepWheelAngle = true;
++		bVCModExitHoldOff = true;
++		bVCModLongerFx = true;
++	}
++}
++
++static const char *aVCModVanillaFixLabels[] = { "[OFF]", "[ON]" };
++
++static const VCModCycleDef aVCModVanillaFixCycle = {
++	VCModVanillaFixGet, VCModVanillaFixSet,
++	ARRAY_SIZE(aVCModVanillaFixLabels), aVCModVanillaFixLabels
 +};
 +
 +static const char *aVCModPageNames[NUM_VCMOD_PAGES] = {
@@ -5634,11 +5718,12 @@ index 0000000..d4852f8
 +	{ "NPC DOOM AIM",    VCMOD_ROW_FLAG,    &bVCModPlayerDoomAim,  "PlayerDoomAim",  VCMOD_PAGE_COMBAT },
 +	{ "NO SCOPE CAMERA", VCMOD_ROW_FLAG,    &bVCModNoScopedAim,    "NoScopedAim",    VCMOD_PAGE_COMBAT },
 +	{ "COLT TWO-HAND",   VCMOD_ROW_FLAG,    &bVCModCopPistol,      "CopPistol",      VCMOD_PAGE_COMBAT },
++	{ "GUN RECOVERY",    VCMOD_ROW_FLAG,    &bVCModWeaponRecovery, "WeaponRecovery", VCMOD_PAGE_COMBAT },
++	{ "AIM WALK",        VCMOD_ROW_FLAG,    &bVCModAimWalk,        "AimWalk",        VCMOD_PAGE_COMBAT },
 +	{ "LOCKON VEHICLES", VCMOD_ROW_FLAG,    &bVCModLockOnVehicles, "LockOnVehicles", VCMOD_PAGE_COMBAT },
 +	{ "NEVER WANTED",    VCMOD_ROW_FLAG,    &bVCModNeverWanted,    "NeverWanted",    VCMOD_PAGE_COMBAT },
 +	{ "LOCKON LATCH",    VCMOD_ROW_FLAG,    &bVCModLockOnLatch,    "LockOnLatch",    VCMOD_PAGE_COMBAT },
-+	{ "ADRENALINE",      VCMOD_ROW_FLAG,    &bVCModAdrenaline,     "Adrenaline",     VCMOD_PAGE_COMBAT },
-+	{ "ADRENALINE MODE", VCMOD_ROW_ADRENALINE_MODE, &bVCModAdrenalineSlowMo, "AdrenalineSlowMo", VCMOD_PAGE_COMBAT },
++	{ "ADRENALINE",      VCMOD_ROW_CYCLE,   nil,                   "Adrenaline",     VCMOD_PAGE_COMBAT, &aVCModAdrenalineCycle },
 +	{ "RELOAD ON R",     VCMOD_ROW_FLAG,    &bVCModManualReload,   "ManualReload",   VCMOD_PAGE_COMBAT },
 +
 +	{ "WALK MODE",       VCMOD_ROW_FLAG,    &bVCModWalkMode,       "WalkMode",       VCMOD_PAGE_PLAYER },
@@ -5653,7 +5738,6 @@ index 0000000..d4852f8
 +	{ "RIDE TO",         VCMOD_ROW_RIDEZONE, nil,                  "RideZone",       VCMOD_PAGE_DRIVING },
 +	{ "RIDE STYLE",      VCMOD_ROW_RIDESTYLE, nil,                 "RideStyle",      VCMOD_PAGE_DRIVING },
 +	{ "SKIP RIDE",       VCMOD_ROW_SKIPRIDE, nil,                  nil,              VCMOD_PAGE_DRIVING },
-+	{ "KEEP WHEEL ANGLE", VCMOD_ROW_FLAG,   &bVCModKeepWheelAngle, "KeepWheelAngle", VCMOD_PAGE_DRIVING },
 +	{ "STEERING WHEEL",  VCMOD_ROW_FLAG,    &bVCModSteeringWheel,  "SteeringWheel",  VCMOD_PAGE_DRIVING },
 +	{ "WHEEL FALLS OFF", VCMOD_ROW_FLAG,    &bVCModWheelLoss,      "WheelLoss",      VCMOD_PAGE_DRIVING },
 +	{ "BLADES AFTER BAIL", VCMOD_ROW_FLAG,  &bVCModRotorBlades,    "RotorsAfterBail", VCMOD_PAGE_DRIVING },
@@ -5661,10 +5745,7 @@ index 0000000..d4852f8
 +
 +	{ "STREET IDLE",     VCMOD_ROW_FLAG,    &bVCModStreetIdle,     "StreetIdle",     VCMOD_PAGE_WORLD },
 +	{ "TRAFFIC AI",      VCMOD_ROW_FLAG,    &bVCModTrafficAI,      "TrafficAI",      VCMOD_PAGE_WORLD },
-+	{ "VANILLA FIXES",   VCMOD_ROW_FLAG,    &bVCModVanillaFixes,   "VanillaFixes",   VCMOD_PAGE_WORLD },
-+	{ "HUD CLEANUP",     VCMOD_ROW_FLAG,    &bVCModHudCleanup,     "HudCleanup",     VCMOD_PAGE_WORLD },
-+	{ "EXIT HOLD OFF",   VCMOD_ROW_FLAG,    &bVCModExitHoldOff,    "ExitHoldOff",    VCMOD_PAGE_WORLD },
-+	{ "LONGER BLOOD/SAND", VCMOD_ROW_FLAG,  &bVCModLongerFx,       "LongerFx",       VCMOD_PAGE_WORLD },
++	{ "VANILLA FIXES",   VCMOD_ROW_CYCLE,   nil,                   "VanillaFixes",   VCMOD_PAGE_WORLD, &aVCModVanillaFixCycle },
 +	{ "COP CROUCH+COVER", VCMOD_ROW_FLAG,   &bVCModCopCrouchCover, "CopCrouchCover", VCMOD_PAGE_WORLD },
 +	{ "SHOOT PROJECTILES", VCMOD_ROW_FLAG,  &bVCModShootableProjectiles, "ShootProjectiles", VCMOD_PAGE_WORLD },
 +	{ "EXPLOSION COVER", VCMOD_ROW_FLAG,    &bVCModExplosionCover, "ExplosionCover", VCMOD_PAGE_WORLD },
@@ -5717,12 +5798,13 @@ index 0000000..d4852f8
 +	return row->iniKey != nil && IniHasKey("VC Mods", row->iniKey);
 +}
 +
-+// the value a pinned row carries into the ini: the flag for switches, the choice
-+// for the list rows
++// the value a pinned row carries into the ini: the flag for switches, the state
++// for a cycle row, the choice for the list rows
 +static int32
 +VCModRowValue(const VCModRowDef *row)
 +{
 +	switch (row->kind) {
++	case VCMOD_ROW_CYCLE:	return row->cycle->get();
 +	case VCMOD_ROW_ANIMSET:	return nVCModAnimChoice;
 +	case VCMOD_ROW_PEDCHAR: {
 +		// the pending model is cleared once the swap happens, so the worn body is
@@ -5784,11 +5866,12 @@ index 0000000..d4852f8
 +TWEAKBOOL(bVCModNoScopedAim);
 +TWEAKBOOL(bVCModCopPistol);
 +TWEAKINT32(nVCModCopHoldFrame, 0, 29, 1);
++TWEAKBOOL(bVCModWeaponRecovery);
++TWEAKBOOLN(bVCModAimWalk, "move while locked on");
 +TWEAKBOOL(bVCModLockOnVehicles);
 +TWEAKBOOL(bVCModNeverWanted);
 +TWEAKBOOL(bVCModLockOnLatch);
-+TWEAKBOOLN(bVCModAdrenaline, "adrenaline");
-+TWEAKBOOLN(bVCModAdrenalineSlowMo, "adrenaline slow-mo");
++TWEAKINT32N(nVCModAdrenalineMode, 0, 2, 1, "adrenaline 0 off, 1 normal, 2 slow-mo");
 +TWEAKBOOLN(bVCModManualReload, "reload on R");
 +}
 +
@@ -5899,7 +5982,8 @@ index 0000000..d4852f8
 +
 +// WALK MODE and NO STRAFE are left out on purpose: they say how Tommy moves, not
 +// which mods are running, and losing them every time the combat switches get
-+// flipped together is the annoying version of a convenience button
++// flipped together is the annoying version of a convenience button. ADRENALINE is
++// out because it is a mode row now, and the master has no meaning to give it.
 +static bool *aVCModSwitched[] = {
 +	&bVCModPlayerNpcAnims,
 +	&bVCModMouseAimLockOn,
@@ -5909,7 +5993,6 @@ index 0000000..d4852f8
 +	&bVCModLockOnVehicles,
 +	&bVCModNeverWanted,
 +	&bVCModLockOnLatch,
-+	&bVCModAdrenaline,
 +	&bVCModStreetIdle,
 +	&bVCModTrafficAI,
 +	&bVCModVanillaFixes,
@@ -5918,6 +6001,8 @@ index 0000000..d4852f8
 +	&bVCModExitHoldOff,
 +	&bVCModLongerFx,
 +	&bVCModManualReload,
++	&bVCModWeaponRecovery,
++	&bVCModAimWalk,
 +	&bVCModCopCrouchCover,
 +	&bVCModWheelLoss,
 +	&bVCModRotorBlades,
@@ -6559,8 +6644,12 @@ index 0000000..d4852f8
 +
 +		switch (def->kind) {
 +		case VCMOD_ROW_FLAG:
-+		case VCMOD_ROW_ADRENALINE_MODE:
 +			*def->state = !*def->state;
++			if (VCModRowPinned(def))
++				VCModSavePins();
++			break;
++		case VCMOD_ROW_CYCLE:
++			def->cycle->set((def->cycle->get() + 1) % def->cycle->count);
 +			if (VCModRowPinned(def))
 +				VCModSavePins();
 +			break;
@@ -6733,10 +6822,12 @@ index 0000000..d4852f8
 +			value = VCModDriverCell();
 +			break;
 +
-+		case VCMOD_ROW_ADRENALINE_MODE:
-+			style = VCFONT_SET;
-+			value = bVCModAdrenalineSlowMo ? "[SLOW-MO]  click to switch" : "[NORMAL]   click to switch";
++		case VCMOD_ROW_CYCLE: {
++			int32 mode = def->cycle->get();
++			style = mode != 0 ? VCFONT_ON : VCFONT_OFF;
++			value = def->cycle->labels[mode];
 +			break;
++		}
 +
 +		case VCMOD_ROW_PATHPROBE_NODE:
 +			style = VCFONT_SET;
@@ -6806,10 +6897,10 @@ index 0000000..d4852f8
 +#endif
 diff --git a/src/extras/vcmodpanel.h b/src/extras/vcmodpanel.h
 new file mode 100644
-index 0000000..99df5eb
+index 0000000..adc9b76
 --- /dev/null
 +++ b/src/extras/vcmodpanel.h
-@@ -0,0 +1,122 @@
+@@ -0,0 +1,145 @@
 +#ifndef VCMODPANEL_H
 +#define VCMODPANEL_H
 +
@@ -6835,18 +6926,41 @@ index 0000000..99df5eb
 +extern bool bVCModLockOnVehicles;
 +extern bool bVCModNeverWanted;
 +extern bool bVCModLockOnLatch;
-+extern bool bVCModAdrenaline;
-+extern bool bVCModAdrenalineSlowMo;
++// 0 off, 1 normal, 2 slow-mo; one row cycles it in the panel and one integer in
++// the debug menu, so there is no half-on state to explain
++extern int32 nVCModAdrenalineMode;
 +extern bool bVCModCopPistol;
 +extern int32 nVCModCopHoldFrame;
++// every firearm clip carries a tail past its loop window that lowers the arms;
++// NPCs play it, the player used to park on the loop end and cut it. The two-hand
++// colt browses its own tail and is not part of this switch.
++extern bool bVCModWeaponRecovery;
++// a locked-on target used to root the player for every gun without CANAIM_WITHARM,
++// leaving that to the pistols. With the row on he walks with any weapon, lowering
++// it to the carry while he moves and raising it again when he stops; the shot
++// itself still plants him.
++extern bool bVCModAimWalk;
 +class CWeaponInfo;
 +// true while the two-hand colt pose owns the weapon clips: the player, the row
 +// on, and a weapon whose cop clip exists
 +bool VCModCopTwoHandPose(CPed *ped, CWeaponInfo *info);
++// true while the player is playing a recovery tail or fading the aim back up; the
++// arm IK has to stand down for both, or it re-aims the lowered arm
++bool VCModWeaponRecovering(void);
 +// true while the two-hand fire clip owns the player, recovery tail included
 +bool VCModCopTwoHandFiring(CPed *ped, CWeaponInfo *info);
 +// true while the pose wants the body, not the IK, to aim the spine
 +bool VCModCopStanceAim(CPed *ped);
++// true while the player is walking or running: a parked aim pose cannot own the
++// body then, or the walk glides under it
++bool VCModAimHoldMoving(CPed *ped);
++// true when AIM WALK owns this weapon: the row on, the player standing, and a gun
++// the arm cannot aim with; the pistols already walk and the two-hand colt has its
++// own hold rules
++bool VCModAimWalkWeapon(CPed *ped, CWeaponInfo *info);
++// true while a recovery tail is still playing: the tail is planted, so the player
++// cannot walk until the lowering has landed
++bool VCModAimTailRunning(CPed *ped);
 +// pending model from the ini, -1 until a character is asked for
 +extern int32 nVCModPedModel;
 +extern int32 nVCModPedCategory;
@@ -7968,7 +8082,7 @@ index ec9f6a0..478a188 100644
  
  class CVehicleModelInfo : public CClumpModelInfo
 diff --git a/src/peds/Ped.cpp b/src/peds/Ped.cpp
-index aa63c32..08f6398 100644
+index aa63c32..dad4171 100644
 --- a/src/peds/Ped.cpp
 +++ b/src/peds/Ped.cpp
 @@ -15,6 +15,7 @@
@@ -7987,7 +8101,7 @@ index aa63c32..08f6398 100644
  #include "SaveBuf.h"
  
  CPed *gapTempPedList[50];
-@@ -1249,6 +1251,11 @@ CPed::AimGun(void)
+@@ -1249,6 +1251,16 @@ CPed::AimGun(void)
  	if (IsPlayer() && bIsDucking)
  		m_pedIK.m_flags &= ~CPedIK::AIMS_WITH_ARM;
  
@@ -7996,10 +8110,15 @@ index aa63c32..08f6398 100644
 +	if (IsPlayer() && VCModCopTwoHandPose(this, CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)))
 +		m_pedIK.m_flags &= ~CPedIK::AIMS_WITH_ARM;
 +
++	// the same for a recovery tail and its fade back up: the arm IK would re-aim
++	// the arm the clip is lowering
++	if (IsPlayer() && VCModWeaponRecovering())
++		m_pedIK.m_flags &= ~CPedIK::AIMS_WITH_ARM;
++
  	if (m_pSeekTarget) {
  		if (m_pSeekTarget->IsPed()) {
  			((CPed*)m_pSeekTarget)->m_pedIK.GetComponentPosition(vector, PED_MID);
-@@ -1404,8 +1411,11 @@ CPed::WillChat(CPed *stranger)
+@@ -1404,8 +1416,11 @@ CPed::WillChat(CPed *stranger)
  		return false;
  	if (stranger->m_nPedType == PEDTYPE_COP)
  		return false;
@@ -8012,7 +8131,7 @@ index aa63c32..08f6398 100644
  	if ((IsGangMember() || stranger->IsGangMember()) && m_nPedType != stranger->m_nPedType)
  		return false;
  	return true;
-@@ -1447,8 +1457,10 @@ CPed::CalculateNewVelocity(void)
+@@ -1447,8 +1462,10 @@ CPed::CalculateNewVelocity(void)
  		m_moved = m_moved * (1 / 100.0f);
  	}
  
@@ -8024,7 +8143,7 @@ index aa63c32..08f6398 100644
  
  		if (FindPlayerPed() == this)
  			FindPlayerPed()->m_fWalkAngle = 0.0f;
-@@ -3142,6 +3154,9 @@ CPed::PlayFootSteps(void)
+@@ -3142,6 +3159,9 @@ CPed::PlayFootSteps(void)
  	CAnimBlendAssociation *walkRunAssoc = nil;
  	float walkRunAssocBlend = 0.0f, idleAssocBlend = 0.0f;
  	bool isSkater = m_pedStats == CPedStats::ms_apPedStats[PEDSTAT_SKATER];
@@ -8034,7 +8153,7 @@ index aa63c32..08f6398 100644
  
  	CVector footPosL(0.0f, 0.0f, 0.0f), footPosR(0.0f, 0.0f, 0.0f);
  	bool footPosLok = false, footPosRok = false;
-@@ -3173,7 +3188,7 @@ CPed::PlayFootSteps(void)
+@@ -3173,7 +3193,7 @@ CPed::PlayFootSteps(void)
  		float stepEnd = walkRunAssoc->hierarchy->totalLength / 2.0f + stepStart;
  		float currentTime = walkRunAssoc->currentTime;
  
@@ -8043,7 +8162,7 @@ index aa63c32..08f6398 100644
  			// both are unused
  			static float stepStartSection = 1.0f;
  			static float animSections = 15.f;
-@@ -3189,22 +3204,25 @@ CPed::PlayFootSteps(void)
+@@ -3189,22 +3209,25 @@ CPed::PlayFootSteps(void)
  			switch (CSurfaceTable::GetAdhesionGroup(m_nSurfaceTouched)) {
  				case ADHESIVE_LOOSE:
  					if (CGeneral::GetRandomNumber() % 128) {
@@ -8074,7 +8193,7 @@ index aa63c32..08f6398 100644
  					soundVolume = 0.2f;
  					break;
  				default:
-@@ -3909,6 +3927,11 @@ CPed::CanStrafeOrMouseControl(void)
+@@ -3909,6 +3932,11 @@ CPed::CanStrafeOrMouseControl(void)
  	if (CCamera::bFreeCam)
  		return false;
  #endif
@@ -8086,7 +8205,7 @@ index aa63c32..08f6398 100644
  	return m_nPedState == PED_NONE || m_nPedState == PED_IDLE || m_nPedState == PED_FLEE_POS || m_nPedState == PED_FLEE_ENTITY ||
  		m_nPedState == PED_ATTACK || m_nPedState == PED_FIGHT || m_nPedState == PED_AIM_GUN || m_nPedState == PED_JUMP || m_nPedState == PED_ANSWER_MOBILE;
  }
-@@ -7163,7 +7186,10 @@ CPed::Chat(void)
+@@ -7163,7 +7191,10 @@ CPed::Chat(void)
  
  	CPed *partner = (CPed*) m_pLookTarget;
  
@@ -8098,7 +8217,7 @@ index aa63c32..08f6398 100644
  		ClearChat();
  		m_chatTimer = CTimer::GetTimeInMilliseconds() + 30000;
  		if (partner->m_pedInObjective) {
-@@ -7173,32 +7199,40 @@ CPed::Chat(void)
+@@ -7173,32 +7204,40 @@ CPed::Chat(void)
  		}
  		return;
  	}
@@ -8223,7 +8342,7 @@ index e204dad..e81a058 100644
  		if (!m_pedInObjective->bInVehicle) {
  			if (m_pedInObjective->GetWeapon()->IsTypeMelee()) {
 diff --git a/src/peds/PedFight.cpp b/src/peds/PedFight.cpp
-index 8a3b971..e391235 100644
+index 8a3b971..a994c63 100644
 --- a/src/peds/PedFight.cpp
 +++ b/src/peds/PedFight.cpp
 @@ -25,10 +25,15 @@
@@ -8242,7 +8361,7 @@ index 8a3b971..e391235 100644
  FightMove tFightMoves[NUM_FIGHTMOVES] =
  {
    { ANIM_STD_NUM,  0.0f,  0.0f,  0.0f,  0.0f,  1.0f, HITLEVEL_NULL, 0, 0 },
-@@ -157,6 +162,122 @@ CheckForPedsOnGroundToAttack(CPed *attacker, CPed **pedOnGround)
+@@ -157,6 +162,180 @@ CheckForPedsOnGroundToAttack(CPed *attacker, CPed **pedOnGround)
  	return stateToReturn;
  }
  
@@ -8350,6 +8469,46 @@ index 8a3b971..e391235 100644
 +		&& (ped->m_nPedState == PED_ATTACK || bVCModCopRecovering);
 +}
 +
++// Every firearm clip has the cop clip's shape: a loop window that weapon.dat
++// parks on, then a tail that returns the arms to the lowered pose. NPCs run the
++// clip out and stay on that lowered pose; the player parks on the loop end, so
++// his tail never shows while he still aims. The tail's end is the hold, the same
++// way colt45_cop's lowered carry is the two-hand hold.
++static bool bVCModWeaponRecovering;
++
++bool
++VCModWeaponRecovering(void)
++{
++	return bVCModWeaponRecovering;
++}
++
++// the two-hand colt browses its own tail through bVCModCopRecovering, so this
++// stands down for that pose and leaves it exactly as it was
++static bool
++VCModWeaponRecoveryWanted(CPed *ped, CWeaponInfo *info, CAnimBlendAssociation *assoc, float loopEnd)
++{
++	if (!bVCModWeaponRecovery || !ped->IsPlayer() || ped->bIsDucking || assoc == nil || assoc->hierarchy == nil)
++		return false;
++	if (VCModCopTwoHandPose(ped, info))
++		return false;
++	return assoc->hierarchy->totalLength > loopEnd + VCModCopRecoverCut;
++}
++
++// The tail is the author's lowering, and it is a planted pose: the player watches
++// it out before he walks again, the same way an NPC plays it. The parked hold it
++// ends on is not part of the tail, so walking from the hold stays free.
++bool
++VCModAimTailRunning(CPed *ped)
++{
++	if (!bVCModWeaponRecovering || !ped->IsPlayer())
++		return false;
++	CWeaponInfo *info = CWeaponInfo::GetWeaponInfo(ped->GetWeapon()->m_eWeaponType);
++	if (VCModCopTwoHandPose(ped, info))
++		return false;
++	CAnimBlendAssociation *assoc = RpAnimBlendClumpGetAssociation(ped->GetClump(), VCModCopAimAnim(ped, info));
++	return assoc != nil && assoc->IsRunning();
++}
++
 +// The IK aims by twisting the spine, and colt45_cop's legs and pelvis hang off
 +// that spine: the twist splays the baked stance mid-chase and pins the torso
 +// while the player walks with the lowered hold. RotatePlayerToTrackTarget turns
@@ -8362,10 +8521,28 @@ index 8a3b971..e391235 100644
 +	return VCModCopTwoHandPose(ped, CWeaponInfo::GetWeaponInfo(ped->GetWeapon()->m_eWeaponType));
 +}
 +
++bool
++VCModAimHoldMoving(CPed *ped)
++{
++	if (!ped->IsPlayer())
++		return false;
++	CPlayerPed *player = (CPlayerPed*)ped;
++	return player->m_nMoveState == PEDMOVE_WALK || player->m_nMoveState == PEDMOVE_RUN
++		|| player->m_fMoveSpeed > 0.1f;
++}
++
++bool
++VCModAimWalkWeapon(CPed *ped, CWeaponInfo *info)
++{
++	return bVCModAimWalk && ped->IsPlayer() && !ped->bIsDucking
++		&& !VCModCopTwoHandPose(ped, info)
++		&& !info->IsFlagSet(WEAPONFLAG_CANAIM_WITHARM);
++}
++
  void
  CPed::SetPointGunAt(CEntity *to)
  {
-@@ -178,18 +299,21 @@ CPed::SetPointGunAt(CEntity *to)
+@@ -178,18 +357,21 @@ CPed::SetPointGunAt(CEntity *to)
  	SetMoveState(PEDMOVE_STILL);
  
  	CAnimBlendAssociation *aimAssoc;
@@ -8389,7 +8566,7 @@ index 8a3b971..e391235 100644
  		}
  
  		aimAssoc->blendAmount = 0.0f;
-@@ -203,8 +327,11 @@ void
+@@ -203,8 +385,11 @@ void
  CPed::PointGunAt(void)
  {
  	CWeaponInfo *weaponInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
@@ -8403,7 +8580,7 @@ index 8a3b971..e391235 100644
  	if (!weaponAssoc || weaponAssoc->blendDelta < 0.0f) {
  		if (weaponInfo->IsFlagSet(WEAPONFLAG_CROUCHFIRE)) {
  			weaponAssoc = RpAnimBlendClumpGetAssociation(GetClump(), GetCrouchFireAnim(weaponInfo));
-@@ -212,6 +339,32 @@ CPed::PointGunAt(void)
+@@ -212,6 +397,59 @@ CPed::PointGunAt(void)
  		}
  	}
  
@@ -8421,27 +8598,68 @@ index 8a3b971..e391235 100644
 +			// Tommy glide with pinned arms; let locomotion own the body while he
 +			// moves and bring the two-hand carry back when he stands still or fires
 +			if (weaponAssoc) {
-+				bool moving = m_nMoveState == PEDMOVE_WALK || m_nMoveState == PEDMOVE_RUN
-+					|| ((CPlayerPed*)this)->m_fMoveSpeed > 0.1f;
-+				if (moving && weaponAssoc->blendAmount > 0.0f)
++				if (VCModAimHoldMoving(this) && weaponAssoc->blendAmount > 0.0f)
 +					weaponAssoc->blendDelta = -8.0f;
-+				else if (!moving && weaponAssoc->blendAmount < 1.0f)
++				else if (!VCModAimHoldMoving(this) && weaponAssoc->blendAmount < 1.0f)
 +					weaponAssoc->blendDelta = 8.0f;
 +			}
 +		} else {
 +			bVCModCopRecovering = false;
++			// AIM WALK: walking with a lock hands the body to locomotion, the way the
++			// two-hand hold does, so the parked aim pose does not glide under the
++			// walk. The tail is never cut: while it plays the player is planted and
++			// this branch is unreachable, so the lowering always lands first.
++			if (VCModAimWalkWeapon(this, weaponInfo) && VCModAimHoldMoving(this)
++				&& !VCModAimTailRunning(this)) {
++				if (weaponAssoc) {
++					weaponAssoc->flags &= ~ASSOC_DELETEFADEDOUT;
++					if (weaponAssoc->blendAmount > 0.0f)
++						weaponAssoc->blendDelta = -8.0f;
++				}
++				return;
++			}
++			// The tail is the author's recovery and it ends on the lowered pose.
++			// Let it run out, then keep that end pose: the clip would otherwise
++			// fade itself into the idle arms, and the aim pose would come back.
++			if (bVCModWeaponRecovering && weaponAssoc) {
++				if (weaponAssoc->IsRunning())
++					return;
++				if (weaponAssoc->flags & ASSOC_DELETEFADEDOUT) {
++					weaponAssoc->flags &= ~ASSOC_DELETEFADEDOUT;
++					weaponAssoc->SetBlend(1.0f, 0.0f);
++				} else if (weaponAssoc->blendAmount < 1.0f) {
++					// the walk faded the lowered hold out; standing brings it back
++					weaponAssoc->blendDelta = 8.0f;
++				}
++				return;
++			}
++			bVCModWeaponRecovering = false;
 +		}
 +	}
 +
  	if (weaponAssoc && weaponAssoc->currentTime > animLoopStart * 0.4f) {
  		weaponAssoc->SetCurrentTime(animLoopStart);
  		weaponAssoc->flags &= ~ASSOC_RUNNING;
-@@ -235,12 +388,14 @@ CPed::ClearPointGunAt(void)
+@@ -224,6 +462,11 @@ CPed::PointGunAt(void)
+ 		else
+ 			m_pedIK.m_flags &= ~CPedIK::AIMS_WITH_ARM;
+ 	}
++
++	// the walk lowered the weapon; it comes back up once he stands still
++	if (weaponAssoc && VCModAimWalkWeapon(this, weaponInfo) && !VCModAimHoldMoving(this)
++		&& weaponAssoc->blendAmount < 1.0f)
++		weaponAssoc->blendDelta = 8.0f;
+ }
+ 
+ void
+@@ -235,12 +478,16 @@ CPed::ClearPointGunAt(void)
  	ClearLookFlag();
  	ClearAimFlag();
  	bIsPointingGunAt = false;
-+	if (IsPlayer())
++	if (IsPlayer()) {
 +		bVCModCopRecovering = false;
++		bVCModWeaponRecovering = false;
++	}
  	if (m_nPedState == PED_AIM_GUN || m_nPedState == PED_ATTACK) {
  		SetPedState(PED_IDLE);
  		RestorePreviousState();
@@ -8452,7 +8670,7 @@ index 8a3b971..e391235 100644
  	if (!animAssoc || animAssoc->blendDelta < 0.0f) {
  		if (weaponInfo->IsFlagSet(WEAPONFLAG_CROUCHFIRE)) {
  			animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), GetCrouchFireAnim(weaponInfo));
-@@ -417,10 +572,10 @@ CPed::SetAttack(CEntity *victim)
+@@ -417,10 +664,10 @@ CPed::SetAttack(CEntity *victim)
  					if (pedOnGround > PED_IN_FRONT_OF_ATTACKER || pedOnGround == NO_PED && bIsStanding && m_pCurSurface && m_pCurSurface->IsVehicle()) {
  						fireAnim = GetFireAnimGround(curWeapon, false);
  					} else {
@@ -8465,7 +8683,7 @@ index 8a3b971..e391235 100644
  				}
  
  				CAnimBlendAssociation* curFireAssoc = RpAnimBlendClumpGetAssociation(GetClump(), fireAnim);
-@@ -430,6 +585,8 @@ CPed::SetAttack(CEntity *victim)
+@@ -430,6 +677,8 @@ CPed::SetAttack(CEntity *victim)
  					}
  				}
  				animAssoc = CAnimManager::BlendAnimation(GetClump(), curWeapon->m_AnimToPlay, fireAnim, animDelta);
@@ -8474,7 +8692,7 @@ index 8a3b971..e391235 100644
  			}
  
  			animAssoc->SetRun();
-@@ -615,6 +772,35 @@ CPed::FinishedReloadCB(CAnimBlendAssociation *reloadAssoc, void *arg)
+@@ -615,6 +864,35 @@ CPed::FinishedReloadCB(CAnimBlendAssociation *reloadAssoc, void *arg)
  	}
  }
  
@@ -8510,7 +8728,7 @@ index 8a3b971..e391235 100644
  uint8
  CPed::CheckForPointBlankPeds(CPed *pedToVerify)
  {
-@@ -692,8 +878,9 @@ CPed::Attack(void)
+@@ -692,8 +970,9 @@ CPed::Attack(void)
  				delayBetweenAnimAndFire = ourWeapon->m_fAnim2FrameFire;
  			}
  		}
@@ -8522,7 +8740,7 @@ index 8a3b971..e391235 100644
  		if (weaponAnimAssoc) {
  			animLoopStart = 11.f/30.f;
  			animLoopEnd = 19.f/30.f;
-@@ -788,7 +975,9 @@ CPed::Attack(void)
+@@ -788,7 +1067,9 @@ CPed::Attack(void)
  					          !GetFireAnimGround(ourWeapon, false) || 
  						 CheckForPedsOnGroundToAttack(this, nil) < PED_ON_THE_FLOOR) {
  
@@ -8533,7 +8751,26 @@ index 8a3b971..e391235 100644
  
  					} else {
  						weaponAnimAssoc = CAnimManager::BlendAnimation(GetClump(), ourWeapon->m_AnimToPlay, GetFireAnimGround(ourWeapon, false), 8.0f);
-@@ -1023,8 +1212,13 @@ CPed::Attack(void)
+@@ -821,6 +1102,18 @@ CPed::Attack(void)
+ 		}
+ 	}
+ 
++	// A new burst outranks a recovery in progress: the gun has to come up again,
++	// and the clip is parked in its tail, so rewind it or the shot is swallowed.
++	if (IsPlayer() && attackShouldContinue && bVCModWeaponRecovering
++		&& !VCModCopTwoHandPose(this, ourWeapon)) {
++		bVCModWeaponRecovering = false;
++		if (weaponAnimAssoc->currentTime > animLoopEnd) {
++			weaponAnimAssoc->SetCurrentTime(animLoopStart);
++			weaponAnimAssoc->SetRun();
++		}
++		weaponAnimAssoc->SetBlend(1.0f, 8.0f);
++	}
++
+ 	float animStart = animLoopStart * 0.4f;
+ 	weaponAnimTime = weaponAnimAssoc->currentTime;
+ 	if (weaponAnimTime > animStart && weaponAnimTime - weaponAnimAssoc->timeStep <= animStart) {
+@@ -1023,8 +1316,16 @@ CPed::Attack(void)
  				weaponAnimAssoc->SetRun();
  			}
  		} else if (IsPlayer() && m_pPointGunAt && bIsAimingGun && GetWeapon()->m_eWeaponState != WEAPONSTATE_RELOADING) {
@@ -8542,6 +8779,9 @@ index 8a3b971..e391235 100644
 +			if (VCModCopTwoHandPose(this, ourWeapon)) {
 +				// leave the clip running: the lowering tail is the recovery
 +				bVCModCopRecovering = true;
++			} else if (VCModWeaponRecoveryWanted(this, ourWeapon, weaponAnimAssoc, animLoopEnd)) {
++				// the same tail an NPC plays; PointGunAt parks the hold after it
++				bVCModWeaponRecovering = true;
 +			} else {
 +				weaponAnimAssoc->SetCurrentTime(animLoopEnd);
 +				weaponAnimAssoc->flags &= ~ASSOC_RUNNING;
@@ -8549,16 +8789,18 @@ index 8a3b971..e391235 100644
  			SetPointGunAt(m_pPointGunAt);
  #ifdef FREE_CAM
  		} else if (IsPlayer() && ((CPlayerPed*)this)->m_bFreeAimActive && GetWeapon()->m_eWeaponState != WEAPONSTATE_RELOADING) {
-@@ -1032,6 +1226,8 @@ CPed::Attack(void)
+@@ -1032,6 +1333,10 @@ CPed::Attack(void)
  			SetLookFlag(limitedCam, true, true);
  			SetAimFlag(limitedCam);
  			SetLookTimer(INT32_MAX);
 +			if (VCModCopTwoHandPose(this, ourWeapon))
 +				bVCModCopRecovering = true;
++			else if (VCModWeaponRecoveryWanted(this, ourWeapon, weaponAnimAssoc, animLoopEnd))
++				bVCModWeaponRecovering = true;
  			SetPointGunAt(nil);
  			((CPlayerPed*)this)->m_fFPSMoveHeading = TheCamera.Find3rdPersonQuickAimPitch();
  #endif
-@@ -1058,12 +1254,15 @@ CPed::Attack(void)
+@@ -1058,12 +1363,15 @@ CPed::Attack(void)
  }
  
  void
@@ -8575,7 +8817,7 @@ index 8a3b971..e391235 100644
  		m_fightButtonPressure = buttonPressure;
  		return;
  	}
-@@ -1100,7 +1299,10 @@ CPed::StartFightAttack(uint8 buttonPressure)
+@@ -1100,7 +1408,10 @@ CPed::StartFightAttack(uint8 buttonPressure)
  		fightIdleAssoc = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_FIGHT_IDLE, 1000.0f);
  	}
  	m_lastFightMove = FIGHTMOVE_IDLE;
@@ -8586,7 +8828,7 @@ index 8a3b971..e391235 100644
  
  	SetPedState(PED_FIGHT);
  	m_fightButtonPressure = 0;
-@@ -1708,6 +1910,12 @@ CPed::ChooseAttackAI(uint8 buttonPressure, bool fightWithWeapon)
+@@ -1708,6 +2019,12 @@ CPed::ChooseAttackAI(uint8 buttonPressure, bool fightWithWeapon)
  int32
  CPed::ChooseAttackPlayer(uint8 buttonPressure, bool fightWithWeapon)
  {
@@ -8599,7 +8841,7 @@ index 8a3b971..e391235 100644
  	CWeaponInfo *weaponInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
  	const float maxAttackDist = 2.7f;
  	float weaponAttackDist = 2.0f;
-@@ -1950,6 +2158,8 @@ CPed::EndFight(uint8 endType)
+@@ -1950,6 +2267,8 @@ CPed::EndFight(uint8 endType)
  {
  	if (m_nPedState != PED_FIGHT)
  		return;
@@ -8608,7 +8850,7 @@ index 8a3b971..e391235 100644
  
  	m_curFightMove = FIGHTMOVE_NULL;
  	RestorePreviousState();
-@@ -2658,6 +2868,22 @@ CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPi
+@@ -2658,6 +2977,22 @@ CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPi
  	bool willLinger = false;
  	int random;
  
@@ -8668,7 +8910,7 @@ index ea3cf1a..2068d48 100644
  
  	return result;
 diff --git a/src/peds/PlayerPed.cpp b/src/peds/PlayerPed.cpp
-index cd8da42..4b41db3 100644
+index cd8da42..15d94aa 100644
 --- a/src/peds/PlayerPed.cpp
 +++ b/src/peds/PlayerPed.cpp
 @@ -1,5 +1,7 @@
@@ -8748,7 +8990,7 @@ index cd8da42..4b41db3 100644
  	delete m_pWanted;
  }
  
-@@ -153,12 +194,1778 @@ CPlayerPed::AnnoyPlayerPed(bool annoyedByPassingEntity)
+@@ -153,12 +194,1779 @@ CPlayerPed::AnnoyPlayerPed(bool annoyedByPassingEntity)
  void
  CPlayerPed::ClearAdrenaline(void)
  {
@@ -8785,7 +9027,7 @@ index cd8da42..4b41db3 100644
 +VCModUpdateAdrenaline(CPlayerPed *player)
 +{
 +	CPad *pad = GetPadFromPlayer(player);
-+	bool allowed = player == FindPlayerPed() && bVCModAdrenaline && pad && !pad->ArePlayerControlsDisabled() &&
++	bool allowed = player == FindPlayerPed() && nVCModAdrenalineMode != 0 && pad && !pad->ArePlayerControlsDisabled() &&
 +		!player->bInVehicle && !player->DyingOrDead() && player->m_nPedState != PED_ARRESTED &&
 +		!CCutsceneMgr::IsRunning() && !CReplay::IsPlayingBack();
 +	if (!allowed) {
@@ -8805,14 +9047,15 @@ index cd8da42..4b41db3 100644
 +		player->m_fCurrentStamina = player->m_fMaxStamina;
 +	}
 +
-+	if (bVCModAdrenalineSlowMo) {
++	bool slowMo = nVCModAdrenalineMode == 2;
++	if (slowMo) {
 +		if (!bVCModAdrenalineSlowing || CTimer::GetTimeScale() != 1.0f / 3)
 +			fVCModAdrenalineRestoreScale = CTimer::GetTimeScale();
 +		CTimer::SetTimeScale(1.0f / 3);
 +	} else if (bVCModAdrenalineSlowing && CTimer::GetTimeScale() == 1.0f / 3) {
 +		CTimer::SetTimeScale(fVCModAdrenalineRestoreScale);
 +	}
-+	bVCModAdrenalineSlowing = bVCModAdrenalineSlowMo;
++	bVCModAdrenalineSlowing = slowMo;
 +}
 +
 +// CPed::SetMoveAnim paces every ped by m_randomSeed, rolled once when the ped
@@ -10527,7 +10770,7 @@ index cd8da42..4b41db3 100644
  CPlayerInfo *
  CPlayerPed::GetPlayerInfoForThisPlayerPed()
  {
-@@ -255,10 +2062,19 @@ CPlayerPed::ReApplyMoveAnims(void)
+@@ -255,10 +2063,19 @@ CPlayerPed::ReApplyMoveAnims(void)
  	for(int i = 0; i < ARRAY_SIZE(moveAnims); i++) {
  		CAnimBlendAssociation *curMoveAssoc = RpAnimBlendClumpGetAssociation(GetClump(), moveAnims[i]);
  		if (curMoveAssoc) {
@@ -10548,7 +10791,7 @@ index cd8da42..4b41db3 100644
  				curMoveAssoc->blendDelta = -1000.0f;
  				curMoveAssoc->flags |= ASSOC_DELETEFADEDOUT;
  			}
-@@ -269,6 +2085,8 @@ CPlayerPed::ReApplyMoveAnims(void)
+@@ -269,6 +2086,8 @@ CPlayerPed::ReApplyMoveAnims(void)
  void
  CPlayerPed::SetInitialState(void)
  {
@@ -10557,7 +10800,7 @@ index cd8da42..4b41db3 100644
  	m_nDrunkenness = 0;
  	m_nFadeDrunkenness = 0;
  	CMBlur::ClearDrunkBlur();
-@@ -379,6 +2197,11 @@ CPlayerPed::SetRealMoveAnim(void)
+@@ -379,6 +2198,11 @@ CPlayerPed::SetRealMoveAnim(void)
  				m_nWaitTimer = CTimer::GetTimeInMilliseconds() + CGeneral::GetRandomNumberInRange(2500, 4000);
  			}
  
@@ -10569,7 +10812,7 @@ index cd8da42..4b41db3 100644
  			if ((m_fCurrentStamina > 0.0f || bIsAimingGun) && curIdleAssoc->animId == ANIM_STD_IDLE_TIRED) {
  				CAnimManager::BlendAnimation(GetClump(), m_animGroup, ANIM_STD_IDLE, 4.0f);
  
-@@ -394,24 +2217,44 @@ CPlayerPed::SetRealMoveAnim(void)
+@@ -394,24 +2218,44 @@ CPlayerPed::SetRealMoveAnim(void)
  			m_nMoveState = PEDMOVE_STILL;
  
  		} else {
@@ -10630,7 +10873,7 @@ index cd8da42..4b41db3 100644
  				delete curSprintAssoc;
  
  				curSprintAssoc = nil;
-@@ -499,33 +2342,50 @@ CPlayerPed::SetRealMoveAnim(void)
+@@ -499,33 +2343,50 @@ CPlayerPed::SetRealMoveAnim(void)
  						curRunAssoc->blendDelta = -2.0f;
  					}
  				} else {
@@ -10694,7 +10937,7 @@ index cd8da42..4b41db3 100644
  			m_bAdrenalineActive = false;
  			CTimer::SetTimeScale(1.0f);
  			if (curWalkStartAssoc)
-@@ -537,15 +2397,19 @@ CPlayerPed::SetRealMoveAnim(void)
+@@ -537,15 +2398,19 @@ CPlayerPed::SetRealMoveAnim(void)
  			if (curSprintAssoc)
  				curSprintAssoc->speed = 1.0f;
  		} else {
@@ -10719,7 +10962,7 @@ index cd8da42..4b41db3 100644
  		}
  	} else if (curSprintAssoc) {
  		if (TheCamera.Cams[TheCamera.ActiveCam].Mode == CCam::MODE_FIXED) {
-@@ -553,6 +2417,29 @@ CPlayerPed::SetRealMoveAnim(void)
+@@ -553,6 +2418,29 @@ CPlayerPed::SetRealMoveAnim(void)
  		} else
  			curSprintAssoc->speed = 1.0f;
  	}
@@ -10749,7 +10992,7 @@ index cd8da42..4b41db3 100644
  }
  
  void
-@@ -879,8 +2766,22 @@ CPlayerPed::PlayerControl1stPersonRunAround(CPad *padUsed)
+@@ -879,8 +2767,22 @@ CPlayerPed::PlayerControl1stPersonRunAround(CPad *padUsed)
  	float upDown = padUsed->GetPedWalkUpDown();
  	float padMove = CVector2D(leftRight, upDown).Magnitude();
  	float padMoveInGameUnit = padMove / PAD_MOVE_TO_GAME_WORLD_MOVE;
@@ -10773,7 +11016,7 @@ index cd8da42..4b41db3 100644
  		m_fMoveSpeed = Min(padMoveInGameUnit, 0.07f * CTimer::GetTimeStep() + m_fMoveSpeed);
  	} else {
  		m_fMoveSpeed = 0.0f;
-@@ -908,6 +2809,11 @@ CPlayerPed::PlayerControl1stPersonRunAround(CPad *padUsed)
+@@ -908,6 +2810,11 @@ CPlayerPed::PlayerControl1stPersonRunAround(CPad *padUsed)
  	if (!CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->IsFlagSet(WEAPONFLAG_HEAVY) && padUsed->GetSprint()) {
  		m_nMoveState = PEDMOVE_SPRINT;
  	}
@@ -10785,7 +11028,7 @@ index cd8da42..4b41db3 100644
  	if (m_nPedState != PED_FIGHT)
  		SetRealMoveAnim();
  
-@@ -1043,7 +2949,35 @@ CPlayerPed::CanIKReachThisTarget(CVector target, CWeapon* weapon, bool zRotImpor
+@@ -1043,7 +2950,41 @@ CPlayerPed::CanIKReachThisTarget(CVector target, CWeapon* weapon, bool zRotImpor
  void
  CPlayerPed::RotatePlayerToTrackTarget(void)
  {
@@ -10819,10 +11062,16 @@ index cd8da42..4b41db3 100644
 +
 +	// a CANAIM_WITHARM gun aims with the arm IK and leaves the body on the camera
 +	if (info->IsFlagSet(WEAPONFLAG_CANAIM_WITHARM))
++		return;
++
++	// AIM WALK: this gun aims with the body, so pinning the facing to the target
++	// while he walks would turn every direction key into "forward". The walk owns
++	// the heading and the aim clip comes back up when he stops.
++	if (VCModAimWalkWeapon(this, info) && VCModAimHoldMoving(this))
  		return;
  
  	float angleToFace = CGeneral::GetRadianAngleBetweenPoints(
-@@ -1094,6 +3028,16 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
+@@ -1094,6 +3035,16 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
  		if (obj && !obj->bHasBeenDamaged && CanIKReachThisTarget(obj->GetPosition(), GetWeapon(), true))
  			EvaluateNeighbouringTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, lookToLeft, true);
  	}
@@ -10839,7 +11088,7 @@ index cd8da42..4b41db3 100644
  	if (!nextTarget)
  		return false;
  
-@@ -1144,6 +3088,16 @@ CPlayerPed::FindWeaponLockOnTarget(void)
+@@ -1144,6 +3095,16 @@ CPlayerPed::FindWeaponLockOnTarget(void)
  		if (obj && !obj->bHasBeenDamaged && CanIKReachThisTarget(obj->GetPosition(), GetWeapon(), true))
  			EvaluateTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, true);
  	}
@@ -10856,7 +11105,7 @@ index cd8da42..4b41db3 100644
  	if (!nextTarget)
  		return false;
  
-@@ -1158,10 +3112,29 @@ void
+@@ -1158,10 +3119,29 @@ void
  CPlayerPed::ProcessAnimGroups(void)
  {
  	AssocGroupId groupToSet;
@@ -10887,7 +11136,7 @@ index cd8da42..4b41db3 100644
  
  		if (m_fWalkAngle >= -DEGTORAD(130.0f) && m_fWalkAngle <= DEGTORAD(130.0f)) {
  			if (m_fWalkAngle > 0.0f) {
-@@ -1263,15 +3236,24 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1263,15 +3243,24 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  		m_wepAccuracy = 95;
  	else
  		m_wepAccuracy = 100;
@@ -10913,7 +11162,7 @@ index cd8da42..4b41db3 100644
  #ifdef FREE_CAM
  				if (CCamera::bFreeCam && TheCamera.Cams[0].Using3rdPersonMouseCam()) {
  					m_fRotationCur = CGeneral::LimitRadianAngle(-TheCamera.Orientation);
-@@ -1292,7 +3274,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1292,7 +3281,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				SetPedState(PED_SNIPER_MODE);
  				return;
  			}
@@ -10922,7 +11171,7 @@ index cd8da42..4b41db3 100644
  				if (weapon == WEAPONTYPE_ROCKETLAUNCHER || weapon == WEAPONTYPE_SNIPERRIFLE || weapon == WEAPONTYPE_LASERSCOPE || weapon == WEAPONTYPE_CAMERA)
  					return;
  		}
-@@ -1416,14 +3398,14 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1416,14 +3405,14 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  	}
  #endif
  
@@ -10940,7 +11189,20 @@ index cd8da42..4b41db3 100644
  #endif		
  			) {
  				ClearWeaponTarget();
-@@ -1457,7 +3439,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1438,8 +3427,11 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+ 				ClearWeaponTarget();
+ 				return;
+ 			}
++			// AIM WALK walks the gun down to the carry, so a torso that cannot
++			// reach the target is no reason to drop the lock
++			bool aimWalkMoving = VCModAimWalkWeapon(this, weaponInfo) && VCModAimHoldMoving(this);
+ 			if (CPlayerPed::DoesTargetHaveToBeBroken(m_pPointGunAt->GetPosition(), GetWeapon()) || 
+-				(!bCanPointGunAtTarget && !weaponInfo->IsFlagSet(WEAPONFLAG_CANAIM_WITHARM))) { // this line isn't on Mobile, idk why
++				(!bCanPointGunAtTarget && !weaponInfo->IsFlagSet(WEAPONFLAG_CANAIM_WITHARM) && !aimWalkMoving)) { // this line isn't on Mobile, idk why
+ 				ClearWeaponTarget();
+ 				return;
+ 			}
+@@ -1457,7 +3449,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  			TheCamera.SetNewPlayerWeaponMode(CCam::MODE_SYPHON, 0, 0);
  			TheCamera.UpdateAimingCoors(m_pPointGunAt->GetPosition());
  
@@ -10949,7 +11211,7 @@ index cd8da42..4b41db3 100644
  			if (padUsed->TargetJustDown() || TheCamera.m_bJustJumpedOutOf1stPersonBecauseOfTarget)
  				FindWeaponLockOnTarget();
  		}
-@@ -1484,7 +3466,10 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1484,7 +3476,15 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  bool
  CPlayerPed::MovementDisabledBecauseOfTargeting(void)
  {
@@ -10957,11 +11219,16 @@ index cd8da42..4b41db3 100644
 +	CWeaponInfo *info = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
 +	if (VCModCopTwoHandFiring(this, info))
 +		return true;
++	// AIM WALK: the shot plants the player, and so does the recovery tail that
++	// lowers the gun after it. Once the tail has landed the lowered hold moves
++	// freely, the way the hold of the arm-aim pistols always did.
++	if (VCModAimWalkWeapon(this, info))
++		return m_pPointGunAt && (m_nPedState == PED_ATTACK || VCModAimTailRunning(this));
 +	return m_pPointGunAt && !info->IsFlagSet(WEAPONFLAG_CANAIM_WITHARM);
  }
  
  void
-@@ -1556,6 +3541,12 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
+@@ -1556,6 +3556,12 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
  			m_nMoveState = PEDMOVE_SPRINT;
  	}
  
@@ -10974,7 +11241,7 @@ index cd8da42..4b41db3 100644
  	if (m_nPedState != PED_FIGHT)
  		SetRealMoveAnim();
  
-@@ -1663,6 +3654,10 @@ CPlayerPed::FindNewAttackPoints(void)
+@@ -1663,6 +3669,10 @@ CPlayerPed::FindNewAttackPoints(void)
  void
  CPlayerPed::ProcessControl(void)
  {
@@ -10985,7 +11252,7 @@ index cd8da42..4b41db3 100644
  	// Mobile has some debug/abandoned cheat thing in here: "gbFrankenTommy"
  
  	if (m_nEvadeAmount != 0)
-@@ -1705,7 +3700,40 @@ CPlayerPed::ProcessControl(void)
+@@ -1705,7 +3715,40 @@ CPlayerPed::ProcessControl(void)
  		return;
  
  	CPad *padUsed = GetPadFromPlayer(this);
@@ -11026,7 +11293,7 @@ index cd8da42..4b41db3 100644
  	PruneReferences();
  
  	if (GetWeapon()->m_eWeaponType == WEAPONTYPE_MINIGUN) {
-@@ -1783,7 +3811,9 @@ CPlayerPed::ProcessControl(void)
+@@ -1783,7 +3826,9 @@ CPlayerPed::ProcessControl(void)
  	if (bIsLanding)
  		RunningLand(padUsed);
  
@@ -11037,7 +11304,7 @@ index cd8da42..4b41db3 100644
  		// ...Really?
  		eWeaponType playerWeapon = FindPlayerPed()->GetWeapon()->m_eWeaponType;
  		if (playerWeapon == WEAPONTYPE_SNIPERRIFLE || playerWeapon == WEAPONTYPE_LASERSCOPE) {
-@@ -1793,6 +3823,11 @@ CPlayerPed::ProcessControl(void)
+@@ -1793,6 +3838,11 @@ CPlayerPed::ProcessControl(void)
  		}
  	}
  
@@ -11049,7 +11316,7 @@ index cd8da42..4b41db3 100644
  	switch (m_nPedState) {
  		case PED_NONE:
  		case PED_IDLE:
-@@ -1944,6 +3979,8 @@ CPlayerPed::ProcessControl(void)
+@@ -1944,6 +3994,8 @@ CPlayerPed::ProcessControl(void)
  		ClearLookFlag();
  		SetLookTimer(250);
  	}
@@ -11705,10 +11972,10 @@ index cada168..5062fc2 100644
  	if ( victim )
 diff --git a/utils/test_vc_adrenaline.py b/utils/test_vc_adrenaline.py
 new file mode 100644
-index 0000000..ee6f26f
+index 0000000..12613bc
 --- /dev/null
 +++ b/utils/test_vc_adrenaline.py
-@@ -0,0 +1,536 @@
+@@ -0,0 +1,569 @@
 +#!/usr/bin/env python3
 +import re
 +import subprocess
@@ -11744,7 +12011,7 @@ index 0000000..ee6f26f
 +        source = (ROOT / "src/peds/PlayerPed.cpp").read_text()
 +        panel = (ROOT / "src/extras/vcmodpanel.cpp").read_text()
 +        self.assertIn("VCModUpdateAdrenaline(CPlayerPed *player)", source)
-+        definitions = "\n".join(re.findall(r"^bool bVCModAdrenaline\w*[^;]*;", panel, re.M))
++        definitions = "\n".join(re.findall(r"^int32 nVCModAdrenaline\w*[^;]*;", panel, re.M))
 +        state = "\n".join(re.findall(r"^static [^\n;]*VCModAdrenaline[^\n;]*;", source, re.M))
 +        clear = braced(source, "void\nCPlayerPed::ClearAdrenaline(void)")
 +        update = braced(source, "static void\nVCModUpdateAdrenaline(CPlayerPed *player)")
@@ -11763,6 +12030,7 @@ index 0000000..ee6f26f
 +#define nil NULL
 +#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 +typedef uint32_t uint32;
++typedef int32_t int32;
 +enum AnimationId { ANIM_STD_STARTWALK, ANIM_STD_WALK, ANIM_STD_RUN, ANIM_STD_RUNFAST };
 +enum PedState { PED_IDLE, PED_DIE, PED_DEAD, PED_ARRESTED, PED_DRIVING };
 +enum { MI_PLAYER = 0 };
@@ -11846,8 +12114,7 @@ index 0000000..ee6f26f
 +    player.m_fMaxStamina = 150.0f;
 +    player.m_fStaminaProgress = 0.0f;
 +    for (int i = 0; i < 4; ++i) player.animations[i].speed = 1.0f;
-+    bVCModAdrenaline = false;
-+    bVCModAdrenalineSlowMo = true;
++    nVCModAdrenalineMode = 0;
 +    pad.disabled = CCutsceneMgr::running = CReplay::playing = false;
 +    CTimer::scale = 1.0f;
 +    CTimer::now = 1000;
@@ -11855,9 +12122,9 @@ index 0000000..ee6f26f
 +}
 +int main() {
 +    CPlayerPed player = {};
-+    check(!bVCModAdrenaline && bVCModAdrenalineSlowMo, "defaults are off / slow-mo");
++    check(nVCModAdrenalineMode == 0, "defaults to off");
 +    reset(player);
-+    bVCModAdrenaline = true;
++    nVCModAdrenalineMode = 2;
 +    VCModUpdateAdrenaline(&player);
 +    player.ApplyMovement();
 +    check(player.m_bAdrenalineActive, "toggle activates native gameplay flag");
@@ -11870,15 +12137,15 @@ index 0000000..ee6f26f
 +    VCModUpdateAdrenaline(&player);
 +    player.ApplyMovement();
 +    check(player.m_bAdrenalineActive, "toggle outlasts the pill timer");
-+    bVCModAdrenalineSlowMo = false;
++    nVCModAdrenalineMode = 1;
 +    VCModUpdateAdrenaline(&player);
 +    player.ApplyMovement();
 +    check(CTimer::scale == 1.0f, "switching to normal removes slowdown");
 +    check(player.m_bAdrenalineActive && player.animations[1].speed == 1.0f, "normal keeps native flag effects without doubled movement");
-+    bVCModAdrenalineSlowMo = true;
++    nVCModAdrenalineMode = 2;
 +    VCModUpdateAdrenaline(&player);
 +    check(CTimer::scale == 1.0f / 3, "normal switches back to slow-mo");
-+    bVCModAdrenaline = false;
++    nVCModAdrenalineMode = 0;
 +    VCModUpdateAdrenaline(&player);
 +    check(!player.m_bAdrenalineActive && player.m_nAdrenalineTime == 0, "off clears native flag and timer");
 +    check(CTimer::scale == 1.0f, "off restores world speed without a movement update");
@@ -11887,39 +12154,38 @@ index 0000000..ee6f26f
 +    check(player.m_fCurrentStamina == 149.0f, "off restores stamina drain");
 +
 +    reset(player);
-+    bVCModAdrenaline = true;
-+    bVCModAdrenalineSlowMo = false;
++    nVCModAdrenalineMode = 1;
 +    CTimer::scale = 0.5f;
 +    VCModUpdateAdrenaline(&player);
 +    player.ApplyMovement();
 +    check(CTimer::scale == 0.5f, "normal mode leaves other time-scale effects alone");
-+    bVCModAdrenalineSlowMo = true;
++    nVCModAdrenalineMode = 2;
 +    VCModUpdateAdrenaline(&player);
-+    bVCModAdrenalineSlowMo = false;
++    nVCModAdrenalineMode = 1;
 +    VCModUpdateAdrenaline(&player);
 +    check(CTimer::scale == 0.5f, "mode change restores previous time scale");
 +    CTimer::scale = 0.75f;
-+    bVCModAdrenalineSlowMo = true;
++    nVCModAdrenalineMode = 2;
 +    VCModUpdateAdrenaline(&player);
-+    bVCModAdrenaline = false;
++    nVCModAdrenalineMode = 0;
 +    VCModUpdateAdrenaline(&player);
 +    check(CTimer::scale == 0.75f, "later slow-mo captures current baseline");
 +
 +    for (int turnOff = 0; turnOff < 2; ++turnOff) {
 +        reset(player);
-+        bVCModAdrenaline = true;
++        nVCModAdrenalineMode = 2;
 +        VCModUpdateAdrenaline(&player);
 +        CTimer::scale = 0.4f;
 +        VCModUpdateAdrenaline(&player);
-+        if (turnOff) bVCModAdrenaline = false;
-+        else bVCModAdrenalineSlowMo = false;
++        if (turnOff) nVCModAdrenalineMode = 0;
++        else nVCModAdrenalineMode = 1;
 +        VCModUpdateAdrenaline(&player);
 +        check(CTimer::scale == 0.4f, "external time-scale write survives a slow-mo update then off/normal");
 +    }
 +
 +    for (int state = 0; state < 8; ++state) {
 +        reset(player);
-+        bVCModAdrenaline = true;
++        nVCModAdrenalineMode = 2;
 +        VCModUpdateAdrenaline(&player);
 +        player.ApplyMovement();
 +        if (state == 0) { player.bInVehicle = true; player.m_nPedState = PED_DRIVING; }
@@ -11941,7 +12207,7 @@ index 0000000..ee6f26f
 +        check(player.m_bAdrenalineActive, "toggle reapplies on returning to play");
 +    }
 +    reset(player);
-+    bVCModAdrenaline = true;
++    nVCModAdrenalineMode = 2;
 +    VCModUpdateAdrenaline(&player);
 +    player.ApplyMovement();
 +    CTimer::scale = 0.2f;
@@ -11969,19 +12235,17 @@ index 0000000..ee6f26f
 +    player.m_bAdrenalineActive = true;
 +    player.m_nAdrenalineTime = CTimer::now + 20000;
 +    player.ApplyMovement();
-+    bVCModAdrenaline = true;
-+    bVCModAdrenalineSlowMo = false;
++    nVCModAdrenalineMode = 1;
 +    VCModUpdateAdrenaline(&player);
 +    player.ApplyMovement();
 +    check(player.m_bAdrenalineActive && CTimer::scale == 1.0f, "normal mode takes over an active pill without keeping slowdown");
 +    check(player.animations[1].speed == 1.0f, "takeover drops the pill's doubled movement");
-+    bVCModAdrenaline = false;
++    nVCModAdrenalineMode = 0;
 +    VCModUpdateAdrenaline(&player);
 +    check(CTimer::scale == 1.0f, "takeover does not restore expired pill slowdown");
 +    for (int slow = 0; slow < 2; ++slow) {
 +        reset(player);
-+        bVCModAdrenaline = true;
-+        bVCModAdrenalineSlowMo = slow != 0;
++        nVCModAdrenalineMode = slow ? 2 : 1;
 +        VCModUpdateAdrenaline(&player);
 +        player.ApplyMovement();
 +        CReplay::playing = true;
@@ -11989,7 +12253,7 @@ index 0000000..ee6f26f
 +        CPlayerPed snapshot = player;
 +        float savedScale = CTimer::scale;
 +        player.ClearAdrenaline();
-+        bVCModAdrenaline = false;
++        nVCModAdrenalineMode = 0;
 +        player = snapshot;
 +        CTimer::scale = savedScale;
 +        CReplay::playing = false;
@@ -11997,7 +12261,7 @@ index 0000000..ee6f26f
 +        player.ApplyMovement();
 +        check(!player.m_bAdrenalineActive && CTimer::scale == 1.0f, "replay snapshot cannot resurrect a disabled mod");
 +        check(player.animations[1].speed == 1.0f, "replay restores normal locomotion when mod is disabled");
-+        bVCModAdrenaline = true;
++        nVCModAdrenalineMode = 1;
 +        VCModUpdateAdrenaline(&player);
 +        check(player.m_bAdrenalineActive, "mod can reactivate after replay restoration");
 +    }
@@ -12017,14 +12281,19 @@ index 0000000..ee6f26f
 +        rideEnums = "\n".join(re.search(pattern, header, re.S).group(0) + ";" for pattern in (
 +            r"enum eVCModRideStyle\s*\{.*?\}",
 +            r"enum eVCModRidePhase\s*\{.*?\}"))
-+        self.assertIn("VCMOD_ROW_ADRENALINE_MODE", panel)
++        self.assertIn("VCMOD_ROW_CYCLE", panel)
 +        definitions = "\n".join(re.findall(r"^(?:bool|int32) [bn]VCMod[^;\n]*;", panel, re.M))
 +        defines = "\n".join(re.findall(r"^#define VCMOD_[A-Z_]+\s+\d+", panel, re.M))
 +        declarations = "\n".join(braced(panel, marker) + ";" for marker in (
 +            "static const char *aVCModAnimGroupNames[]", "static const char *aVCModPedCategoryNames[]",
 +            "static const char *aVCModRideStyleNames[]",
 +            "enum eVCModFont", "enum eVCModList", "enum eVCModPage", "enum eVCModRowKind",
-+            "struct VCModRowDef", "static const char *aVCModPageNames[NUM_VCMOD_PAGES]",
++            "struct VCModCycleDef", "struct VCModRowDef",
++            "static const char *aVCModPageNames[NUM_VCMOD_PAGES]",
++            "static int32\nVCModAdrenalineGet(void)", "static void\nVCModAdrenalineSet(int32 value)",
++            "static const char *aVCModAdrenalineLabels[]", "static const VCModCycleDef aVCModAdrenalineCycle",
++            "static int32\nVCModVanillaFixGet(void)", "static void\nVCModVanillaFixSet(int32 value)",
++            "static const char *aVCModVanillaFixLabels[]", "static const VCModCycleDef aVCModVanillaFixCycle",
 +            "static bool *aVCModSwitched[]", "static const VCModRowDef aVCModRows[]"))
 +        pedTables = "\n".join(re.findall(r"^static const struct \{.*?^};", panel, re.S | re.M))
 +        pedTables += "\n" + re.search(r"^static char aVCModPedLabel\[32\];", panel, re.M).group(0)
@@ -12068,6 +12337,7 @@ index 0000000..ee6f26f
 +#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 +typedef int32_t int32;
 +typedef uint32_t uint32;
++typedef int32_t int32;
 +typedef int16_t int16;
 +typedef uint8_t uint8;
 +struct CGeneral {
@@ -12174,41 +12444,59 @@ index 0000000..ee6f26f
 +}
 +int main() {
 +    int adrenaline = rowNamed("ADRENALINE");
-+    int mode = rowNamed("ADRENALINE MODE");
++    int fixes = rowNamed("VANILLA FIXES");
 +    DrawRows();
-+    check(cells[valueCell(adrenaline)].text == "[--]", "adrenaline initially renders off");
-+    check(cells[valueCell(mode)].text.find("[SLOW-MO]") == 0, "mode initially renders slow-mo");
-+    click(mode);
-+    check(!bVCModAdrenalineSlowMo && !bVCModAdrenaline, "mode can change without activating adrenaline");
++    check(cells[valueCell(adrenaline)].text == "[OFF]", "adrenaline starts off");
++    check(cells[valueCell(adrenaline)].style == VCFONT_OFF, "off uses the off colour");
 +    click(adrenaline);
-+    check(bVCModAdrenaline && !bVCModAdrenalineSlowMo, "on uses the selected normal-speed mode");
++    check(nVCModAdrenalineMode == 1, "first click is normal speed");
 +    DrawRows();
-+    check(cells[valueCell(adrenaline)].text == "[ON]", "adrenaline renders on");
-+    check(cells[valueCell(mode)].text.find("[NORMAL]") == 0, "mode renders normal speed");
-+    check(cells[valueCell(mode)].style == VCFONT_SET, "mode uses choice color");
++    check(cells[valueCell(adrenaline)].text == "[NORMAL]", "normal has its own label");
++    check(cells[valueCell(adrenaline)].style == VCFONT_ON, "a running mode uses the on colour");
++    click(adrenaline);
++    check(nVCModAdrenalineMode == 2, "second click is slow-mo");
++    DrawRows();
++    check(cells[valueCell(adrenaline)].text == "[SLOW-MO]", "slow-mo has its own label");
 +    CPad held = { { true }, { true } };
 +    VCModClick(&held);
-+    check(bVCModAdrenaline, "holding click does not toggle repeatedly");
-+    click(mode);
-+    check(bVCModAdrenaline && bVCModAdrenalineSlowMo, "mode switches while adrenaline stays on");
++    check(nVCModAdrenalineMode == 2, "holding click does not step repeatedly");
 +    click(adrenaline);
-+    check(!bVCModAdrenaline, "adrenaline switches off");
++    check(nVCModAdrenalineMode == 0, "third click wraps back to off");
++
++    // a mode row is not an on/off switch, so the master sweep leaves it alone
 +    for (uint32 i = 0; i < ARRAY_SIZE(aVCModSwitched); ++i) *aVCModSwitched[i] = false;
-+    for (int walk = 0; walk < 2; ++walk) {
-+        bVCModWalkMode = walk != 0;
-+        bVCModAdrenalineSlowMo = false;
-+        clickMaster();
-+        check(bVCModAdrenaline && VCModCountOn() == (int)ARRAY_SIZE(aVCModSwitched), "master enables adrenaline");
-+        check(bVCModWalkMode == (walk != 0) && !bVCModAdrenalineSlowMo, "master preserves walk and mode");
-+        DrawRows();
-+        check(cells[0].text == "[ALL ON]", "master renders all on");
-+        clickMaster();
-+        check(!bVCModAdrenaline && VCModCountOn() == 0, "master disables adrenaline");
-+        check(bVCModWalkMode == (walk != 0) && !bVCModAdrenalineSlowMo, "master off preserves walk and mode");
-+    }
-+    click(adrenaline);
++    clickMaster();
++    check(VCModCountOn() == (int)ARRAY_SIZE(aVCModSwitched), "master turns every switch on");
++    check(nVCModAdrenalineMode == 0, "master does not touch the adrenaline mode");
 +    DrawRows();
-+    check(cells[0].text == "[MIXED]", "adrenaline alone counts toward mixed state");
++    check(cells[0].text == "[ALL ON]", "master renders all on");
++    clickMaster();
++    check(VCModCountOn() == 0, "master turns everything off");
++    DrawRows();
++    check(cells[0].text == "[ALL OFF]", "master renders all off");
++
++    // the vanilla fix family is one row: ON restores all four, OFF drops the master
++    bVCModVanillaFixes = true;
++    bVCModHudCleanup = bVCModKeepWheelAngle = bVCModExitHoldOff = bVCModLongerFx = true;
++    nVCModPage = VCMOD_PAGE_WORLD;
++    DrawRows();
++    check(cells[valueCell(fixes)].text == "[ON]", "the fixes row reads on when all four are on");
++    click(fixes);
++    check(!bVCModVanillaFixes, "the fixes row turns the master off");
++    DrawRows();
++    check(cells[valueCell(fixes)].text == "[OFF]", "the fixes row reads off with the master off");
++    bVCModHudCleanup = false;
++    check(aVCModRows[fixes].kind == VCMOD_ROW_CYCLE, "the fixes row is a cycle, not a switch");
++    click(fixes);
++    check(bVCModVanillaFixes && bVCModHudCleanup && bVCModKeepWheelAngle
++          && bVCModExitHoldOff && bVCModLongerFx,
++          "switching it on restores the whole set");
++    DrawRows();
++    check(cells[valueCell(fixes)].text == "[ON]", "a restored set reads on again");
++    bVCModHudCleanup = false;
++    DrawRows();
++    check(cells[valueCell(fixes)].text == "[OFF]", "one item off shows the family as off");
++
 +    click(rowNamed("ANIM SET"));
 +    check(nVCModOpenList == VCMOD_LIST_ANIM, "existing animation dropdown still opens");
 +    CPad pad = { { true }, { false } };
@@ -12228,15 +12516,27 @@ index 0000000..ee6f26f
 +        header = (ROOT / "src/extras/vcmodpanel.h").read_text()
 +        ini = (ROOT / "src/core/re3.cpp").read_text()
 +        player = (ROOT / "src/peds/PlayerPed.cpp").read_text()
-+        for name in ("bVCModAdrenaline", "bVCModAdrenalineSlowMo"):
-+            self.assertIn(f"extern bool {name};", header)
-+            self.assertRegex(panel, rf"TWEAKBOOLN?\({name}[,)]")
-+        self.assertIn('ReadIniIfExists("VC Mods", "Adrenaline", &bVCModAdrenaline);', ini)
-+        self.assertIn('ReadIniIfExists("VC Mods", "AdrenalineSlowMo", &bVCModAdrenalineSlowMo);', ini)
++        # one value, one panel row, one debug-menu entry
++        self.assertIn("extern int32 nVCModAdrenalineMode;", header)
++        self.assertIn("int32 nVCModAdrenalineMode;", panel)
++        self.assertRegex(panel, r"TWEAKINT32N\(nVCModAdrenalineMode, 0, 2, 1,")
++        self.assertRegex(panel, r'\{ "ADRENALINE",\s*VCMOD_ROW_CYCLE,[^\n]*"Adrenaline",[^\n]*'
++                                r"&aVCModAdrenalineCycle \},")
++        self.assertNotIn("ADRENALINE MODE", panel)
++        self.assertIn('"[OFF]", "[NORMAL]", "[SLOW-MO]"', panel)
++        self.assertNotIn("bVCModAdrenalineSlowMo", panel)
++        self.assertNotIn("bVCModAdrenaline", panel)
++        self.assertIn('ReadIniIfExists("VC Mods", "Adrenaline", &nVCModAdrenalineMode);', ini)
++        # an old ini's separate slow-mo switch is folded in, then dropped so a
++        # pinned normal-speed value cannot be read back as slow-mo
++        self.assertIn('IniHasKey("VC Mods", "AdrenalineSlowMo")', ini)
++        self.assertIn('IniRemoveKey("VC Mods", "AdrenalineSlowMo");', ini)
 +        switched = braced(panel, "static bool *aVCModSwitched[]")
-+        self.assertIn("&bVCModAdrenaline", switched)
++        self.assertNotIn("bVCModAdrenaline", switched)
 +        self.assertNotIn("&bVCModWalkMode", switched)
-+        self.assertNotIn("&bVCModAdrenalineSlowMo", switched)
++        # the runtime reads the mode, never a switch next to it
++        self.assertIn("nVCModAdrenalineMode != 0", player)
++        self.assertIn("nVCModAdrenalineMode == 2", player)
 +        control = braced(player, "void\nCPlayerPed::ProcessControl(void)")
 +        self.assertLess(control.index("VCModUpdateAdrenaline(this);"), control.index("CPed::ProcessControl();"))
 +        for marker in ("CPlayerPed::~CPlayerPed()", "void\nCPlayerPed::SetInitialState(void)"):
@@ -12245,12 +12545,243 @@ index 0000000..ee6f26f
 +
 +if __name__ == "__main__":
 +    unittest.main()
+diff --git a/utils/test_vc_aimwalk.py b/utils/test_vc_aimwalk.py
+new file mode 100644
+index 0000000..4484afe
+--- /dev/null
++++ b/utils/test_vc_aimwalk.py
+@@ -0,0 +1,225 @@
++#!/usr/bin/env python3
++"""AIM WALK: a locked-on target no longer roots the player for every gun the arm
++cannot aim with. The predicates decide which weapon and which moment gets the
++walk, and the wiring has to fade the parked aim pose out of the walk, keep the
++facing on the input and keep the lock, without touching the pistols or the
++two-hand colt."""
++import pathlib
++import re
++import subprocess
++import tempfile
++import unittest
++
++ROOT = pathlib.Path(__file__).resolve().parents[1]
++PEDFIGHT = ROOT / "src/peds/PedFight.cpp"
++PLAYERPED = ROOT / "src/peds/PlayerPed.cpp"
++PANEL = ROOT / "src/extras/vcmodpanel.cpp"
++INI = ROOT / "src/core/re3.cpp"
++
++PRELUDE = r'''
++#include <stdio.h>
++typedef int int32;
++#define WEAPONFLAG_CANAIM_WITHARM (1 << 7)
++#define nil 0
++enum { PEDMOVE_NONE, PEDMOVE_STILL, PEDMOVE_WALK, PEDMOVE_RUN, PEDMOVE_SPRINT };
++
++bool bVCModAimWalk = true;
++bool copPose = false;
++
++struct CWeaponInfo { bool armAim; bool IsFlagSet(int) const { return armAim; } };
++struct CPed {
++    bool player;
++    bool bIsDucking;
++    bool IsPlayer() const { return player; }
++};
++struct CPlayerPed : CPed {
++    int m_nMoveState;
++    float m_fMoveSpeed;
++};
++bool VCModCopTwoHandPose(CPed *, CWeaponInfo *) { return copPose; }
++
++static int failed = 0;
++#define CHECK(c, m) do { if (!(c)) { printf("FAIL: %s\n", m); failed++; } } while (0)
++'''
++
++MAIN = r'''
++static CPlayerPed makePlayer(int moveState, float speed)
++{
++    CPlayerPed p;
++    p.player = true;
++    p.bIsDucking = false;
++    p.m_nMoveState = moveState;
++    p.m_fMoveSpeed = speed;
++    return p;
++}
++
++int main() {
++    CPlayerPed still = makePlayer(PEDMOVE_STILL, 0.0f);
++    CPlayerPed walking = makePlayer(PEDMOVE_WALK, 0.0f);
++    CPlayerPed running = makePlayer(PEDMOVE_RUN, 0.0f);
++    CPlayerPed drifting = makePlayer(PEDMOVE_STILL, 0.11f);
++    CPlayerPed nudging = makePlayer(PEDMOVE_STILL, 0.1f);
++    CPlayerPed npc = makePlayer(PEDMOVE_RUN, 2.0f);
++    npc.player = false;
++
++    CHECK(!VCModAimHoldMoving(&still), "standing still hands the aim the body");
++    CHECK(VCModAimHoldMoving(&walking), "a walk is movement");
++    CHECK(VCModAimHoldMoving(&running), "a run is movement");
++    CHECK(VCModAimHoldMoving(&drifting), "speed left over from a run is movement");
++    CHECK(!VCModAimHoldMoving(&nudging), "the speed cut is exclusive");
++    CHECK(!VCModAimHoldMoving(&npc), "only the player's walk fades the aim pose");
++
++    CWeaponInfo rifle = { false };
++    CWeaponInfo pistol = { true };
++
++    CHECK(VCModAimWalkWeapon(&still, &rifle), "a rifle the arm cannot aim gets the walk");
++    CHECK(!VCModAimWalkWeapon(&still, &pistol), "the arm-aim pistols keep their own walk");
++    CHECK(!VCModAimWalkWeapon(&npc, &rifle), "NPCs are not the player");
++
++    copPose = true;
++    CHECK(!VCModAimWalkWeapon(&still, &rifle), "the two-hand colt keeps its own hold rules");
++    copPose = false;
++
++    still.bIsDucking = true;
++    CHECK(!VCModAimWalkWeapon(&still, &rifle), "the crouch aim keeps the stock freeze");
++    still.bIsDucking = false;
++
++    bVCModAimWalk = false;
++    CHECK(!VCModAimWalkWeapon(&still, &rifle), "the row off restores the stock freeze");
++    bVCModAimWalk = true;
++    CHECK(VCModAimWalkWeapon(&still, &rifle), "the row on is what frees the walk");
++    return failed != 0;
++}
++'''
++
++
++def braced(source, marker):
++    start = source.index(marker)
++    opening = source.index("{", start)
++    depth = 1
++    end = opening + 1
++    while depth:
++        depth += (source[end] == "{") - (source[end] == "}")
++        end += 1
++    return source[start:end]
++
++
++def cut(text, name):
++    match = re.search(r"(?m)^(?:static\s+)?bool\s*\n" + re.escape(name) + r"\(", text)
++    if match is None:
++        raise AssertionError(f"{name} not found in {PEDFIGHT}")
++    opening = text.index("{", match.end())
++    depth = 0
++    for i in range(opening, len(text)):
++        if text[i] == "{":
++            depth += 1
++        elif text[i] == "}":
++            depth -= 1
++            if depth == 0:
++                return text[match.start():i + 1]
++    raise AssertionError(f"{name} is unbalanced")
++
++
++class AimWalkTests(unittest.TestCase):
++    def test_predicates(self):
++        text = PEDFIGHT.read_text()
++        source = PRELUDE + "\n".join(
++            cut(text, name) for name in ("VCModAimHoldMoving", "VCModAimWalkWeapon")) + MAIN
++        with tempfile.TemporaryDirectory() as tmp:
++            exe = pathlib.Path(tmp) / "aimwalk"
++            build = subprocess.run(
++                ["c++", "-std=c++98", "-x", "c++", "-", "-o", str(exe)],
++                input=source, text=True, capture_output=True)
++            self.assertEqual(build.returncode, 0, build.stderr)
++            run = subprocess.run([str(exe)], text=True, capture_output=True)
++            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
++            self.assertNotIn("FAIL:", run.stdout)
++
++    def test_only_the_shot_plants_the_player(self):
++        gate = braced(PLAYERPED.read_text(), "CPlayerPed::MovementDisabledBecauseOfTargeting")
++        self.assertIn("VCModCopTwoHandFiring(this, info)", gate)
++        self.assertIn("VCModAimWalkWeapon(this, info)", gate)
++        self.assertIn("m_nPedState == PED_ATTACK", gate)
++        # the colt keeps its own rules, no lock means free aim and free movement
++        self.assertLess(gate.index("VCModCopTwoHandFiring"),
++                        gate.index("VCModAimWalkWeapon"))
++
++    def test_facing_follows_the_input_while_walking(self):
++        rotate = braced(PLAYERPED.read_text(), "CPlayerPed::RotatePlayerToTrackTarget")
++        stand_down = rotate.index("VCModAimWalkWeapon(this, info) && VCModAimHoldMoving(this)")
++        self.assertRegex(rotate[stand_down:], r"return;")
++        # the arm-aim pistols keep their return, and it is not reached first
++        self.assertLess(rotate.index("info->IsFlagSet(WEAPONFLAG_CANAIM_WITHARM)"), stand_down)
++
++    def test_the_lock_survives_the_walk(self):
++        weapon = PLAYERPED.read_text()
++        guard = weapon[weapon.index("DoesTargetHaveToBeBroken(m_pPointGunAt->GetPosition()"):]
++        guard = guard[:guard.index("ClearWeaponTarget();")]
++        self.assertIn("bCanPointGunAtTarget", guard)
++        self.assertIn("aimWalkMoving", guard)
++        self.assertIn("!aimWalkMoving", guard)
++        definition = weapon[weapon.index("bool aimWalkMoving"):]
++        self.assertIn("VCModAimWalkWeapon(this, weaponInfo) && VCModAimHoldMoving(this)",
++                      definition[:definition.index(";")])
++
++    def test_the_tail_plays_before_the_walk(self):
++        text = PEDFIGHT.read_text()
++        tail = braced(text, "VCModAimTailRunning")
++        # nothing runs once the row is off or the pose is the two-hand colt's
++        self.assertIn("!bVCModWeaponRecovering", tail)
++        self.assertIn("!ped->IsPlayer()", tail)
++        self.assertIn("VCModCopTwoHandPose(ped, info)", tail)
++        # it is the clip playing, not the flag alone: the parked hold is not a tail
++        self.assertIn("assoc->IsRunning()", tail)
++
++        gate = braced(PLAYERPED.read_text(), "CPlayerPed::MovementDisabledBecauseOfTargeting")
++        self.assertIn("m_nPedState == PED_ATTACK || VCModAimTailRunning(this)", gate)
++
++        point = braced(text, "CPed::PointGunAt(void)")
++        walk = point[point.index("VCModAimWalkWeapon(this, weaponInfo) && VCModAimHoldMoving(this)"):]
++        walk = walk[:walk.index("return;")]
++        # the walk never cuts the tail: it stands down while the tail runs
++        self.assertIn("!VCModAimTailRunning(this)", walk)
++        self.assertNotIn("bVCModWeaponRecovering = false", walk)
++
++    def test_the_walk_fades_the_parked_aim_pose_out(self):
++        point = braced(PEDFIGHT.read_text(), "CPed::PointGunAt(void)")
++        walk = point[point.index("VCModAimWalkWeapon(this, weaponInfo) && VCModAimHoldMoving(this)"):]
++        walk = walk[:walk.index("The tail is the author's recovery")]
++        # locomotion owns the body while he moves
++        self.assertIn("blendDelta = -8.0f;", walk)
++        # the faded clip has to stay alive to fade back in
++        self.assertIn("ASSOC_DELETEFADEDOUT", walk)
++        self.assertIn("return;", walk)
++        # it never re-parks the aim frame mid-walk
++        self.assertNotIn("SetCurrentTime", walk)
++
++        raise_it = point[point.index("the walk lowered the weapon"):]
++        self.assertIn("!VCModAimHoldMoving(this)", raise_it)
++        self.assertIn("blendDelta = 8.0f;", raise_it)
++
++        # the lowered hold a walk faded has to come back when he stops, which is a
++        # different branch from the aim pose above
++        hold = point[point.index("if (bVCModWeaponRecovering && weaponAssoc)"):]
++        hold = hold[:hold.index("return;", hold.index("ASSOC_DELETEFADEDOUT"))]
++        self.assertIn("blendAmount < 1.0f", hold)
++        self.assertIn("blendDelta = 8.0f;", hold)
++
++    def test_the_two_hand_hold_uses_the_same_moving_rule(self):
++        point = braced(PEDFIGHT.read_text(), "CPed::PointGunAt(void)")
++        hold = point[point.index("VCModCopSetStance(this, weaponAssoc, false)"):]
++        hold = hold[:hold.index("} else {")]
++        self.assertEqual(hold.count("VCModAimHoldMoving(this)"), 2)
++        self.assertNotIn("m_fMoveSpeed", hold)
++
++    def test_row_and_ini(self):
++        panel = PANEL.read_text()
++        self.assertIn('{ "AIM WALK",        VCMOD_ROW_FLAG,    &bVCModAimWalk,        "AimWalk",        VCMOD_PAGE_COMBAT }', panel)
++        self.assertIn("bool bVCModAimWalk = true;", panel)
++        self.assertIn('TWEAKBOOLN(bVCModAimWalk, "move while locked on");', panel)
++        self.assertIn("&bVCModAimWalk,", panel)
++        self.assertIn('ReadIniIfExists("VC Mods", "AimWalk", &bVCModAimWalk);', INI.read_text())
++
++
++if __name__ == "__main__":
++    unittest.main()
 diff --git a/utils/test_vc_character.py b/utils/test_vc_character.py
 new file mode 100644
-index 0000000..7640f32
+index 0000000..b7cd6ba
 --- /dev/null
 +++ b/utils/test_vc_character.py
-@@ -0,0 +1,927 @@
+@@ -0,0 +1,933 @@
 +#!/usr/bin/env python3
 +import re
 +import subprocess
@@ -12835,7 +13366,12 @@ index 0000000..7640f32
 +            "static const char *aVCModAnimGroupNames[]", "static const char *aVCModPedCategoryNames[]",
 +            "static const char *aVCModRideStyleNames[]",
 +            "enum eVCModFont", "enum eVCModList", "enum eVCModPage", "enum eVCModRowKind",
-+            "struct VCModRowDef", "static const char *aVCModPageNames[NUM_VCMOD_PAGES]",
++            "struct VCModCycleDef", "struct VCModRowDef",
++            "static const char *aVCModPageNames[NUM_VCMOD_PAGES]",
++            "static int32\nVCModAdrenalineGet(void)", "static void\nVCModAdrenalineSet(int32 value)",
++            "static const char *aVCModAdrenalineLabels[]", "static const VCModCycleDef aVCModAdrenalineCycle",
++            "static int32\nVCModVanillaFixGet(void)", "static void\nVCModVanillaFixSet(int32 value)",
++            "static const char *aVCModVanillaFixLabels[]", "static const VCModCycleDef aVCModVanillaFixCycle",
 +            "static bool *aVCModSwitched[]", "static const VCModRowDef aVCModRows[]"))
 +        pedTables = "\n".join(re.findall(r"^static const struct \{.*?^};", PANEL, re.S | re.M))
 +        pedTables += "\n" + re.search(r"^static char aVCModPedLabel\[32\];", PANEL, re.M).group(0)
@@ -13145,7 +13681,8 @@ index 0000000..7640f32
 +        self.assertIn('"RIDE TO"', rows)
 +        self.assertIn('"CHARACTER"', rows)
 +        self.assertLess(rows.index('"ANIM SET"'), rows.index('"PED CATEGORY"'))
-+        self.assertIn("&bVCModAdrenaline", switched)
++        # adrenaline is a three-state row now, so it is not part of the sweep
++        self.assertNotIn("bVCModAdrenaline", switched)
 +        self.assertNotIn("bVCModCopPistol", switched)
 +        self.assertIn("&bVCModCopPistol", rows)
 +        self.assertNotIn("bool bVCModCopPistol = true", PANEL)
@@ -13441,10 +13978,10 @@ index 0000000..4f82e19
 +    unittest.main()
 diff --git a/utils/test_vc_cop_pistol.py b/utils/test_vc_cop_pistol.py
 new file mode 100644
-index 0000000..173c91a
+index 0000000..843f1b3
 --- /dev/null
 +++ b/utils/test_vc_cop_pistol.py
-@@ -0,0 +1,415 @@
+@@ -0,0 +1,416 @@
 +#!/usr/bin/env python3
 +"""Two-hand colt: the pose selection on its own, plus static checks that the
 +fire loop looks up the clip SetAttack blended."""
@@ -13815,7 +14352,8 @@ index 0000000..173c91a
 +        # the carry pose pins the arms; while the player walks with it the
 +        # locomotion clip has to own the body, so the hold fades out on the move
 +        point = braced(PEDFIGHT.read_text(), "CPed::PointGunAt(void)")
-+        self.assertIn("m_nMoveState == PEDMOVE_WALK", point)
++        # one moving rule serves the hold and AIM WALK, so the two cannot disagree
++        self.assertIn("VCModAimHoldMoving(this)", point)
 +        self.assertIn("weaponAssoc->blendDelta = -8.0f", point)
 +        self.assertIn("weaponAssoc->blendDelta = 8.0f", point)
 +        self.assertLess(point.index("VCModCopSetStance(this, weaponAssoc, false)"),
@@ -15085,7 +15623,7 @@ index 0000000..0e46dff
 +    unittest.main()
 diff --git a/utils/test_vc_passenger.py b/utils/test_vc_passenger.py
 new file mode 100644
-index 0000000..54fa235
+index 0000000..5ce5e3c
 --- /dev/null
 +++ b/utils/test_vc_passenger.py
 @@ -0,0 +1,1049 @@
@@ -16098,9 +16636,9 @@ index 0000000..54fa235
 +        # a mode that changes how Tommy travels is not part of the master row
 +        self.assertNotIn("bVCModPassengerMode", switched)
 +        self.assertEqual(names.count('"'), 4, "one label per ride style")
-+        # one row per table entry: eleven combat, six player, ten driving,
-+        # ten world and the two debug probes
-+        self.assertEqual(len(re.findall(r'\{ "', rows)), 39)
++        # one row per table entry: twelve combat, six player, nine driving,
++        # seven world and the two debug probes
++        self.assertEqual(len(re.findall(r'\{ "', rows)), 36)
 +        self.assertIn("nVCModListAnchor = row;", click)
 +        self.assertEqual(len(re.findall(r"VCMOD_RIDE_", braced(HEAD, "enum eVCModRidePhase"))), 5)
 +
@@ -16140,10 +16678,10 @@ index 0000000..54fa235
 +    unittest.main()
 diff --git a/utils/test_vc_qol.py b/utils/test_vc_qol.py
 new file mode 100644
-index 0000000..b2d703f
+index 0000000..87c20d1
 --- /dev/null
 +++ b/utils/test_vc_qol.py
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,206 @@
 +#!/usr/bin/env python3
 +"""Vanilla-fix tests: the three pure helpers and the particle lifespan pass out
 +of vcmodqol.cpp, plus static checks that each behaviour is wired to its flag.
@@ -16317,10 +16855,12 @@ index 0000000..b2d703f
 +        particle = PARTICLE.read_text()
 +
 +        self.assertIn('"VANILLA FIXES"', rows)
-+        # the rows are split over tabs now, so the fix lives on the world page and
-+        # the debug probe keeps its own; only the key and the page matter here
-+        self.assertRegex(rows, r'\{ "VANILLA FIXES",\s*VCMOD_ROW_FLAG,\s*&bVCModVanillaFixes,'
-+                               r'\s*"VanillaFixes",\s*VCMOD_PAGE_WORLD \},')
++        # the five-row family is one cycle row now; the four items keep their own
++        # flags, ini keys and debug-menu entries underneath it
++        self.assertRegex(rows, r'\{ "VANILLA FIXES",\s*VCMOD_ROW_CYCLE,\s*nil,'
++                               r'\s*"VanillaFixes",\s*VCMOD_PAGE_WORLD,\s*&aVCModVanillaFixCycle \},')
++        for name in ("HUD CLEANUP", "KEEP WHEEL ANGLE", "EXIT HOLD OFF", "LONGER BLOOD/SAND"):
++            self.assertNotIn(f'"{name}"', rows)
 +        self.assertRegex(rows, r'\{ "PATH LANE",\s*VCMOD_ROW_PATHPROBE_LANE,\s*nil,'
 +                               r'\s*nil,\s*VCMOD_PAGE_DEBUG \},')
 +        for flag in ("bVCModVanillaFixes", "bVCModHudCleanup", "bVCModKeepWheelAngle",
@@ -16807,6 +17347,209 @@ index 0000000..546ea74
 +        self.assertIn("&bVCModSteeringWheel", switched)
 +        self.assertIn('ReadIniIfExists("VC Mods", "SteeringWheel"', INI.read_text())
 +        self.assertIn("extern bool bVCModSteeringWheel;", MOD_H.read_text())
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/utils/test_vc_weapon_recovery.py b/utils/test_vc_weapon_recovery.py
+new file mode 100644
+index 0000000..ce44475
+--- /dev/null
++++ b/utils/test_vc_weapon_recovery.py
+@@ -0,0 +1,197 @@
++#!/usr/bin/env python3
++"""Gun recovery: the tail predicate every firearm shares, plus the wiring that
++lets the player play the tail NPCs always run. The two-hand colt keeps its own
++tail and must not be routed through this switch."""
++import pathlib
++import re
++import subprocess
++import tempfile
++import unittest
++
++ROOT = pathlib.Path(__file__).resolve().parents[1]
++PEDFIGHT = ROOT / "src/peds/PedFight.cpp"
++PED = ROOT / "src/peds/Ped.cpp"
++PANEL = ROOT / "src/extras/vcmodpanel.cpp"
++INI = ROOT / "src/core/re3.cpp"
++
++PRELUDE = r'''
++#include <stdio.h>
++#include <string.h>
++typedef int int32;
++#define nil 0
++static bool bVCModWeaponRecovering;
++
++bool bVCModWeaponRecovery = true;
++bool copPose = false;
++
++struct CWeaponInfo {};
++struct CPed {
++    bool player;
++    bool bIsDucking;
++    bool IsPlayer() const { return player; }
++};
++bool VCModCopTwoHandPose(CPed *, CWeaponInfo *) { return copPose; }
++
++struct CAnimBlendHierarchy { float totalLength; };
++struct CAnimBlendAssociation { CAnimBlendHierarchy *hierarchy; };
++
++static int failed = 0;
++#define CHECK(c, m) do { if (!(c)) { printf("FAIL: %s\n", m); failed++; } } while (0)
++'''
++
++MAIN = r'''
++int main() {
++    CPed player = { true, false };
++    CPed cop = { false, false };
++    CWeaponInfo gun;
++    CAnimBlendHierarchy longClip = { 1.93f };
++    CAnimBlendHierarchy shortClip = { 0.60f };
++    CAnimBlendHierarchy noTail = { 0.645f };
++    CAnimBlendAssociation withTail = { &longClip };
++    CAnimBlendAssociation withoutTail = { &shortClip };
++    CAnimBlendAssociation exactlyCut = { &noTail };
++    CAnimBlendAssociation noHier = { nil };
++
++    bVCModWeaponRecovery = true;
++    copPose = false;
++    CHECK(VCModWeaponRecoveryWanted(&player, &gun, &withTail, 0.6f),
++          "a firearm clip with a tail gets the recovery");
++    CHECK(!VCModWeaponRecoveryWanted(&player, &gun, &withoutTail, 0.6f),
++          "a clip that ends on the loop end has nothing to play");
++    CHECK(!VCModWeaponRecoveryWanted(&player, &gun, &exactlyCut, 0.6f),
++          "a tail no longer than the cut is not a recovery");
++    CHECK(!VCModWeaponRecoveryWanted(&player, &gun, nil, 0.6f), "no clip, no tail");
++    CHECK(!VCModWeaponRecoveryWanted(&player, &gun, &noHier, 0.6f), "no hierarchy, no tail");
++
++    CHECK(!VCModWeaponRecoveryWanted(&cop, &gun, &withTail, 0.6f),
++          "NPCs run their own tails and keep them");
++
++    copPose = true;
++    CHECK(!VCModWeaponRecoveryWanted(&player, &gun, &withTail, 0.6f),
++          "the two-hand colt keeps its own tail");
++    copPose = false;
++
++    player.bIsDucking = true;
++    CHECK(!VCModWeaponRecoveryWanted(&player, &gun, &withTail, 0.6f),
++          "the crouch fire clip parks its own duck idle");
++    player.bIsDucking = false;
++
++    bVCModWeaponRecovery = false;
++    CHECK(!VCModWeaponRecoveryWanted(&player, &gun, &withTail, 0.6f),
++          "the row off parks on the loop end like stock");
++    bVCModWeaponRecovery = true;
++
++    bVCModWeaponRecovering = false;
++    CHECK(!VCModWeaponRecovering(), "idle recovery is off");
++    bVCModWeaponRecovering = true;
++    CHECK(VCModWeaponRecovering(), "the tail owns the arms while it runs");
++    return failed != 0;
++}
++'''
++
++
++def braced(source, marker):
++    start = source.index(marker)
++    opening = source.index("{", start)
++    depth = 1
++    end = opening + 1
++    while depth:
++        depth += (source[end] == "{") - (source[end] == "}")
++        end += 1
++    return source[start:end]
++
++
++def cut(text, name):
++    match = re.search(r"(?m)^(?:static\s+)?bool\s*\n" + re.escape(name) + r"\(", text)
++    if match is None:
++        raise AssertionError(f"{name} not found in {PEDFIGHT}")
++    opening = text.index("{", match.end())
++    depth = 0
++    for i in range(opening, len(text)):
++        if text[i] == "{":
++            depth += 1
++        elif text[i] == "}":
++            depth -= 1
++            if depth == 0:
++                return text[match.start():i + 1]
++    raise AssertionError(f"{name} is unbalanced")
++
++
++class WeaponRecoveryTests(unittest.TestCase):
++    def test_tail_predicate(self):
++        text = PEDFIGHT.read_text()
++        const = re.search(r"static const float VCModCopRecoverCut[^;]*;", text).group(0)
++        source = PRELUDE + const + "\n" + "\n".join(
++            cut(text, name) for name in ("VCModWeaponRecoveryWanted", "VCModWeaponRecovering")) + MAIN
++        with tempfile.TemporaryDirectory() as tmp:
++            exe = pathlib.Path(tmp) / "recover"
++            build = subprocess.run(
++                ["c++", "-std=c++98", "-x", "c++", "-", "-o", str(exe)],
++                input=source, text=True, capture_output=True)
++            self.assertEqual(build.returncode, 0, build.stderr)
++            run = subprocess.run([str(exe)], text=True, capture_output=True)
++            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
++            self.assertNotIn("FAIL:", run.stdout)
++
++    def test_burst_end_hands_the_tail_to_point_gun(self):
++        attack = braced(PEDFIGHT.read_text(), "CPed::Attack(void)")
++        start = attack.index("GetWeapon()->m_eWeaponState != WEAPONSTATE_RELOADING")
++        aim = attack[start:]
++        self.assertIn("VCModWeaponRecoveryWanted(this, ourWeapon, weaponAnimAssoc, animLoopEnd)", aim)
++        self.assertIn("bVCModWeaponRecovering = true;", aim)
++        # the two-hand colt is decided first and keeps its own path
++        self.assertLess(aim.index("VCModCopTwoHandPose(this, ourWeapon)"),
++                        aim.index("bVCModWeaponRecovering = true;"))
++        # the parked hold is the fallback, not what the player gets with the row on
++        self.assertIn("weaponAnimAssoc->SetCurrentTime(animLoopEnd);", aim)
++
++    def test_new_burst_outranks_the_tail(self):
++        attack = braced(PEDFIGHT.read_text(), "CPed::Attack(void)")
++        abort = attack[attack.index("A new burst outranks"):]
++        abort = abort[:abort.index("float animStart")]
++        self.assertIn("SetCurrentTime(animLoopStart)", abort)
++        self.assertIn("SetRun()", abort)
++        self.assertIn("attackShouldContinue", abort)
++        self.assertIn("bVCModWeaponRecovering = false;", abort)
++        self.assertIn("!VCModCopTwoHandPose(this, ourWeapon)", abort)
++        # the rewind has to land before the fire branch reads the clip time
++        self.assertLess(attack.index("SetCurrentTime(animLoopStart)"), attack.index("float animStart"))
++
++    def test_point_gun_parks_only_after_the_tail(self):
++        point = braced(PEDFIGHT.read_text(), "CPed::PointGunAt(void)")
++        tail = point[point.index("bVCModWeaponRecovering"):]
++        tail = tail[:tail.index("if (weaponAssoc && weaponAssoc->currentTime > animLoopStart")]
++        # the tail runs to its end, and that lowered end is the hold
++        self.assertIn("weaponAssoc->IsRunning()", tail)
++        self.assertIn("return;", tail)
++        # the clip's own fadeout would raise the arm again; the hold cancels it
++        self.assertIn("ASSOC_DELETEFADEDOUT", tail)
++        self.assertIn("SetBlend(1.0f, 0.0f)", tail)
++        # the aim frame is never re-seeked while holding
++        self.assertNotIn("SetCurrentTime(animLoopStart)", tail)
++        # a recovery only exists off the two-hand pose
++        self.assertIn("VCModCopTwoHandPose(this, weaponInfo)", point)
++        self.assertLess(point.index("VCModCopTwoHandPose(this, weaponInfo)"),
++                        point.index("bVCModWeaponRecovering"))
++
++    def test_leaving_the_aim_ends_the_tail(self):
++        clear = braced(PEDFIGHT.read_text(), "CPed::ClearPointGunAt(void)")
++        self.assertIn("bVCModCopRecovering = false;", clear)
++        self.assertIn("bVCModWeaponRecovering = false;", clear)
++
++    def test_aim_does_not_fight_the_tail(self):
++        aim_gun = braced(PED.read_text(), "CPed::AimGun(void)")
++        self.assertIn("VCModWeaponRecovering()", aim_gun)
++        self.assertIn("m_pedIK.m_flags &= ~CPedIK::AIMS_WITH_ARM", aim_gun)
++
++    def test_row_and_ini(self):
++        panel = PANEL.read_text()
++        self.assertIn('{ "GUN RECOVERY",    VCMOD_ROW_FLAG,    &bVCModWeaponRecovery, "WeaponRecovery", VCMOD_PAGE_COMBAT }', panel)
++        self.assertIn("bool bVCModWeaponRecovery = true;", panel)
++        self.assertIn("TWEAKBOOL(bVCModWeaponRecovery);", panel)
++        self.assertIn("&bVCModWeaponRecovery,", panel)
++        self.assertIn('ReadIniIfExists("VC Mods", "WeaponRecovery", &bVCModWeaponRecovery);', INI.read_text())
 +
 +
 +if __name__ == "__main__":

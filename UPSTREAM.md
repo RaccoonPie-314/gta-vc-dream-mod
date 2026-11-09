@@ -3,6 +3,7 @@
 Built against [https://github.com/mrxenginner/reVC](https://github.com/mrxenginner/reVC), branch `miami`, commit `a26fff4`.
 Mod commits on top of it:
 
+    d6070c5 Add gun recovery tails and free movement while locked on
     57f4568 Ship the vanilla fixes, world fixes, tabbed panel and two-hand stance
     d01bb3c Add traffic AI, path probe and interior mods
     d812138 Mount asset mods from a portable mods folder
@@ -43,9 +44,9 @@ Usage record for the build of this folder:
 
     System:   macOS arm64
     Operator: RaccoonPie-314
-    Date:     2026-11-09T03:01:06Z
+    Date:     2026-11-09T04:20:53Z
     Target:   https://github.com/mrxenginner/reVC
-    Hash:     99a637c73d80ce7dea9c36368d266534977e14c337966393222100e182fe3cfc
+    Hash:     28fee285234081856d34ecfd217557bfa68661c6b62f749d60e0cbb657fc42f7
 
 ## Rebuilding
 
