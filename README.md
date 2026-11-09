@@ -1,8 +1,6 @@
 # GTA VC: Dream Mod
 
-The mods this game should have shipped with, and that I spent a childhood wishing
-for: make Tommy walk like a cop, aim with a free mouse and still get lock-on,
-shoot as badly as an NPC, never gain a star. All of it compiled into the game
+Some features i always wanted in the game, now made it into mods. All of it compiled into the game
 itself, every one of them a live toggle.
 
 `vc-mods.patch` against reVC `miami` commit `a26fff4`.
