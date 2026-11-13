@@ -1,8 +1,10 @@
 # NPC mode: standstill freeze after ID check and in an armed chase (2026-11-13)
 
-Workspace `vc-mod`, reVC `reVC/`, branch `vcmods`, HEAD `bb3fe88`. Installed
-build `480` (was 479); all 45 `utils/test_vc_*.py` suites pass (41 tests in the
-NPC harness). No commit, tag or push.
+Workspace `vc-mod`, reVC `reVC/`, branch `vcmods`, HEAD `4fc7fcd`. Installed
+build `484`; all 45 `utils/test_vc_*.py` suites pass. Shipped: reVC commit
+`4fc7fcd` is local on `vcmods` (upstream, never pushed); the handout was
+regenerated with `scripts/sync.sh` + `publish.sh` and is public as
+`gta-vc-dream-mod` `4f33425` on `origin main` (RaccoonPie-314).
 
 ## Report
 

@@ -47,9 +47,9 @@ Usage record for the build of this folder:
 
     System:   macOS arm64
     Operator: RaccoonPie-314
-    Date:     2026-11-13T11:12:18Z
+    Date:     2026-11-13T11:13:42Z
     Target:   https://github.com/mrxenginner/reVC
-    Hash:     30f8883e01fb883c6379ef3dba60d1389a3f797366655cc5a9931d7c6e76b8f8
+    Hash:     8464da54b4e6b11a0ae9054cafab83b6a4072c6368884e3990955b76758f630c
 
 ## Rebuilding
 
