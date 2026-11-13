@@ -3,6 +3,9 @@
 Built against [https://github.com/mrxenginner/reVC](https://github.com/mrxenginner/reVC), branch `miami`, commit `a26fff4`.
 Mod commits on top of it:
 
+    4fc7fcd Ship the NPC-mode module split and the standstill fix
+    bb3fe88 Ship NPC mode, the Vercetti crew, panel help and diagnostics
+    8d57f7c Ship lit car lamp textures, the vehicle spawner and fitted sirens - LIGHT TEXTURES: a replaced model's lamp material swaps to its lit texture   while that car's lights are on, back to the unlit face when they are off;   DRIVING row, default on - Car light cubes fade from 15 m to 8 m, so no translucent box hugs a parked car - FBI Car, FBI Rancher and Vice Cheetah run the stock four-corona siren seated   per model; the police bar narrows to its roof blocks - Tail lamps stay red in reverse; the white reversing marker is gone - SPAWN VEHICLE on DEBUG lists every car model and queues a spawn ahead - Rebindable mod keys with a KEYS page; direct key reads skip while capturing - Firetruck cannon fires from the muzzle and the barrel turns with the aim - Harnesses: test_vc_lighttex, test_vc_carlights, test_vc_spawn, test_vc_keys
     d6070c5 Add gun recovery tails and free movement while locked on
     57f4568 Ship the vanilla fixes, world fixes, tabbed panel and two-hand stance
     d01bb3c Add traffic AI, path probe and interior mods
@@ -44,9 +47,9 @@ Usage record for the build of this folder:
 
     System:   macOS arm64
     Operator: RaccoonPie-314
-    Date:     2026-11-09T05:05:35Z
+    Date:     2026-11-13T11:12:18Z
     Target:   https://github.com/mrxenginner/reVC
-    Hash:     0bb91328409879b9e71d394d8b48ede1a4b94f15a9550bb0e50b5db79ccc5388
+    Hash:     30f8883e01fb883c6379ef3dba60d1389a3f797366655cc5a9931d7c6e76b8f8
 
 ## Rebuilding
 

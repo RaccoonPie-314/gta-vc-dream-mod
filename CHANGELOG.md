@@ -386,6 +386,88 @@ what it actually got.
 - `reVC/utils/test_vc_aimwalk.py` covers the two predicates and the wiring;
   twenty-one drivers now pass.
 
+## Shipped — 2026-11-09, `8d57f7c`
+
+### Vehicle lights
+
+- `LIGHT TEXTURES` on the DRIVING page: a replaced model's lamp material switches
+  to its lit texture while that car's lights are on, and back to the unlit face
+  when they are off. The materials belong to the clone-shared geometry, so the
+  switch rides the render call the way `SetVehicleColour` does, and two cars of
+  one model can show different states at once.
+- Car light cubes — the translucent 8-vertex box `CBrightLights` draws on every
+  lamp — fade from 15 m to 8 m, so only the lamp face and its corona carry the
+  light at parking distance. Far behaviour is unchanged.
+- The FBI Car, FBI Rancher and Vice Cheetah run the stock four-corona siren seated
+  per model inside the cabin, so timing, colours and the road glow are the
+  cruiser's own. The police bar's coronas narrow to its roof blocks.
+- Tail lamps stay red while reversing; the white wash over the coronas is gone,
+  and the white belongs to the reversing lamps on pack models that carry them.
+- The stock police model is back, from `mods/stockpolice/overlay.img`.
+
+### Vehicle spawner
+
+- `SPAWN VEHICLE` on the DEBUG page lists every car model in the install, sorted
+  by IDE name, and queues the pick; `CGame::Process` streams and spawns it 4.5 m
+  ahead of the player, unlocked. The panel never streams from the frame render.
+
+### Input
+
+- The mod's own hotkeys are rebindable on a new **KEYS** panel page. The eight
+  direct key checks — fire, walk mode, call driver, spin kick, reload, chase spot,
+  chase capture and the panel key — now read `aVCModKeys` in
+  `src/extras/vcmodkeys.cpp` instead of compiled-in literals. Clicking a row arms a
+  capture; the next key press becomes the binding (Esc cancels) and writes
+  `KeyPanel` / `KeyWalk` / … into `[VC Mods]` at once. **RESET KEYS** restores the
+  shipped letters. While a capture is armed, every mod hotkey handler stands down,
+  so the key used to bind does not also fire, reload or toggle. Duplicate bindings
+  are allowed; the chase tier digits and its Enter/Backspace keys stay fixed, and
+  the game's own controls remain on the pause menu's Controller Setup page.
+- The driving free camera's vertical axis is inverted: pushing up now lowers the
+  camera and looks down over the car instead of looking up. Yaw keeps the stock
+  direction, and the stock invert settings still flip either axis on top.
+
+### Firetruck
+
+- The water cannon fires from the model's muzzle, mirrored with the aim, and the
+  barrel node turns with it — a parked truck schedules its own frame update, or
+  the turn waits for the vehicle to move.
+
+### Tests
+
+- New `test_vc_lighttex.py`, `test_vc_carlights.py`, `test_vc_spawn.py` and
+  `test_vc_keys.py`; `test_vc_fbilights.py` and `test_vc_rearlights.py` rewritten
+  for the pack mechanic and the red tail. Twenty-five drivers pass.
+
+## Dropped — 2026-11-09
+
+- Per-lamp light cast. The pack splits the head and tail pair into one ground pool
+  per lamp; built and installed, then rejected in play: the pools read as choppy
+  against the terrain and the split is back out, so cars cast the stock single
+  quad at each end again. Nothing of it remains in the tree. The pack's tail pool
+  going grey in reverse was never taken either.
+
+## Uncommitted — 2026-11-09
+
+- `1ST PERSON` on the DRIVING page: a first-person driving view. Key `C`, rebindable
+  as `1ST PERSON KEY` on the KEYS page, and the row itself; the stock change-camera
+  key cycles away from it as it always has. No on-foot first person.
+- The camera is above the **bonnet**, not at the driver's seat. Vice City car bodies
+  are single-sided shells with no cabin: from the seat, play reported the car
+  entirely absent from the frame, which is what the shell does from inside. The mod
+  reads the car's own `bonnet_dummy` (already in every car's node table) and puts the
+  eye 0.22 m above it and 0.20 m behind it, so the nose frames the bottom of the view.
+  Bikes and boats keep the stock seat camera.
+- The view is reached through the vehicle camera ring: `CAM_ZOOM_1STPRS` is already a
+  stop on it and the stock code turns that stop into `MODE_1STPERSON`. The key and the
+  row move the ring and nothing else, so no camera mode is written from the mod; an
+  earlier pass that forced `ReqMode` from `CamControl` produced no view at all. The
+  stock key reaches the same stop on its second press from the default zoom.
+  Compiled and harness-tested; not played.
+- `reVC/utils/test_vc_firstperson.py` covers the ring stop, the bonnet placement,
+  the absence of any camera-mode write from the mod, the key read and the row. `test_vc_passenger.py`
+  (row count 49) and `test_vc_keys.py` (nine slots) follow. Twenty-six drivers pass.
+
 ## Not verified
 
 - ini seeding end to end: set `NpcAnims = true` in the ini, launch, and check the
@@ -395,6 +477,12 @@ what it actually got.
   during development, and the tab strip and pin cell at any size.
 - The driving orbit camera, the pack car models and wheels, the steering wheel node,
   explosion cover, the FBI bars and the firetruck cannon: built, installed, unplayed.
+  The camera's inverted vertical axis from 2026-11-09 is unplayed too.
+- The cockpit view: whether the front-seat camera clears the dash and roof of
+  every replaced model, whether the driver's own head intrudes at the frame edge,
+  how bikes and boats read in it, and whether the camera-key exit feels right.
+- The KEYS page in play: arming a row, binding, Esc cancel, RESET KEYS, and whether
+  a rebind survives a restart. Harness only.
 - `NO STRAFE` and the kerbside look in play; both have harnesses only.
 - Passenger riding end to end, including whether a bike pillion seat behaves with
   an NPC rider.

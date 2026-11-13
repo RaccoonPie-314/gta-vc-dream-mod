@@ -18,8 +18,8 @@ does not work. macOS-specific; the Windows equivalent is the portable folder wit
 | `~/Games/VC/build-launch.log` | Every launcher run: commit, build output, install, binary sha256. |
 | `~/Games/VC/reVC.log` | Game stdout/stderr, appended by the launcher. |
 
-`~/Games/VC-ai/` is the separate AI-drive test install. It has its own launcher and
-its own app copy; nothing here touches it.
+`~/Games/VC-ai/` is a separate test install with its own app copy; nothing here
+touches it.
 
 ## What a click does
 

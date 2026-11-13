@@ -106,9 +106,11 @@ all live there, so `PlayerPed.cpp` keeps only the behaviour hooks.
   `OFF` → `NORMAL` → `SLOW-MO` → `OFF` on each click, and **VANILLA FIXES** steps
   `OFF` → `ON`. One row per feature is the rule now — a switch and its mode used to
   be two rows, which is two clicks and two states to reconcile.
-- Five tabs — **COMBAT**, **PLAYER**, **DRIVING**, **WORLD**, **DEBUG** — split the
-  rows so the panel stays one screen high; DEBUG holds the two read-only path
-  probes. Clicking a tab switches page and closes any open list, and the last tab is
+- Six tabs — **COMBAT**, **PLAYER**, **DRIVING**, **WORLD**, **KEYS**, **DEBUG** —
+  split the rows so the panel stays one screen high; DEBUG holds the two read-only
+  path probes. KEYS holds the mod's own hotkeys: click a row and the next key press
+  becomes the binding (Esc cancels), and **RESET KEYS** restores the shipped letters.
+  Clicking a tab switches page and closes any open list, and the last tab is
   kept for the session. The master switch sits at the right end of the title bar as
   `[ALL ON]` / `[MIXED]` / `[ALL OFF]`, and still leaves WALK MODE and NO STRAFE
   alone.
@@ -152,7 +154,6 @@ NeverWanted = 0
 LockOnLatch = 0
 Adrenaline = 0
 PedModel = -1
-PassengerMode = 0
 RideZone = -1
 RideStyle = 0
 NoStrafe = 0
@@ -187,6 +188,14 @@ written too, so the file remembers what you left the row at. An absent key means
 "not pinned", which matters for the switches that default on: deleting their key
 turns them on again at the next launch, it does not turn them off.
 
+Hotkey bindings use the same section but their own rule: a binding is a setting,
+not a pinned row, so it is written the moment it changes on the KEYS page. The
+keys are `KeyPanel`, `KeyWalk`, `KeyFire`, `KeyDriver`, `KeyKick`, `KeyReload`,
+`KeySpot`, `KeyCapture`, `KeyFirstPerson`, `KeyCrew` and `KeyPassenger`; the value
+is the key code (printable keys are ASCII,
+the rest are the engine's `RsKeyCodes`). An absent or nonsense value falls back to
+the shipped default, so deleting one resets that hotkey.
+
 ## Toggles
 
 | Toggle | Default | Effect |
@@ -198,7 +207,7 @@ turns them on again at the next launch, it does not turn them off.
 | `bVCModAimAllWeapons` | off | Bypasses the `WEAPONFLAG_CANAIM` requirement, so `weapon.dat` needs no editing |
 | `bVCModPlayerDoomAim` | off | Tommy aims like a ped: `m_wepAccuracy` drops to the ped default 60 and the shot goes through the ped deviation branch instead of the player's ramped one |
 | `bVCModNoScopedAim` | off | Sniper / M4 / RPG aim with lock-on instead of taking the 1st-person scope camera |
-| `bVCModWalkMode` | off | Caps movement to walk speed (0.9) and the walk anim; `B` flips it in play |
+| `bVCModWalkMode` | off | Caps movement to walk speed (0.9) and the walk anim; the WALK MODE key (KEYS page, `B` by default) flips it in play |
 | `bVCModLockOnVehicles` | off | Lock-on also considers driven vehicles — cars, bikes, boats, helis |
 | `bVCModLockOnLatch` | off | Aim button latches: one two-finger press locks on and stays, the next releases |
 | `bVCModNeverWanted` | off | Wanted level is forced back to 0 every frame |
@@ -207,13 +216,14 @@ turns them on again at the next launch, it does not turn them off.
 | `bVCModCopPistol` | off | Two-handed colt hold using the cop's own fire, aim and stance clips. Left out of ALL ON/OFF so it cannot come on during other testing |
 | `bVCModWeaponRecovery` | on | After a burst while still aiming, the fire clip plays out its authored tail — the same lowering an NPC runs — and the lowered pose becomes the hold until the next shot. Every firearm clip has one; the two-hand colt keeps its own path |
 | `bVCModAimWalk` | on | A locked-on target no longer roots the player. Any gun walks — the parked aim pose fades out while he moves and comes back when he stops — while the shot and its recovery tail still plant him, so the lowering lands before the walk starts |
-| `bVCModPassengerMode` | off | The enter-vehicle key takes the passenger seat while an NPC drives |
-| `nVCModRideZone` | -1 | Where that NPC goes: `-1` cruises with traffic, otherwise a map zone from the destination list |
+| `nVCModRideZone` | -1 | Where the NPC driver goes: `-1` cruises with traffic, otherwise a map zone from the destination list |
 | `nVCModRideStyle` | 0 | How he drives there: `0` safe — stops for traffic and for red lights; `1` fast and aggressive — ploughs through both |
 | `SKIP RIDE` row | — | One-shot travel to the **RIDE TO** destination, on foot or from a passenger seat. Never bound to the enter key |
-| `CALL DRIVER` row | — | Calls the chauffeur, or dismisses one already coming. `H` does the same |
+| `CALL DRIVER` row | — | Calls the chauffeur, or dismisses one already coming. The CALL DRIVER key (`H`) does the same |
+| `CALL CREW` row | — | Calls the three-man crew, or dismisses one already out. The CALL CREW key (`V`) does the same |
+| `CREW CAR` row (key `CrewCar`) | Admiral | The four-door car the crew arrives in; the list is every four-door car this install loads |
 | `bVCModNoStrafe` | off | The direction keys choose the body's heading — `A`/`D` turn instead of side-stepping. Aiming or firing hands the heading back to the camera |
-| `bVCModManualReload` | on | `R` starts the reload on foot instead of waiting for the clip to empty. `R` is the car radio key, so it does nothing while driving |
+| `bVCModManualReload` | on | The RELOAD key (`R` by default) starts the reload on foot instead of waiting for the clip to empty. `R` is also the car radio key, so the tick does nothing while driving |
 | `bVCModVanillaFixes` (row `VANILLA FIXES`) | on | One row for the four fixes below. It reads `[ON]` only when all four are on, and switching it on restores the whole set |
 | `bVCModHudCleanup` | on | Money shows as `$42` instead of `$00000042`, and empty wanted stars are not drawn. Ini and Ctrl-M only — the row is the master above |
 | `bVCModKeepWheelAngle` | on | The front wheels keep their last steering angle when the car is abandoned instead of snapping straight. Ini and Ctrl-M only |
@@ -229,16 +239,34 @@ turns them on again at the next launch, it does not turn them off.
 | `bVCModSteeringWheel` | on | The pack car models' steering wheel node turns with the front wheels |
 | `bVCModTrafficAI` | on | The traffic layer: right-lane driving, horn on a blocked road, and the path fixes from `mods/` |
 
-Three keys are checked directly in `CPlayerPed::ProcessControl`:
+## Mod hotkeys
+
+Eleven keys are checked by the mod itself rather than by the controller binding
+table, because `gta_vc.set` rewrites that table on load. All eleven are rebindable
+on the panel's **KEYS** page; the shipped defaults are:
 
 - `G` = fire. A trackpad cannot hold the two-finger aim button and press the left
-  mouse button at the same time. This is a direct key check rather than a rebinding
-  because `gta_vc.set` reloads the binding table at startup and this build has no
-  rebinding screen; Left Ctrl still fires too, and `Insert` (numpad 0) is the other
-  default — absent on a laptop.
+  mouse button at the same time. Left Ctrl still fires too, and `Insert` (numpad 0)
+  is the other stock default — absent on a laptop.
 - `B` = toggle walk mode.
 - `H` = call the chauffeur, or dismiss him. Checked outside the on-foot block, so
   it also works from the back seat, where the player state is `PED_DRIVING`.
+- `K` = the spinning roundhouse.
+- `R` = manual reload, on foot only.
+- `J` / `U` = the chase prototype's spot teleport and coordinate log.
+- `C` = the cockpit view on and off.
+- `V` = call the crew, or dismiss it. Like `H` it is checked outside the on-foot
+  block, so it also works from a seat.
+- `P` = board the nearest car as a passenger, driver or not.
+- `\` = open the panel.
+
+Clicking a KEYS row arms it and the next key press becomes the binding in the same
+moment; `Esc` cancels, and **RESET KEYS** restores all eleven. A binding is saved to
+`[VC Mods]` in `reVC.ini` immediately. While a capture is armed the mod's own
+hotkey handlers stand down, so the key used to bind does not also fire, reload or
+toggle. Binding a key that another action already uses is allowed — both actions
+fire. The chase prototype's tier digits 0–4 and its Enter/Backspace keys stay
+fixed, and the game's own controls stay on the pause menu's Controller Setup page.
 
 Walk mode is capped in **both** on-foot control paths: `PlayerControlZelda` (the
 camera-relative one) and `PlayerControl1stPersonRunAround`, which is what actually
@@ -303,19 +331,20 @@ touched.
 
 ## Passenger riding
 
-With **PASSENGER MODE** on, the enter-vehicle key puts Tommy in a passenger seat
-and an NPC in the driver seat. Bikes use the pillion seat; planes, helis and
-trains are refused with a message, because there is no passenger seat to take.
-An unoccupied vehicle is left exactly as it is — passenger mode never puts a
-driver in it — so the press goes back to the game and Tommy gets in as the driver.
-Only a vehicle someone is already driving can be ridden along in.
+The passenger key (`P`) puts Tommy in the passenger seat of the nearest car within
+10 m — driven or empty; nobody has to be at the wheel. Planes, helis and trains are
+passed over, and so is a wrecked car, with a message when that leaves nothing to
+board. A full car is refused the same way. The enter-vehicle key is untouched: on
+an ordinary car it is the game's own driver entry and carjack, and only the limo
+you called takes it as a passenger press.
 
-The car is held with `MISSION_STOP_FOREVER` until Tommy is actually seated, the
-same trick the shortcut taxi uses, so it cannot drive off without him. That hold is
-never left behind: walking more than 30 m from the car, fifteen seconds without
-getting in, getting into another car, or pressing the enter key beside a different
-car all hand the held car back to traffic at once, and the entry objective is
-cleared so Tommy does not chase a car that drove off. A car the
+A driven car is held with `MISSION_STOP_FOREVER` until Tommy is actually seated,
+the same trick the shortcut taxi uses, so it cannot drive off without him; an empty
+one is left to the game's own update, since nobody is there to drive off. That hold
+is never left behind: walking more than 30 m from the car, fifteen seconds without
+getting in, getting into another car, or pressing the passenger key beside a
+different car all hand the held car back to traffic at once, and the entry
+objective is cleared so Tommy does not chase a car that drove off. A car the
 traffic system is still simulating on rails (`STATUS_SIMPLE`) is promoted to real
 physics before its route is touched: entering as the driver does that when the
 player sits down, but entering as a passenger never does, and the on-rails update
@@ -343,9 +372,9 @@ cannot reclaim it while it waits. It stops within 15 m; if Tommy walks more than
 20 m from the pick-up point it is re-targeted every 3 seconds, and walking more
 than 120 m away while it waits calls it off, the shortcut taxi's own rule.
 
-Boarding is the ordinary enter key. Your own limo is always boardable even with
-**PASSENGER MODE** off, because that flag governs street cars, not the one you
-called. Once Tommy is in the back seat the limo drives to **RIDE TO** with the
+Boarding is the ordinary enter key: the limo you called owns its own enter press,
+which the game's driver entry never sees. Once Tommy is in the back seat the limo
+drives to **RIDE TO** with the
 selected **RIDE STYLE**. Arriving parks him there until Tommy gets out; getting
 out hands the limo back to traffic rather than deleting it, with the counters and
 the blip moved the way `ClearShortCut` moves them. Calling again dismisses him —
@@ -369,8 +398,46 @@ destination: nearest car path node to the zone centre, `LoadScene`/`LoadSceneCol
 ground Z plus the entity's base offset, `FindPlayerEntity()->Teleport`, camera jump
 cut. It works on foot or from a passenger seat, and a car Tommy is riding in parks
 on arrival instead of driving on. It needs a destination, so with **RIDE TO** left
-on traffic it says so and does nothing. The enter key never travels: pressing it
-next to a car with **PASSENGER MODE** on always boards and drives.
+on traffic it says so and does nothing. The passenger key never travels: pressing
+it next to a car always boards and rides.
+
+## Vercetti crew
+
+**CALL CREW** (or `V`) sends three Vercetti gang members — `PGA`/`PGB`, an M4 each —
+in a four-door car. The car spawns on a road node behind Tommy the way the
+chauffeur's limo does, drives to him with the same **RIDE STYLE**, and stops within
+15 m. The men are the game's own gang peds, made by `CPopulation::AddPed` with
+`PEDTYPE_GANG7`, so they carry the gang's voice and reactions; each is also given
+the M4 and `MISSION_CHAR`. They are linked to Tommy only once seated with him, so
+the stock follower rule cannot order them out of the approaching car.
+
+The car comes with a driver, and each man is a stock follower (`CPed::SetLeader` +
+`UpdateFromLeader`), so on foot they walk with Tommy, wait at their 30 m leash,
+take free passenger seats, and attack whoever he attacks. There is no new AI and no
+car gunner.
+
+| Press | Car | Result |
+|---|---|---|
+| enter key (F) | crew car, driver seated | the driver gets out and Tommy takes the wheel; the ex-driver takes a rear seat |
+| enter key (F) | crew car, empty | stock driver entry |
+| `P` | any car | passenger seat, driver or not |
+| enter key (F) | any other car | stock, carjack included |
+
+`F` on the crew car never carjacks: the press is intercepted, the driver is ordered
+out, and Tommy's driver objective is issued only once the seat is clear. If the seat
+never clears in 6 s, or Tommy walks more than 10 m away, the driver takes the wheel
+back and the car stays at the pick-up. With Tommy driving nobody steers; with a crew
+man driving the car follows **RIDE TO**, or cruises when it is left on traffic.
+
+Getting out ends the ride and leaves an escort: the men get out with him. **CALL
+CREW** again dismisses them. They are not despawned — one living man becomes the
+leader of the rest and the group is left as an ordinary street gang (mission
+ownership dropped, `RANDOM_CHAR`), which the world may reclaim only once it is far
+away and off screen. **CREW CAR** picks the car from every four-door this install
+loads; the Admiral is the default.
+
+If Tommy dies, the same handover runs at the moment of death, so the crew never
+runs the stock dead-leader flee; a kill already in progress is kept.
 
 ## Why the group swap crashed, and the actual fix
 
