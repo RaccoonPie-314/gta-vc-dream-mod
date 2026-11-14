@@ -350,8 +350,11 @@ physics before its route is touched: entering as the driver does that when the
 player sits down, but entering as a passenger never does, and the on-rails update
 writes the car's position directly — it would drag the car sideways onto the path
 lane the moment the ride re-routes. **RIDE TO**
-then chooses what the driver does: cruise with traffic indefinitely, or route to a
-named district from the game's zone table and park on arrival. Arriving keeps the
+then chooses what the driver does, and it starts on `auto`: the pause-map marker
+while one is placed, traffic otherwise. A named district from the game's zone
+table routes there; the marker can also be picked by hand. Either way the ride
+parks on arrival, and a destination changed mid-ride — another zone, or a marker
+placed, cleared or moved more than 25 m — re-routes the car. Arriving keeps the
 ride open with Tommy still in the car — the driver waits where he stopped, and
 getting out is what ends the ride. The street car is then handed back to traffic
 with the cruise speed, driving style and `m_fMaxTrafficSpeed` it had before the
@@ -375,9 +378,12 @@ than 120 m away while it waits calls it off, the shortcut taxi's own rule.
 Boarding is the ordinary enter key: the limo you called owns its own enter press,
 which the game's driver entry never sees. Once Tommy is in the back seat the limo
 drives to **RIDE TO** with the
-selected **RIDE STYLE**. Arriving parks him there until Tommy gets out; getting
-out hands the limo back to traffic rather than deleting it, with the counters and
-the blip moved the way `ClearShortCut` moves them. Calling again dismisses him —
+selected **RIDE STYLE** — under the default `auto` that is the map marker, or
+ordinary traffic when none is placed. Arriving parks him there until Tommy gets
+out; getting out hands the limo back to traffic rather than deleting it, with the
+counters and the blip moved the way `ClearShortCut` moves them. A marker off the
+road graph, which has no route, ends in the engine's own straight-line drive at
+it. Calling again dismisses him —
 from the kerb he drives off at once, and from the back seat he waits for Tommy to
 get out before going back to ordinary traffic.
 
@@ -397,8 +403,9 @@ rather than merely a slower cruise.
 destination: nearest car path node to the zone centre, `LoadScene`/`LoadSceneCollision`,
 ground Z plus the entity's base offset, `FindPlayerEntity()->Teleport`, camera jump
 cut. It works on foot or from a passenger seat, and a car Tommy is riding in parks
-on arrival instead of driving on. It needs a destination, so with **RIDE TO** left
-on traffic it says so and does nothing. The passenger key never travels: pressing
+on arrival instead of driving on. It needs a destination, so on `auto` with no map
+marker placed, or with **RIDE TO** set to traffic, it says so and does nothing.
+The passenger key never travels: pressing
 it next to a car always boards and rides.
 
 ## Vercetti crew
@@ -427,7 +434,8 @@ car gunner.
 out, and Tommy's driver objective is issued only once the seat is clear. If the seat
 never clears in 6 s, or Tommy walks more than 10 m away, the driver takes the wheel
 back and the car stays at the pick-up. With Tommy driving nobody steers; with a crew
-man driving the car follows **RIDE TO**, or cruises when it is left on traffic.
+man driving the car follows **RIDE TO**, which on the default `auto` is the map
+marker while one is placed and ordinary traffic otherwise.
 
 Getting out ends the ride and leaves an escort: the men get out with him. **CALL
 CREW** again dismisses them. They are not despawned — one living man becomes the

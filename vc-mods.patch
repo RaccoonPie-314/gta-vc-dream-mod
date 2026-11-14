@@ -408,7 +408,7 @@ index 4e7a1c3..e348273 100644
  	case COMMAND_GET_FADING_STATUS:
  		UpdateCompareFlag(TheCamera.GetFading());
 diff --git a/src/core/Cam.cpp b/src/core/Cam.cpp
-index 70e357a..bae196c 100644
+index 70e357a..a5b0210 100644
 --- a/src/core/Cam.cpp
 +++ b/src/core/Cam.cpp
 @@ -29,6 +29,10 @@
@@ -431,18 +431,19 @@ index 70e357a..bae196c 100644
  	m_iFrameNumWereAt++;
  	if(m_iFrameNumWereAt > m_iDoCollisionCheckEveryNumOfFrames)
  		m_iFrameNumWereAt = 1;
-@@ -1526,7 +1532,9 @@ CCam::Process_FollowPedWithMouse(const CVector &CameraTarget, float TargetOrient
+@@ -1526,7 +1532,10 @@ CCam::Process_FollowPedWithMouse(const CVector &CameraTarget, float TargetOrient
  
  	GetVectorsReadyForRW();
  
 -	if(((CPed*)CamTargetEntity)->CanStrafeOrMouseControl() && CDraw::FadeValue < 250 &&
 +	// no strafe: the body keeps the heading the movement keys gave it, so the
-+	// camera must not aim the ped at the lens this frame
-+	if(((CPed*)CamTargetEntity)->CanStrafeOrMouseControl() && !VCModPlayerTurnsWithInput() && CDraw::FadeValue < 250 &&
++	// camera must not aim the ped at the lens this frame; the firing stance owns
++	// the heading while the trigger is held at a lock
++	if(((CPed*)CamTargetEntity)->CanStrafeOrMouseControl() && !VCModPlayerTurnsWithInput() && !VCModFiringStance() && CDraw::FadeValue < 250 &&
  	   (TheCamera.GetFadingDirection() != FADE_OUT || CDraw::FadeValue <= 100) &&
  	   !CPad::GetPad(0)->IsPlayerControlsDisabledBy(PLAYERCONTROL_PLAYERINFO)){
  		float Heading = Front.Heading();
-@@ -1707,7 +1715,7 @@ CCam::WorkOutCamHeight(const CVector &TargetCoors, float TargetOrientation, floa
+@@ -1707,7 +1716,7 @@ CCam::WorkOutCamHeight(const CVector &TargetCoors, float TargetOrientation, floa
  	else
  		WellBufferMe(TargetAlpha, &Alpha, &AlphaSpeed, 0.15f, 0.07f, true);
  
@@ -451,7 +452,7 @@ index 70e357a..bae196c 100644
  	AlphaOffset -= AlphaDec;
  }
  
-@@ -1715,6 +1723,14 @@ CCam::WorkOutCamHeight(const CVector &TargetCoors, float TargetOrientation, floa
+@@ -1715,6 +1724,14 @@ CCam::WorkOutCamHeight(const CVector &TargetCoors, float TargetOrientation, floa
  bool
  CCam::RotCamIfInFrontCar(CVector &TargetCoors, float TargetOrientation)
  {
@@ -466,7 +467,7 @@ index 70e357a..bae196c 100644
  	float BetaMaxSpeed = 0.15f;
  	float BetaAcceleration = 0.007f;
  	bool MovingForward = false;
-@@ -1834,6 +1850,10 @@ CCam::Process_Cam_On_A_String(const CVector &CameraTarget, float TargetOrientati
+@@ -1834,6 +1851,10 @@ CCam::Process_Cam_On_A_String(const CVector &CameraTarget, float TargetOrientati
  		Source += dist*CrossProduct(Front, CVector(0.0f, 0.0f, 1.0f));
  	}
  
@@ -477,7 +478,7 @@ index 70e357a..bae196c 100644
  	m_fDistanceBeforeChanges = (Source - TargetCoors).Magnitude2D();
  
  	Cam_On_A_String_Unobscured(TargetCoors, BaseDist);
-@@ -2694,6 +2714,39 @@ CCam::Process_1stPerson(const CVector &CameraTarget, float TargetOrientation, fl
+@@ -2694,6 +2715,39 @@ CCam::Process_1stPerson(const CVector &CameraTarget, float TargetOrientation, fl
  		Right.Normalise();
  		Up = CrossProduct(Right, Front);
  		Up.Normalise();
@@ -517,7 +518,7 @@ index 70e357a..bae196c 100644
  	}
  
  	ResetStatics = false;
-@@ -3317,8 +3370,10 @@ CCam::Process_BehindBoat(const CVector &CameraTarget, float TargetOrientation, f
+@@ -3317,8 +3371,10 @@ CCam::Process_BehindBoat(const CVector &CameraTarget, float TargetOrientation, f
  	// inlined
  	WellBufferMe(TargetOrientation, &Beta, &BetaSpeed, BetaDiffMult * ((CVehicle*)CamTargetEntity)->m_vecMoveSpeed.Magnitude(), BetaSpeedDiffMult, true);
  
@@ -5969,10 +5970,10 @@ index 0000000..95305c7
 +}
 diff --git a/src/extras/vcmodcombat.cpp b/src/extras/vcmodcombat.cpp
 new file mode 100644
-index 0000000..9e147ef
+index 0000000..9c0f0e9
 --- /dev/null
 +++ b/src/extras/vcmodcombat.cpp
-@@ -0,0 +1,477 @@
+@@ -0,0 +1,493 @@
 +#include "common.h"
 +
 +#include <stdio.h>
@@ -6158,16 +6159,20 @@ index 0000000..9e147ef
 +	return assoc != nil && assoc->IsRunning();
 +}
 +
-+// AIM RAISE: a fresh lock enters the aim exactly the way a ped does — the body
-+// sweeps onto the target at CPed::TurnBody's stare rate while the aim pose
-+// blends at the stock rate, and the trigger is dead until both land. The
-+// duration is the ped turn's own, so the motion matches a ped 1:1.
++// AIM RAISE: a fresh lock plays the climb instead of jumping the clip — the
++// clip's own raise frames from a cold start, or the recovery tail played back
++// from the lowered hold — while the body sweeps with CPed::TurnBody and the
++// pose blends at the stock rate. The trigger is dead until both land.
 +static bool bVCModAimRaising;
++// set by CPed::PointGunAt once the clip is parked on the hold frame, so a clip
++// parked in the lowered recovery hold cannot report the raise as finished
++static bool bVCModAimHoldLanded;
 +
 +void
 +VCModAimRaiseStart(void)
 +{
 +	bVCModAimRaising = true;
++	bVCModAimHoldLanded = false;
 +}
 +
 +void
@@ -6182,14 +6187,22 @@ index 0000000..9e147ef
 +	return bVCModAimRaising;
 +}
 +
-+// true once the stock aim-pose blend has finished, i.e. the gun is visually up;
-+// a missing clip (melee, a group without the aim anim) must not hold the trigger
++void
++VCModAimRaiseHoldLanded(void)
++{
++	if (bVCModAimRaising)
++		bVCModAimHoldLanded = true;
++}
++
++// true once the clip is parked on the hold and the stock aim-pose blend has
++// finished, i.e. the gun is visually up; a missing clip (melee, a group without
++// the aim anim) must not hold the trigger
 +bool
 +VCModAimPoseRaised(CPed *ped)
 +{
 +	CWeaponInfo *info = CWeaponInfo::GetWeaponInfo(ped->GetWeapon()->m_eWeaponType);
 +	CAnimBlendAssociation *assoc = RpAnimBlendClumpGetAssociation(ped->GetClump(), VCModCopAimAnim(ped, info));
-+	return assoc == nil || assoc->blendAmount >= 1.0f;
++	return assoc == nil || (bVCModAimHoldLanded && assoc->blendAmount >= 1.0f);
 +}
 +
 +// The IK aims by twisting the spine, and colt45_cop's legs and pelvis hang off
@@ -6230,7 +6243,8 @@ index 0000000..9e147ef
 +			// the lowering tail is still playing; park the hold only once it lands
 +			if (bVCModCopRecovering) {
 +				float clipEnd = weaponAssoc ? weaponAssoc->hierarchy->totalLength : 0.0f;
-+				if (weaponAssoc && weaponAssoc->IsRunning() && weaponAssoc->currentTime < clipEnd - VCModCopRecoverCut)
++				if (weaponAssoc && weaponAssoc->IsRunning() && weaponAssoc->currentTime < clipEnd - VCModCopRecoverCut
++					&& !VCModAimRaising())
 +					return true;
 +				bVCModCopRecovering = false;
 +			}
@@ -6263,7 +6277,7 @@ index 0000000..9e147ef
 +			// Let it run out, then keep that end pose: the clip would otherwise
 +			// fade itself into the idle arms, and the aim pose would come back.
 +			if (bVCModWeaponRecovering && weaponAssoc) {
-+				if (weaponAssoc->IsRunning())
++				if (weaponAssoc->IsRunning() && !VCModAimRaising())
 +					return true;
 +				if (weaponAssoc->flags & ASSOC_DELETEFADEDOUT) {
 +					weaponAssoc->flags &= ~ASSOC_DELETEFADEDOUT;
@@ -6272,7 +6286,9 @@ index 0000000..9e147ef
 +					// the walk faded the lowered hold out; standing brings it back
 +					weaponAssoc->blendDelta = 8.0f;
 +				}
-+				return true;
++				// a fresh raise takes the climb over; otherwise the hold stays
++				if (!VCModAimRaising())
++					return true;
 +			}
 +			bVCModWeaponRecovering = false;
 +		}
@@ -6320,6 +6336,7 @@ index 0000000..9e147ef
 +		bVCModCopRecovering = false;
 +		bVCModWeaponRecovering = false;
 +		bVCModAimRaising = false;
++		bVCModAimHoldLanded = false;
 +	}
 +}
 +
@@ -6452,10 +6469,10 @@ index 0000000..9e147ef
 +}
 diff --git a/src/extras/vcmodcombat.h b/src/extras/vcmodcombat.h
 new file mode 100644
-index 0000000..77d2f6a
+index 0000000..b8ba056
 --- /dev/null
 +++ b/src/extras/vcmodcombat.h
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,104 @@
 +#ifndef VCMODCOMBAT_H
 +#define VCMODCOMBAT_H
 +
@@ -6519,12 +6536,15 @@ index 0000000..77d2f6a
 +// the arm cannot aim with; the pistols already walk and the two-hand colt has its
 +// own hold rules
 +bool VCModAimWalkWeapon(CPed *ped, CWeaponInfo *info);
-+// AIM RAISE: a fresh lock sweeps the body onto the target with the ped's own
-+// stare turn (CPed::TurnBody); the trigger is dead until the sweep and the aim
-+// pose land, so the player enters the aim the way a ped does
++// AIM RAISE: a fresh lock plays the climb — the clip's own raise frames from a
++// cold start, or the recovery tail played back from the lowered hold — while
++// the body sweeps with CPed::TurnBody; the trigger is dead until both land
 +void VCModAimRaiseStart(void);
 +void VCModAimRaiseStop(void);
 +bool VCModAimRaising(void);
++// CPed::PointGunAt parks the aim clip on the hold frame; the raise only counts
++// as landed from here
++void VCModAimRaiseHoldLanded(void);
 +bool VCModAimPoseRaised(CPed *ped);
 +
 +// true when the aim/recovery state owns the frame and CPed::PointGunAt has to
@@ -6594,10 +6614,10 @@ index 0000000..37672b5
 +#endif
 diff --git a/src/extras/vcmodcrew.cpp b/src/extras/vcmodcrew.cpp
 new file mode 100644
-index 0000000..9a9ae8d
+index 0000000..effa5d0
 --- /dev/null
 +++ b/src/extras/vcmodcrew.cpp
-@@ -0,0 +1,1012 @@
+@@ -0,0 +1,1016 @@
 +#include "common.h"
 +
 +#include <stdio.h>
@@ -7215,7 +7235,8 @@ index 0000000..9a9ae8d
 +{
 +	int32 zoneIndex;
 +	CVector dest;
-+	if (VCModRideZoneAt(nVCModRideZone, &zoneIndex, nil, &dest) && zoneIndex >= 0) {
++	int32 entry = VCModRideZoneEntry(nVCModRideZone);
++	if (VCModRideZoneAt(entry, &zoneIndex, nil, &dest) && zoneIndex >= 0) {
 +		bool rails = !CCarCtrl::JoinCarWithRoadSystemGotoCoors(car, dest, false);
 +		car->AutoPilot.m_nCarMission = rails ? MISSION_GOTOCOORDS : MISSION_GOTO_COORDS_STRAIGHT_ACCURATE;
 +		vecVCModCrewDestination = dest;
@@ -7239,7 +7260,7 @@ index 0000000..9a9ae8d
 +		VCModCrewApplyStyle(car, false, true);
 +	}
 +	car->AutoPilot.m_nTempAction = TEMPACT_NONE;
-+	nVCModCrewAppliedZone = nVCModRideZone;
++	nVCModCrewAppliedZone = entry;
 +}
 +
 +// A ped taking the driver seat ejects every passenger without this flag
@@ -7283,14 +7304,17 @@ index 0000000..9a9ae8d
 +	// An empty driver seat keeps the car stopped: the mission is issued once a man
 +	// is actually at the wheel, not while he is still walking to the door.
 +	if (car->pDriver != nil && car->pDriver != player) {
-+		if (nVCModCrewAppliedZone != nVCModRideZone &&
++		// RIDE TO is read live, and in auto the marker is part of it: placing one,
++		// clearing it, or dragging it to a new place all re-route the car
++		int32 entry = VCModRideZoneEntry(nVCModRideZone);
++		if ((nVCModCrewAppliedZone != entry || VCModRideZoneMoved(vecVCModCrewDestination)) &&
 +				CTimer::GetTimeInMilliseconds() >= nVCModCrewDriveRetryAt)
 +			VCModCrewDrive(car);
 +		// The switch changes how the car drives, never where: no re-route, and
 +		// back to normal stays on physics, since rails would drag the car onto its
 +		// lane line in one frame.
 +		if (bVCModCrewAppliedAggressive != bVCModCrewAggressive &&
-+				nVCModCrewAppliedZone == nVCModRideZone &&
++				nVCModCrewAppliedZone == entry &&
 +				car->AutoPilot.m_nCarMission != MISSION_STOP_FOREVER)
 +			VCModCrewApplyStyle(car, bVCModCrewHasDestination, false);
 +		if (bVCModCrewHasDestination &&
@@ -9446,10 +9470,10 @@ index 0000000..bdfd222
 +#endif
 diff --git a/src/extras/vcmodpanel.cpp b/src/extras/vcmodpanel.cpp
 new file mode 100644
-index 0000000..eb85344
+index 0000000..0e4caba
 --- /dev/null
 +++ b/src/extras/vcmodpanel.cpp
-@@ -0,0 +1,770 @@
+@@ -0,0 +1,774 @@
 +#include "common.h"
 +
 +#include <stdio.h>
@@ -10028,13 +10052,12 @@ index 0000000..eb85344
 +			value = VCModCurrentPedLabel();
 +			break;
 +
-+		case VCMOD_ROW_RIDEZONE: {
-+			const char *name;
++		case VCMOD_ROW_RIDEZONE:
 +			style = VCFONT_SET;
-+			value = VCModRideZoneAt(nVCModRideZone < 0 ? 0 : nVCModRideZone, nil, &name, nil) ?
-+				name : "traffic (cruise)";
++			// auto names the marker or traffic it resolved to, so the row always
++			// says where the driver will go
++			value = VCModRideZoneRowText();
 +			break;
-+		}
 +
 +		case VCMOD_ROW_RIDESTYLE:
 +			style = VCFONT_SET;
@@ -10050,7 +10073,12 @@ index 0000000..eb85344
 +			int32 zoneIndex;
 +			bool hasDestination = VCModRideZoneAt(nVCModRideZone, &zoneIndex, nil, nil) && zoneIndex >= 0;
 +			style = hasDestination ? VCFONT_SET : VCFONT_WARN;
-+			value = hasDestination ? "[JUMP]  to RIDE TO" : "[--]  pick RIDE TO";
++			if (hasDestination)
++				value = "[JUMP]  to RIDE TO";
++			else if (nVCModRideZone == VCMOD_RIDE_ZONE_AUTO)
++				value = "[--]  place a map marker";
++			else
++				value = "[--]  pick RIDE TO";
 +			break;
 +		}
 +
@@ -10222,10 +10250,10 @@ index 0000000..eb85344
 +#endif
 diff --git a/src/extras/vcmodpanel.h b/src/extras/vcmodpanel.h
 new file mode 100644
-index 0000000..5d6fc46
+index 0000000..07f8dca
 --- /dev/null
 +++ b/src/extras/vcmodpanel.h
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,44 @@
 +#ifndef VCMODPANEL_H
 +#define VCMODPANEL_H
 +
@@ -10239,10 +10267,26 @@ index 0000000..5d6fc46
 +// module owns its own; this header only declares the ones still parked here.
 +extern int32 nVCModPedCategory;
 +
-+// ride destinations: entry 0 lets traffic drive, the rest are the map zones the
-+// game loaded (zone 0 is the whole-map box, so it is never offered)
++// RIDE TO's automatic setting: the pause-map marker while one is placed, traffic
++// otherwise. It is the default, and -1 is also what an ini written by an older
++// build stored for traffic, so such a value now follows the marker.
++#define VCMOD_RIDE_ZONE_AUTO	(-1)
++
++// ride destinations: the list starts on auto, then entry 0 lets traffic drive, the
++// rest are the map zones the game loaded (zone 0 is the whole-map box, so it is
++// never offered) and the pause-map marker closes the list
 +int32 VCModRideZoneCount(void);
++// the stored setting behind a list position; auto is the only new one, so every
++// other position maps onto the entry number a saved RideZone already used
++int32 VCModRideZoneValue(int32 position);
++// what a stored setting means right now, as an entry: auto becomes cruise or the
++// marker's own entry
++int32 VCModRideZoneEntry(int32 stored);
 +bool VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos);
++// auto follows a marker that is moved while the car is already driving to it
++bool VCModRideZoneMoved(const CVector &applied);
++// the panel row's value: auto names the point it resolved to
++const char *VCModRideZoneRowText(void);
 +
 +// every pinned row's current value into the loaded ini; the caller writes the file
 +void VCModPersistPinned(void);
@@ -10256,10 +10300,10 @@ index 0000000..5d6fc46
 +#endif
 diff --git a/src/extras/vcmodpanelcatalog.cpp b/src/extras/vcmodpanelcatalog.cpp
 new file mode 100644
-index 0000000..88f4b10
+index 0000000..be46c12
 --- /dev/null
 +++ b/src/extras/vcmodpanelcatalog.cpp
-@@ -0,0 +1,446 @@
+@@ -0,0 +1,505 @@
 +#include "common.h"
 +
 +#include <stdio.h>
@@ -10326,6 +10370,10 @@ index 0000000..88f4b10
 +// has to be narrowed before it can be drawn
 +static char aVCModZoneLabel[32];
 +
++// how far the pause-map marker has to move before auto treats it as a new
++// destination, so a shaky placement does not re-route the car every frame
++#define VCMOD_RIDE_RETARGET_NEAR	25.0f
++
 +static const char *
 +VCModZoneLabel(CZone *zone)
 +{
@@ -10340,15 +10388,66 @@ index 0000000..88f4b10
 +int32
 +VCModRideZoneCount(void)
 +{
-+	// entry 0 is cruise with traffic, entries 1..N-1 are every map zone but the
-+	// whole-map box, and the pause-map marker is the last entry
-+	return (int32) CTheZones::GetNumberOfMapZones() + 1;
++	// the list opens on auto, entry 0 after it is cruise with traffic, the next
++	// ones are every map zone but the whole-map box, and the marker is last
++	return (int32) CTheZones::GetNumberOfMapZones() + 2;
++}
++
++int32
++VCModRideZoneValue(int32 position)
++{
++	// the list is one longer than the stored entries and only the first slot is
++	// new: position n stores n-1, so a RideZone saved by an older build still
++	// selects the same place and only traffic has to be read as auto
++	if (position <= 0)
++		return VCMOD_RIDE_ZONE_AUTO;
++	return position - 1;
++}
++
++int32
++VCModRideZoneEntry(int32 stored)
++{
++	// auto is read here, once, so the panel and both drivers agree on where a
++	// marker that was just placed puts the car
++	if (stored != VCMOD_RIDE_ZONE_AUTO)
++		return stored;
++	return CRadar::TargetMarkerId == -1 ? 0 : (int32) CTheZones::GetNumberOfMapZones();
++}
++
++bool
++VCModRideZoneMoved(const CVector &applied)
++{
++	// only auto is live: a zone picked by hand and the marker picked by hand are
++	// both fixed points, and re-routing them would be a surprise
++	if (nVCModRideZone != VCMOD_RIDE_ZONE_AUTO || CRadar::TargetMarkerId == -1)
++		return false;
++	return (CRadar::TargetMarkerPos - applied).Magnitude2D() > VCMOD_RIDE_RETARGET_NEAR;
++}
++
++const char *
++VCModRideZoneRowText(void)
++{
++	static char text[40];
++
++	if (nVCModRideZone == VCMOD_RIDE_ZONE_AUTO) {
++		// name what auto resolved to, so the row says where the driver will go
++		// without the list having to be opened
++		snprintf(text, sizeof(text), "auto: %s",
++			CRadar::TargetMarkerId == -1 ? "traffic" : "map marker");
++		return text;
++	}
++
++	const char *name = nil;
++	if (VCModRideZoneAt(nVCModRideZone, nil, &name, nil) && name != nil)
++		return name;
++	return "traffic (cruise)";
 +}
 +
 +bool
 +VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos)
 +{
-+	if (entry < 0 || entry >= VCModRideZoneCount())
++	entry = VCModRideZoneEntry(entry);
++	if (entry < 0 || entry > (int32) CTheZones::GetNumberOfMapZones())
 +		return false;
 +
 +	if (entry == 0) {
@@ -10638,10 +10737,14 @@ index 0000000..88f4b10
 +		return VCModSpawnName(entry);
 +
 +	case VCMOD_LIST_RIDEZONE: {
-+		// the stored value is the list entry itself
-+		const char *name = "unknown";
-+		VCModRideZoneAt(entry, nil, &name, nil);
-+		*selected = entry == nVCModRideZone;
++		// the stored value is the entry the position maps to; auto says what it is
++		// rather than what it currently resolves to, or the list row would move
++		// under the pointer whenever the marker is placed
++		int32 value = VCModRideZoneValue(entry);
++		const char *name = "auto (marker / cruise)";
++		if (value != VCMOD_RIDE_ZONE_AUTO)
++			VCModRideZoneAt(value, nil, &name, nil);
++		*selected = value == nVCModRideZone;
 +		return name;
 +	}
 +	}
@@ -10690,7 +10793,7 @@ index 0000000..88f4b10
 +
 +	case VCMOD_LIST_RIDEZONE:
 +		if (entry >= 0 && entry < VCModRideZoneCount())
-+			nVCModRideZone = entry;
++			nVCModRideZone = VCModRideZoneValue(entry);
 +		break;
 +
 +	default: {
@@ -11522,15 +11625,17 @@ index 0000000..581604d
 +#endif
 diff --git a/src/extras/vcmodplayer.cpp b/src/extras/vcmodplayer.cpp
 new file mode 100644
-index 0000000..ca89b8a
+index 0000000..fa20998
 --- /dev/null
 +++ b/src/extras/vcmodplayer.cpp
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,184 @@
 +#include "common.h"
 +
 +#include "vcmodplayer.h"
 +
 +#include "Pad.h"
++#include "Camera.h"
++#include "General.h"
 +#include "Ped.h"
 +#include "PlayerInfo.h"
 +#include "PlayerPed.h"
@@ -11548,7 +11653,8 @@ index 0000000..ca89b8a
 +
 +// NO STRAFE: the movement keys pick the heading, the way a ped's own AI does.
 +// Aiming or firing takes it back, because the torso has to point at the
-+// crosshair; the stock mouse-cam strafe then applies again for that stance.
++// crosshair; a locked target already owns the aim, so the keys keep it there —
++// until the trigger hands the body to the FIRING STANCE.
 +bool
 +VCModPlayerTurnsWithInput(void)
 +{
@@ -11557,6 +11663,9 @@ index 0000000..ca89b8a
 +	CPed *player = FindPlayerPed();
 +	if (player == nil)
 +		return false;
++	// the lock is the aim; the free camera's crosshair does not need the body
++	if (player->m_pPointGunAt)
++		return !VCModFiringStance();
 +	CPad *pad = CPad::GetPad(0);
 +	if (pad && (pad->GetTarget() || pad->GetWeapon()))
 +		return false;
@@ -11588,6 +11697,70 @@ index 0000000..ca89b8a
 +VCModMouseLockOn(void)
 +{
 +	return bVCModMouseAimLockOn;
++}
++
++// a locked target owns the shot even when the body faces elsewhere: NO STRAFE
++// can turn the ped while he walks, and the arm's pointed flag would otherwise
++// fall the shot back to the body's heading
++bool
++VCModLockShotHomes(CPed *shooter)
++{
++	return shooter->IsPlayer() && shooter->m_pPointGunAt != nil;
++}
++
++// FREEAIM+LOCKON keeps the free mouse camera over a lock: the stock lock camera
++// angle belongs to the classic control method and would take the view away
++bool
++VCModFreeAimCameraLock(void)
++{
++	return bVCModMouseAimLockOn && CCamera::m_bUseMouse3rdPerson;
++}
++
++// the free-aim crosshair is the mouse camera's reticle; a locked target already
++// carries the marker, so the two reticles must not stack
++bool
++VCModFreeAimCrosshairHidden(CPed *player)
++{
++	return bVCModMouseAimLockOn && player->m_pPointGunAt != nil;
++}
++
++// FIRING STANCE: while the trigger is held at a lock in the free camera, the
++// aim owns the body so the muzzle, the flash and the shot agree; the keys
++// strafe under it. The attack state carries the stance through a burst's pauses.
++bool
++VCModFiringStance(void)
++{
++	if (!VCModFreeAimCameraLock())
++		return false;
++	CPed *player = FindPlayerPed();
++	if (player == nil || player->m_pPointGunAt == nil)
++		return false;
++	CPad *pad = CPad::GetPad(0);
++	return (pad && pad->GetWeapon()) || player->m_nPedState == PED_ATTACK;
++}
++
++// the stance's body turn, at the ped's own stare rate: the same sweep the
++// two-hand pose uses, so the entry reads as a turn, not a snap
++bool
++VCModFiringStanceTurn(CPlayerPed *player)
++{
++	if (!VCModFiringStance() || player->m_pPointGunAt == nil)
++		return false;
++	CVector targetPos = player->m_pPointGunAt->GetPosition();
++	float angleToFace = CGeneral::GetRadianAngleBetweenPoints(
++		targetPos.x, targetPos.y, player->GetPosition().x, player->GetPosition().y);
++	float limitedLookDir = CGeneral::LimitRadianAngle(angleToFace);
++	float currentRot = player->m_fRotationCur;
++	if (currentRot - PI > limitedLookDir)
++		limitedLookDir += 2 * PI;
++	else if (PI + currentRot < limitedLookDir)
++		limitedLookDir -= 2 * PI;
++
++	float neededTurn = currentRot - limitedLookDir;
++	player->m_fRotationDest = limitedLookDir;
++	if (Abs(neededTurn) > 0.05f)
++		player->m_fRotationCur = currentRot - neededTurn * 0.2f;
++	return true;
 +}
 +
 +void
@@ -11642,23 +11815,25 @@ index 0000000..ca89b8a
 +}
 diff --git a/src/extras/vcmodplayer.h b/src/extras/vcmodplayer.h
 new file mode 100644
-index 0000000..3b6840b
+index 0000000..e750475
 --- /dev/null
 +++ b/src/extras/vcmodplayer.h
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,67 @@
 +#ifndef VCMODPLAYER_H
 +#define VCMODPLAYER_H
 +
 +class CPlayerPed;
 +class CPad;
 +class CEntity;
++class CPed;
 +
 +// WALK MODE: the move speed is capped at a walking pace everywhere, the start
 +// fade included
 +extern bool bVCModWalkMode;
 +// direction keys choose the body's heading: A and D turn him and walk forward
 +// instead of side-stepping. Aiming or firing hands the heading back to the
-+// mouse camera, because the torso has to follow the crosshair
++// mouse camera, because the torso has to follow the crosshair; a locked target
++// already owns the aim, so the keys keep the heading there
 +extern bool bVCModNoStrafe;
 +// lock-on can pick a driven, undamaged vehicle as a target
 +extern bool bVCModLockOnVehicles;
@@ -11675,10 +11850,27 @@ index 0000000..3b6840b
 +void VCModWalkModeCap(CPlayerPed *player);
 +
 +// true while the no-strafe scheme owns the body's heading: the flag is on and
-+// the player is neither aiming nor firing, so the mouse camera must stand down
++// the player is not free-aiming or free-firing, so the mouse camera must stand
++// down; a locked target keeps the keys on the heading
 +bool VCModPlayerTurnsWithInput(void);
 +// true while the free-aim camera keeps the lock-on on
 +bool VCModMouseLockOn(void);
++// true while a locked target owns the shot: NO STRAFE can turn the body while
++// he walks, and the arm's pointed flag would fall the shot back to the heading
++bool VCModLockShotHomes(CPed *shooter);
++// true while the free mouse camera must keep the view over a lock; the stock
++// lock camera belongs to the classic control method
++bool VCModFreeAimCameraLock(void);
++// true while the free-aim crosshair must stand down: a locked target already
++// carries the marker, and both reticles must not stack
++bool VCModFreeAimCrosshairHidden(CPed *player);
++// FIRING STANCE: while the trigger is held at a lock in the free camera the aim
++// owns the body, so the muzzle, the flash and the shot agree; the keys strafe
++// under the turn instead of choosing the heading
++bool VCModFiringStance(void);
++// the stance's body turn, at the ped's own stare rate; true when the stance
++// owns this frame, so the stock aim clamp stands down
++bool VCModFiringStanceTurn(CPlayerPed *player);
 +
 +// per frame: holds a latched lock-on by re-arming the aim button
 +void VCModLockOnLatchTick(CPlayerPed *player, CPad *pad);
@@ -11977,16 +12169,17 @@ index 0000000..e2d4e02
 +#endif
 diff --git a/src/extras/vcmodride.cpp b/src/extras/vcmodride.cpp
 new file mode 100644
-index 0000000..9df78be
+index 0000000..9ed6da6
 --- /dev/null
 +++ b/src/extras/vcmodride.cpp
-@@ -0,0 +1,638 @@
+@@ -0,0 +1,652 @@
 +#include "common.h"
 +
 +#include <stdio.h>
 +
 +#include "vcmodride.h"
 +#include "vcmodcrew.h"
++#include "vcmodpanel.h"
 +#include "vcmodplayer.h"
 +
 +#include "Automobile.h"
@@ -12007,11 +12200,9 @@ index 0000000..9df78be
 +#include "Vehicle.h"
 +#include "World.h"
 +
-+// the destination catalog stays with the panel
-+bool VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos);
-+
-+// -1 rides with traffic, otherwise the index of the zone to drive to
-+int32 nVCModRideZone;
++// RIDE TO. The destination catalog stays with the panel; auto is the start value:
++// the pause-map marker is the destination while one is placed, traffic otherwise.
++int32 nVCModRideZone = VCMOD_RIDE_ZONE_AUTO;
 +// how the driver drives, shared by the summoned limo and any street car
 +int32 nVCModRideStyle;
 +
@@ -12026,6 +12217,9 @@ index 0000000..9df78be
 +static CVector vecVCModRidePickup;
 +static uint32 nVCModRideRetargetAt;
 +static int32 nVCModRideAppliedStyle = -1;
++// the entry the driver was last sent to (-2: nothing issued yet); RIDE TO is read
++// live, so a marker placed or moved mid-ride re-routes the limo too
++static int32 nVCModRideAppliedZone = -2;
 +static uint32 nVCModRideBoardAt;
 +// a dismissed chauffeur waits for Tommy to get out; the limo is released then
 +static int32 nVCModDismissedHandle = -1;
@@ -12132,6 +12326,7 @@ index 0000000..9df78be
 +	bVCModRideSummoned = false;
 +	bVCModRideHasDestination = false;
 +	nVCModRideAppliedStyle = -1;
++	nVCModRideAppliedZone = -2;
 +	bVCModRideTrafficSaved = false;
 +}
 +
@@ -12237,6 +12432,7 @@ index 0000000..9df78be
 +		nVCModRidePhase = VCMOD_RIDE_BOARDING;
 +		nVCModRideBoardAt = CTimer::GetTimeInMilliseconds();
 +		nVCModRideAppliedStyle = -1;
++		nVCModRideAppliedZone = -2;
 +		bVCModRideSummoned = summoned;
 +	}
 +
@@ -12306,6 +12502,7 @@ index 0000000..9df78be
 +	nVCModRideBoardAt = CTimer::GetTimeInMilliseconds();
 +	// boarding always routes, even when the chauffeur was already driving to us
 +	nVCModRideAppliedStyle = -1;
++	nVCModRideAppliedZone = -2;
 +	return true;
 +}
 +
@@ -12333,9 +12530,12 @@ index 0000000..9df78be
 +{
 +	int32 zoneIndex;
 +	CVector dest;
-+	if (VCModRideZoneAt(nVCModRideZone, &zoneIndex, nil, &dest) && zoneIndex >= 0) {
-+		CCarCtrl::JoinCarWithRoadSystemGotoCoors(veh, dest, false);
-+		veh->AutoPilot.m_nCarMission = MISSION_GOTOCOORDS;
++	int32 entry = VCModRideZoneEntry(nVCModRideZone);
++	if (VCModRideZoneAt(entry, &zoneIndex, nil, &dest) && zoneIndex >= 0) {
++		// the marker is a free point, often off the road graph: with no route the
++		// engine's own straight-line mission is the way there, the same as a spawn
++		bool straight = CCarCtrl::JoinCarWithRoadSystemGotoCoors(veh, dest, false);
++		veh->AutoPilot.m_nCarMission = straight ? MISSION_GOTOCOORDS_STRAIGHT : MISSION_GOTOCOORDS;
 +		vecVCModRideDestination = dest;
 +		bVCModRideHasDestination = true;
 +		VCModRideApplyStyle(veh, true);
@@ -12346,6 +12546,7 @@ index 0000000..9df78be
 +		VCModRideApplyStyle(veh, false);
 +	}
 +	veh->AutoPilot.m_nTempAction = TEMPACT_NONE;
++	nVCModRideAppliedZone = entry;
 +}
 +
 +// the engine's own waypoint teleport, aimed at the nearest road so a zone centre
@@ -12356,7 +12557,9 @@ index 0000000..9df78be
 +	int32 zoneIndex;
 +	CVector dest;
 +	if (!VCModRideZoneAt(nVCModRideZone, &zoneIndex, nil, &dest) || zoneIndex < 0) {
-+		VCModRideNotice("skip the ride: pick a destination first");
++		// auto has no destination exactly when no marker is placed
++		VCModRideNotice(nVCModRideZone == VCMOD_RIDE_ZONE_AUTO ?
++			"skip the ride: place a map marker first" : "skip the ride: pick a destination first");
 +		return false;
 +	}
 +	int32 node = ThePaths.FindNodeClosestToCoors(dest, PATH_CAR, 999999.9f, true, true);
@@ -12604,8 +12807,11 @@ index 0000000..9df78be
 +		return;
 +	}
 +
-+	// the selector is live: changing it re-routes the driver
-+	if (nVCModRideAppliedStyle != nVCModRideStyle)
++	// RIDE TO and RIDE STYLE are live: a new destination re-routes the driver, and
++	// so does the pause-map marker when auto is following it
++	if (nVCModRideAppliedStyle != nVCModRideStyle ||
++			nVCModRideAppliedZone != VCModRideZoneEntry(nVCModRideZone) ||
++			VCModRideZoneMoved(vecVCModRideDestination))
 +		VCModRideDrive(veh);
 +
 +	if (bVCModRideHasDestination &&
@@ -12622,17 +12828,19 @@ index 0000000..9df78be
 \ No newline at end of file
 diff --git a/src/extras/vcmodride.h b/src/extras/vcmodride.h
 new file mode 100644
-index 0000000..acb9f1c
+index 0000000..106edab
 --- /dev/null
 +++ b/src/extras/vcmodride.h
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,50 @@
 +#ifndef VCMODRIDE_H
 +#define VCMODRIDE_H
 +
 +class CPlayerPed;
 +class CVehicle;
 +
-+// -1 rides with traffic, otherwise the index of the zone to drive to
++// What RIDE TO says: the list entry (see VCModRideZoneCount in vcmodpanel.h).
++// VCMOD_RIDE_ZONE_AUTO follows the pause-map marker while one is placed and lets
++// traffic drive otherwise, which is also what this starts on.
 +extern int32 nVCModRideZone;
 +// how the driver drives, shared by the summoned limo and any street car
 +extern int32 nVCModRideStyle;
@@ -16877,7 +17085,7 @@ index a27d489..7b38d90 100644
  			case SOUND_PED_DEATH:
  			case SOUND_PED_DAMAGE:
 diff --git a/src/peds/PedFight.cpp b/src/peds/PedFight.cpp
-index 8a3b971..a3d0eca 100644
+index 8a3b971..f6c23e9 100644
 --- a/src/peds/PedFight.cpp
 +++ b/src/peds/PedFight.cpp
 @@ -25,6 +25,10 @@
@@ -16929,17 +17137,52 @@ index 8a3b971..a3d0eca 100644
  	if (!weaponAssoc || weaponAssoc->blendDelta < 0.0f) {
  		if (weaponInfo->IsFlagSet(WEAPONFLAG_CROUCHFIRE)) {
  			weaponAssoc = RpAnimBlendClumpGetAssociation(GetClump(), GetCrouchFireAnim(weaponInfo));
-@@ -212,6 +222,9 @@ CPed::PointGunAt(void)
+@@ -212,10 +222,41 @@ CPed::PointGunAt(void)
  		}
  	}
  
+-	if (weaponAssoc && weaponAssoc->currentTime > animLoopStart * 0.4f) {
+-		weaponAssoc->SetCurrentTime(animLoopStart);
+-		weaponAssoc->flags &= ~ASSOC_RUNNING;
 +	if (VCModCombatAimTick(this, weaponInfo, weaponAssoc))
 +		return;
-+
- 	if (weaponAssoc && weaponAssoc->currentTime > animLoopStart * 0.4f) {
- 		weaponAssoc->SetCurrentTime(animLoopStart);
- 		weaponAssoc->flags &= ~ASSOC_RUNNING;
-@@ -224,6 +237,11 @@ CPed::PointGunAt(void)
+ 
++	bool raising = IsPlayer() && VCModAimRaising();
++	bool atHold = false;
++	if (weaponAssoc) {
++		if (raising) {
++			// AIM RAISE: play the climb instead of jumping the clip. A clip
++			// parked in the lowered recovery hold plays that tail back; a fresh
++			// clip runs its own raise frames up to the hold.
++			if (weaponAssoc->currentTime > animLoopStart + 0.02f) {
++				weaponAssoc->speed = -1.0f;
++				weaponAssoc->SetRun();
++			} else if (weaponAssoc->currentTime < animLoopStart - 0.02f) {
++				weaponAssoc->speed = 1.0f;
++				weaponAssoc->SetRun();
++			} else {
++				weaponAssoc->speed = 1.0f;
++				weaponAssoc->SetCurrentTime(animLoopStart);
++				weaponAssoc->flags &= ~ASSOC_RUNNING;
++				atHold = true;
++				VCModAimRaiseHoldLanded();
++			}
++		} else {
++			// a raise cut short must not leave the clip running backwards
++			if (weaponAssoc->speed < 0.0f)
++				weaponAssoc->speed = 1.0f;
++			if (weaponAssoc->currentTime > animLoopStart * 0.4f) {
++				weaponAssoc->SetCurrentTime(animLoopStart);
++				weaponAssoc->flags &= ~ASSOC_RUNNING;
++				atHold = true;
++			}
++		}
++	}
++	if (atHold) {
+ 		if (bIsDucking)
+ 			m_pedIK.m_flags &= ~CPedIK::AIMS_WITH_ARM;
+ 
+@@ -224,6 +265,11 @@ CPed::PointGunAt(void)
  		else
  			m_pedIK.m_flags &= ~CPedIK::AIMS_WITH_ARM;
  	}
@@ -16951,7 +17194,7 @@ index 8a3b971..a3d0eca 100644
  }
  
  void
-@@ -235,12 +253,13 @@ CPed::ClearPointGunAt(void)
+@@ -235,12 +281,13 @@ CPed::ClearPointGunAt(void)
  	ClearLookFlag();
  	ClearAimFlag();
  	bIsPointingGunAt = false;
@@ -16966,7 +17209,7 @@ index 8a3b971..a3d0eca 100644
  	if (!animAssoc || animAssoc->blendDelta < 0.0f) {
  		if (weaponInfo->IsFlagSet(WEAPONFLAG_CROUCHFIRE)) {
  			animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), GetCrouchFireAnim(weaponInfo));
-@@ -371,7 +390,7 @@ CPed::SetAttack(CEntity *victim)
+@@ -371,7 +418,7 @@ CPed::SetAttack(CEntity *victim)
  		return;
  	}
  
@@ -16975,7 +17218,7 @@ index 8a3b971..a3d0eca 100644
  		if (IsPlayer())
  			CPad::GetPad(0)->ResetAverageWeapon();
  
-@@ -417,10 +436,10 @@ CPed::SetAttack(CEntity *victim)
+@@ -417,10 +464,10 @@ CPed::SetAttack(CEntity *victim)
  					if (pedOnGround > PED_IN_FRONT_OF_ATTACKER || pedOnGround == NO_PED && bIsStanding && m_pCurSurface && m_pCurSurface->IsVehicle()) {
  						fireAnim = GetFireAnimGround(curWeapon, false);
  					} else {
@@ -16988,7 +17231,7 @@ index 8a3b971..a3d0eca 100644
  				}
  
  				CAnimBlendAssociation* curFireAssoc = RpAnimBlendClumpGetAssociation(GetClump(), fireAnim);
-@@ -430,6 +449,8 @@ CPed::SetAttack(CEntity *victim)
+@@ -430,6 +477,8 @@ CPed::SetAttack(CEntity *victim)
  					}
  				}
  				animAssoc = CAnimManager::BlendAnimation(GetClump(), curWeapon->m_AnimToPlay, fireAnim, animDelta);
@@ -16997,7 +17240,7 @@ index 8a3b971..a3d0eca 100644
  			}
  
  			animAssoc->SetRun();
-@@ -615,6 +636,35 @@ CPed::FinishedReloadCB(CAnimBlendAssociation *reloadAssoc, void *arg)
+@@ -615,6 +664,35 @@ CPed::FinishedReloadCB(CAnimBlendAssociation *reloadAssoc, void *arg)
  	}
  }
  
@@ -17033,7 +17276,7 @@ index 8a3b971..a3d0eca 100644
  uint8
  CPed::CheckForPointBlankPeds(CPed *pedToVerify)
  {
-@@ -692,8 +742,9 @@ CPed::Attack(void)
+@@ -692,8 +770,9 @@ CPed::Attack(void)
  				delayBetweenAnimAndFire = ourWeapon->m_fAnim2FrameFire;
  			}
  		}
@@ -17045,7 +17288,7 @@ index 8a3b971..a3d0eca 100644
  		if (weaponAnimAssoc) {
  			animLoopStart = 11.f/30.f;
  			animLoopEnd = 19.f/30.f;
-@@ -788,7 +839,9 @@ CPed::Attack(void)
+@@ -788,7 +867,9 @@ CPed::Attack(void)
  					          !GetFireAnimGround(ourWeapon, false) || 
  						 CheckForPedsOnGroundToAttack(this, nil) < PED_ON_THE_FLOOR) {
  
@@ -17056,7 +17299,7 @@ index 8a3b971..a3d0eca 100644
  
  					} else {
  						weaponAnimAssoc = CAnimManager::BlendAnimation(GetClump(), ourWeapon->m_AnimToPlay, GetFireAnimGround(ourWeapon, false), 8.0f);
-@@ -821,6 +874,8 @@ CPed::Attack(void)
+@@ -821,6 +902,8 @@ CPed::Attack(void)
  		}
  	}
  
@@ -17065,7 +17308,7 @@ index 8a3b971..a3d0eca 100644
  	float animStart = animLoopStart * 0.4f;
  	weaponAnimTime = weaponAnimAssoc->currentTime;
  	if (weaponAnimTime > animStart && weaponAnimTime - weaponAnimAssoc->timeStep <= animStart) {
-@@ -1023,8 +1078,10 @@ CPed::Attack(void)
+@@ -1023,8 +1106,10 @@ CPed::Attack(void)
  				weaponAnimAssoc->SetRun();
  			}
  		} else if (IsPlayer() && m_pPointGunAt && bIsAimingGun && GetWeapon()->m_eWeaponState != WEAPONSTATE_RELOADING) {
@@ -17078,7 +17321,7 @@ index 8a3b971..a3d0eca 100644
  			SetPointGunAt(m_pPointGunAt);
  #ifdef FREE_CAM
  		} else if (IsPlayer() && ((CPlayerPed*)this)->m_bFreeAimActive && GetWeapon()->m_eWeaponState != WEAPONSTATE_RELOADING) {
-@@ -1032,6 +1089,7 @@ CPed::Attack(void)
+@@ -1032,6 +1117,7 @@ CPed::Attack(void)
  			SetLookFlag(limitedCam, true, true);
  			SetAimFlag(limitedCam);
  			SetLookTimer(INT32_MAX);
@@ -17086,7 +17329,7 @@ index 8a3b971..a3d0eca 100644
  			SetPointGunAt(nil);
  			((CPlayerPed*)this)->m_fFPSMoveHeading = TheCamera.Find3rdPersonQuickAimPitch();
  #endif
-@@ -1058,12 +1116,15 @@ CPed::Attack(void)
+@@ -1058,12 +1144,15 @@ CPed::Attack(void)
  }
  
  void
@@ -17103,7 +17346,7 @@ index 8a3b971..a3d0eca 100644
  		m_fightButtonPressure = buttonPressure;
  		return;
  	}
-@@ -1100,7 +1161,10 @@ CPed::StartFightAttack(uint8 buttonPressure)
+@@ -1100,7 +1189,10 @@ CPed::StartFightAttack(uint8 buttonPressure)
  		fightIdleAssoc = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_FIGHT_IDLE, 1000.0f);
  	}
  	m_lastFightMove = FIGHTMOVE_IDLE;
@@ -17114,7 +17357,7 @@ index 8a3b971..a3d0eca 100644
  
  	SetPedState(PED_FIGHT);
  	m_fightButtonPressure = 0;
-@@ -1708,6 +1772,11 @@ CPed::ChooseAttackAI(uint8 buttonPressure, bool fightWithWeapon)
+@@ -1708,6 +1800,11 @@ CPed::ChooseAttackAI(uint8 buttonPressure, bool fightWithWeapon)
  int32
  CPed::ChooseAttackPlayer(uint8 buttonPressure, bool fightWithWeapon)
  {
@@ -17126,7 +17369,7 @@ index 8a3b971..a3d0eca 100644
  	CWeaponInfo *weaponInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
  	const float maxAttackDist = 2.7f;
  	float weaponAttackDist = 2.0f;
-@@ -1950,6 +2019,8 @@ CPed::EndFight(uint8 endType)
+@@ -1950,6 +2047,8 @@ CPed::EndFight(uint8 endType)
  {
  	if (m_nPedState != PED_FIGHT)
  		return;
@@ -17135,7 +17378,7 @@ index 8a3b971..a3d0eca 100644
  
  	m_curFightMove = FIGHTMOVE_NULL;
  	RestorePreviousState();
-@@ -2189,6 +2260,21 @@ CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)
+@@ -2189,6 +2288,21 @@ CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)
  	}
  	victim->ReactToAttack(this);
  
@@ -17157,7 +17400,7 @@ index 8a3b971..a3d0eca 100644
  	// Mostly unused. if > 5, ANIM_HIT_BIGSTEP will be run, that's it.
  	int unk2;
  	if (GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED && GetWeapon()->m_eWeaponType != WEAPONTYPE_BRASSKNUCKLE &&
-@@ -2658,6 +2744,22 @@ CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPi
+@@ -2658,6 +2772,22 @@ CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPi
  	bool willLinger = false;
  	int random;
  
@@ -17180,7 +17423,7 @@ index 8a3b971..a3d0eca 100644
  	if (damagedBy == FindPlayerPed() && damagedBy != this && damage > 3.0f)
  		++CWorld::Players[CWorld::PlayerInFocus].m_nHavocLevel;
  
-@@ -3467,6 +3569,10 @@ CPed::CollideWithPed(CPed *collideWith)
+@@ -3467,6 +3597,10 @@ CPed::CollideWithPed(CPed *collideWith)
  							if (m_pedStats->m_temper <= m_pedStats->m_fear
  								|| GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED
  								|| weAreMissionChar
@@ -17228,7 +17471,7 @@ index ea3cf1a..90507d6 100644
  
  	return result;
 diff --git a/src/peds/PlayerPed.cpp b/src/peds/PlayerPed.cpp
-index cd8da42..fbe589a 100644
+index cd8da42..f61e99e 100644
 --- a/src/peds/PlayerPed.cpp
 +++ b/src/peds/PlayerPed.cpp
 @@ -1,5 +1,7 @@
@@ -17572,11 +17815,16 @@ index cd8da42..fbe589a 100644
  	if (m_nPedState != PED_FIGHT)
  		SetRealMoveAnim();
  
-@@ -1043,7 +1149,41 @@ CPlayerPed::CanIKReachThisTarget(CVector target, CWeapon* weapon, bool zRotImpor
+@@ -1043,7 +1149,46 @@ CPlayerPed::CanIKReachThisTarget(CVector target, CWeapon* weapon, bool zRotImpor
  void
  CPlayerPed::RotatePlayerToTrackTarget(void)
  {
 -	if (CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->IsFlagSet(WEAPONFLAG_CANAIM_WITHARM))
++	// FIRING STANCE: with the free camera the trigger hands the body to the aim,
++	// so the muzzle and the shot agree; the legs strafe under the turn
++	if (VCModFiringStanceTurn(this))
++		return;
++
 +	CWeaponInfo *info = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
 +	if (VCModCopTwoHandPose(this, info)) {
 +		// the baked cop clip owns the arms and the thighs (thighs hang off the
@@ -17615,7 +17863,7 @@ index cd8da42..fbe589a 100644
  		return;
  
  	float angleToFace = CGeneral::GetRadianAngleBetweenPoints(
-@@ -1094,6 +1234,8 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
+@@ -1094,6 +1239,8 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
  		if (obj && !obj->bHasBeenDamaged && CanIKReachThisTarget(obj->GetPosition(), GetWeapon(), true))
  			EvaluateNeighbouringTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, lookToLeft, true);
  	}
@@ -17624,7 +17872,7 @@ index cd8da42..fbe589a 100644
  	if (!nextTarget)
  		return false;
  
-@@ -1144,12 +1286,14 @@ CPlayerPed::FindWeaponLockOnTarget(void)
+@@ -1144,12 +1291,14 @@ CPlayerPed::FindWeaponLockOnTarget(void)
  		if (obj && !obj->bHasBeenDamaged && CanIKReachThisTarget(obj->GetPosition(), GetWeapon(), true))
  			EvaluateTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, true);
  	}
@@ -17639,7 +17887,7 @@ index cd8da42..fbe589a 100644
  	Say(SOUND_PED_AIMING);
  	return true;
  }
-@@ -1158,10 +1302,29 @@ void
+@@ -1158,10 +1307,29 @@ void
  CPlayerPed::ProcessAnimGroups(void)
  {
  	AssocGroupId groupToSet;
@@ -17670,7 +17918,7 @@ index cd8da42..fbe589a 100644
  
  		if (m_fWalkAngle >= -DEGTORAD(130.0f) && m_fWalkAngle <= DEGTORAD(130.0f)) {
  			if (m_fWalkAngle > 0.0f) {
-@@ -1263,15 +1426,24 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1263,15 +1431,24 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  		m_wepAccuracy = 95;
  	else
  		m_wepAccuracy = 100;
@@ -17696,7 +17944,7 @@ index cd8da42..fbe589a 100644
  #ifdef FREE_CAM
  				if (CCamera::bFreeCam && TheCamera.Cams[0].Using3rdPersonMouseCam()) {
  					m_fRotationCur = CGeneral::LimitRadianAngle(-TheCamera.Orientation);
-@@ -1292,7 +1464,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1292,7 +1469,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				SetPedState(PED_SNIPER_MODE);
  				return;
  			}
@@ -17705,7 +17953,7 @@ index cd8da42..fbe589a 100644
  				if (weapon == WEAPONTYPE_ROCKETLAUNCHER || weapon == WEAPONTYPE_SNIPERRIFLE || weapon == WEAPONTYPE_LASERSCOPE || weapon == WEAPONTYPE_CAMERA)
  					return;
  		}
-@@ -1306,7 +1478,9 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1306,7 +1483,9 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				} else {
  					m_fAttackButtonCounter = 0.0f;
  				}
@@ -17716,7 +17964,7 @@ index cd8da42..fbe589a 100644
  			} else {
  				if (m_nPedState == PED_ATTACK) {
  					if (padUsed->WeaponJustDown()) {
-@@ -1416,14 +1590,14 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1416,14 +1595,14 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  	}
  #endif
  
@@ -17734,7 +17982,7 @@ index cd8da42..fbe589a 100644
  #endif		
  			) {
  				ClearWeaponTarget();
-@@ -1438,14 +1612,33 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1438,14 +1617,45 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				ClearWeaponTarget();
  				return;
  			}
@@ -17756,13 +18004,25 @@ index cd8da42..fbe589a 100644
 +				// own stare turn; the instant body clamp below is the player-only
 +				// shortcut that makes the entry read as a snap, so it stands down
 +				if (VCModAimRaising()) {
-+					if (!VCModAimHoldMoving(this)) {
++					if (bIsDucking) {
++						// the ducked entry poses the crouch clip, not the standing
++						// one the raise measures; it has no wind-up to wait for
++						VCModAimRaiseStop();
++					} else if (!VCModAimHoldMoving(this)) {
 +						SetLookFlag(m_pPointGunAt, true, true);
-+						if (TurnBody() && VCModAimPoseRaised(this))
++						if (VCModFreeAimCameraLock()) {
++							// the free mouse camera rewrites the ped heading every
++							// frame, so the ped sweep can never land; the pose blend
++							// alone is the wind-up under the free camera
++							if (VCModAimPoseRaised(this))
++								VCModAimRaiseStop();
++						} else if (TurnBody() && VCModAimPoseRaised(this)) {
 +							VCModAimRaiseStop();
-+					} else if (VCModAimPoseRaised(this)) {
-+						// the walk owns the heading while he moves; the raise is
-+						// then the aim pose blending in
++						}
++					} else {
++						// the walk entry has no wind-up: AIM WALK and the two-hand
++						// hold keep the gun in the carry while he moves, so the
++						// pose can never land and the trigger must not wait for it
 +						VCModAimRaiseStop();
 +					}
 +				} else {
@@ -17771,8 +18031,15 @@ index cd8da42..fbe589a 100644
  			}
  
  			if (m_pPointGunAt) {
-@@ -1457,7 +1650,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
- 			TheCamera.SetNewPlayerWeaponMode(CCam::MODE_SYPHON, 0, 0);
+@@ -1454,10 +1664,13 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+ 				if (padUsed->ShiftTargetRightJustDown())
+ 					FindNextWeaponLockOnTarget(m_pPointGunAt, false);
+ 			}
+-			TheCamera.SetNewPlayerWeaponMode(CCam::MODE_SYPHON, 0, 0);
++			// FREEAIM+LOCKON keeps the free mouse camera over the lock; only a
++			// classic-control lock hands the camera the stock lock angle
++			if (!VCModFreeAimCameraLock())
++				TheCamera.SetNewPlayerWeaponMode(CCam::MODE_SYPHON, 0, 0);
  			TheCamera.UpdateAimingCoors(m_pPointGunAt->GetPosition());
  
 -		} else if (!CCamera::m_bUseMouse3rdPerson) {
@@ -17780,7 +18047,7 @@ index cd8da42..fbe589a 100644
  			if (padUsed->TargetJustDown() || TheCamera.m_bJustJumpedOutOf1stPersonBecauseOfTarget)
  				FindWeaponLockOnTarget();
  		}
-@@ -1484,7 +1677,15 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1484,7 +1697,15 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  bool
  CPlayerPed::MovementDisabledBecauseOfTargeting(void)
  {
@@ -17797,7 +18064,7 @@ index cd8da42..fbe589a 100644
  }
  
  void
-@@ -1556,6 +1757,9 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
+@@ -1556,6 +1777,9 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
  			m_nMoveState = PEDMOVE_SPRINT;
  	}
  
@@ -17807,7 +18074,7 @@ index cd8da42..fbe589a 100644
  	if (m_nPedState != PED_FIGHT)
  		SetRealMoveAnim();
  
-@@ -1663,6 +1867,10 @@ CPlayerPed::FindNewAttackPoints(void)
+@@ -1663,6 +1887,10 @@ CPlayerPed::FindNewAttackPoints(void)
  void
  CPlayerPed::ProcessControl(void)
  {
@@ -17818,7 +18085,7 @@ index cd8da42..fbe589a 100644
  	// Mobile has some debug/abandoned cheat thing in here: "gbFrankenTommy"
  
  	if (m_nEvadeAmount != 0)
-@@ -1704,8 +1912,45 @@ CPlayerPed::ProcessControl(void)
+@@ -1704,8 +1932,45 @@ CPlayerPed::ProcessControl(void)
  	if (bWasPostponed)
  		return;
  
@@ -17864,7 +18131,7 @@ index cd8da42..fbe589a 100644
  	PruneReferences();
  
  	if (GetWeapon()->m_eWeaponType == WEAPONTYPE_MINIGUN) {
-@@ -1778,12 +2023,14 @@ CPlayerPed::ProcessControl(void)
+@@ -1778,12 +2043,14 @@ CPlayerPed::ProcessControl(void)
  		}
  		return;
  	}
@@ -17881,7 +18148,7 @@ index cd8da42..fbe589a 100644
  		// ...Really?
  		eWeaponType playerWeapon = FindPlayerPed()->GetWeapon()->m_eWeaponType;
  		if (playerWeapon == WEAPONTYPE_SNIPERRIFLE || playerWeapon == WEAPONTYPE_LASERSCOPE) {
-@@ -1793,15 +2040,53 @@ CPlayerPed::ProcessControl(void)
+@@ -1793,15 +2060,53 @@ CPlayerPed::ProcessControl(void)
  		}
  	}
  
@@ -17937,7 +18204,7 @@ index cd8da42..fbe589a 100644
  			if (!RpAnimBlendClumpGetFirstAssociation(GetClump(), ASSOC_BLOCK) && !m_attachedTo) {
  				if (TheCamera.Using1stPersonWeaponMode()) {
  					if (padUsed)
-@@ -1823,10 +2108,35 @@ CPlayerPed::ProcessControl(void)
+@@ -1823,10 +2128,35 @@ CPlayerPed::ProcessControl(void)
  					PlayerControlZelda(padUsed);
  				}
  			}
@@ -17974,7 +18241,7 @@ index cd8da42..fbe589a 100644
  			m_vecSeekPos = m_pSeekTarget->GetPosition();
  
  			// fall through
-@@ -1845,10 +2155,21 @@ CPlayerPed::ProcessControl(void)
+@@ -1845,10 +2175,21 @@ CPlayerPed::ProcessControl(void)
  					m_fMoveSpeed = 0.0f;
  					break;
  			}
@@ -17998,7 +18265,7 @@ index cd8da42..fbe589a 100644
  			}
  			break;
  		case PED_SNIPER_MODE:
-@@ -1913,7 +2234,7 @@ CPlayerPed::ProcessControl(void)
+@@ -1913,7 +2254,7 @@ CPlayerPed::ProcessControl(void)
  		GetWeapon()->Update(m_audioEntityId, this);
  	}
  	ProcessAnimGroups();
@@ -18007,7 +18274,7 @@ index cd8da42..fbe589a 100644
  		if (TheCamera.Cams[TheCamera.ActiveCam].Mode == CCam::MODE_FOLLOWPED
  			&& TheCamera.Cams[TheCamera.ActiveCam].DirectionWasLooking == LOOKING_BEHIND) {
  
-@@ -1940,10 +2261,27 @@ CPlayerPed::ProcessControl(void)
+@@ -1940,10 +2281,27 @@ CPlayerPed::ProcessControl(void)
  			}
  		}
  	}
@@ -18037,18 +18304,32 @@ index cd8da42..fbe589a 100644
  	if (m_vecMoveSpeed.Magnitude2D() < 0.1f) {
  		if (m_nSpeedTimer) {
 diff --git a/src/renderer/Hud.cpp b/src/renderer/Hud.cpp
-index d7d8050..afdcfa1 100644
+index d7d8050..6341171 100644
 --- a/src/renderer/Hud.cpp
 +++ b/src/renderer/Hud.cpp
-@@ -25,6 +25,7 @@
+@@ -25,6 +25,8 @@
  #include "main.h"
  #include "General.h"
  #include "VarConsole.h"
++#include "vcmodplayer.h"
 +#include "vcmodqol.h"
  
  #if defined(FIX_BUGS)
  	#define SCREEN_SCALE_X_FIX(a) SCREEN_SCALE_X(a)
-@@ -420,7 +421,10 @@ void CHud::Draw()
+@@ -250,9 +252,10 @@ void CHud::Draw()
+ 			if (playerPed) {
+ 				if (playerPed->m_nPedState != PED_ENTER_CAR && playerPed->m_nPedState != PED_CARJACK) {
+ 
+-					if (WeaponType >= WEAPONTYPE_COLT45 && WeaponType <= WEAPONTYPE_RUGER
++					if ((WeaponType >= WEAPONTYPE_COLT45 && WeaponType <= WEAPONTYPE_RUGER
+ 						|| WeaponType == WEAPONTYPE_M60 || WeaponType == WEAPONTYPE_MINIGUN
+-						|| WeaponType == WEAPONTYPE_FLAMETHROWER) {
++						|| WeaponType == WEAPONTYPE_FLAMETHROWER)
++						&& !VCModFreeAimCrosshairHidden(playerPed)) {
+ 						DrawCrossHairPC = 1;
+ 					}
+ 				}
+@@ -420,7 +423,10 @@ void CHud::Draw()
  			m_LastDisplayScore = CWorld::Players[CWorld::PlayerInFocus].m_nVisibleMoney;
  		}
  		if (m_DisplayScoreState != FADED_OUT) {
@@ -18060,7 +18341,7 @@ index d7d8050..afdcfa1 100644
  			AsciiToUnicode(sTemp, sPrint);
  
  			CFont::SetPropOff();
-@@ -657,9 +661,13 @@ void CHud::Draw()
+@@ -657,9 +663,13 @@ void CHud::Draw()
  						CFont::PrintString(SCREEN_SCALE_FROM_RIGHT(110.0f + 23.0f * i), SCREEN_SCALE_Y(87.0f), sPrintIcon);
  
  					} else if (playerPed->m_pWanted->GetWantedLevel() <= i) {
@@ -18735,21 +19016,22 @@ index d21f8bf..66dea4d 100644
  };
  
 diff --git a/src/weapons/Weapon.cpp b/src/weapons/Weapon.cpp
-index cada168..9b728fe 100644
+index cada168..1abe40e 100644
 --- a/src/weapons/Weapon.cpp
 +++ b/src/weapons/Weapon.cpp
-@@ -29,6 +29,10 @@
+@@ -29,6 +29,11 @@
  #include "Boat.h"
  #include "WaterLevel.h"
  #include "WeaponInfo.h"
 +#include "vcmodcombat.h"
 +#include "vcmodgang.h"
++#include "vcmodplayer.h"
 +#include "vcmodstreet.h"
 +#include "vcmodshootable.h"
  #include "World.h"
  #include "SurfaceTable.h"
  #include "Bike.h"
-@@ -215,11 +219,12 @@ CWeapon::Fire(CEntity *shooter, CVector *fireSource)
+@@ -215,11 +220,12 @@ CWeapon::Fire(CEntity *shooter, CVector *fireSource)
  			case WEAPONTYPE_SNIPERRIFLE:
  			case WEAPONTYPE_LASERSCOPE:
  			{
@@ -18764,7 +19046,7 @@ index cada168..9b728fe 100644
  				break;
  			}
  			
-@@ -520,7 +525,7 @@ CWeapon::FireMelee(CEntity *shooter, CVector &fireSource)
+@@ -520,7 +526,7 @@ CWeapon::FireMelee(CEntity *shooter, CVector &fireSource)
  		CPed *victimPed = shooterPed->m_nearPeds[i];
  		ASSERT(victimPed!=nil);
  
@@ -18773,7 +19055,18 @@ index cada168..9b728fe 100644
  				&& victimPed != shooterPed->m_leader || !(CGeneral::GetRandomNumber() & 31)
  				&& (!shooterPed->IsGangMember() || victimPed->CanBeDamagedByThisGangMember(shooterPed)) )
  		{
-@@ -912,7 +917,9 @@ CWeapon::FireInstantHit(CEntity *shooter, CVector *fireSource)
+@@ -893,7 +899,9 @@ CWeapon::FireInstantHit(CEntity *shooter, CVector *fireSource)
+ 	if ( shooter->IsPed() && ((CPed *)shooter)->m_pPointGunAt )
+ 	{
+ 		CPed *shooterPed = (CPed *)shooter;
+-		if ( shooterPed->m_pedIK.m_flags & CPedIK::GUN_POINTED_SUCCESSFULLY )
++		// a locked target owns the shot even when NO STRAFE has turned the body
++		// away; the arm's pointed flag would fall back to the heading
++		if ((shooterPed->m_pedIK.m_flags & CPedIK::GUN_POINTED_SUCCESSFULLY) || VCModLockShotHomes(shooterPed))
+ 		{
+ 			int32 accuracy   = shooterPed->m_wepAccuracy;
+ 			int32 inaccuracy = 100-accuracy;
+@@ -912,7 +920,9 @@ CWeapon::FireInstantHit(CEntity *shooter, CVector *fireSource)
  			target *= info->m_fRange / distToTarget;
  			target += *fireSource;
  
@@ -18784,7 +19077,7 @@ index cada168..9b728fe 100644
  			{
  				float newInaccuracy = fPlayerAimScale * FindPlayerPed()->m_fAttackButtonCounter * (inaccuracy * Min(1.f, fPlayerAimScaleDist / distToTarget));
  				if (FindPlayerPed()->bIsDucking)
-@@ -964,7 +971,7 @@ CWeapon::FireInstantHit(CEntity *shooter, CVector *fireSource)
+@@ -964,7 +974,7 @@ CWeapon::FireInstantHit(CEntity *shooter, CVector *fireSource)
  		ahead.Normalise();
  #endif
  	}
@@ -18793,7 +19086,7 @@ index cada168..9b728fe 100644
  	{
  #ifdef FREE_CAM
  		if (CCamera::bFreeCam) {
-@@ -1068,7 +1075,7 @@ CWeapon::FireInstantHit(CEntity *shooter, CVector *fireSource)
+@@ -1068,7 +1078,7 @@ CWeapon::FireInstantHit(CEntity *shooter, CVector *fireSource)
  			target.y += rotOffset.y * info->m_fRange;
  
  			CParticle::HandleShootableBirdsStuff(shooter, *fireSource);
@@ -18802,7 +19095,7 @@ index cada168..9b728fe 100644
  			{
  				CWeapon::DoDoomAiming(shooter, fireSource, &target);
  			}
-@@ -1324,6 +1331,13 @@ CWeapon::DoBulletImpact(CEntity *shooter, CEntity *victim,
+@@ -1324,6 +1334,13 @@ CWeapon::DoBulletImpact(CEntity *shooter, CEntity *victim,
  	ASSERT(target!=nil);
  	ASSERT(point!=nil);
  
@@ -18816,7 +19109,7 @@ index cada168..9b728fe 100644
  	CWeaponInfo *info = GetInfo();
  
  	if ( victim )
-@@ -1385,7 +1399,7 @@ CWeapon::DoBulletImpact(CEntity *shooter, CEntity *victim,
+@@ -1385,7 +1402,7 @@ CWeapon::DoBulletImpact(CEntity *shooter, CEntity *victim,
  			shooter = ((CVehicle*)shooter)->pDriver;
  
  		if ( victim->IsPed() && shooter->IsPed() &&
@@ -18825,7 +19118,7 @@ index cada168..9b728fe 100644
  				!((CPed*)shooter)->IsGangMember() && ((CPed*)shooter)->m_nPedType != PEDTYPE_COP))
  		{
  			CPed *victimPed = (CPed *)victim;
-@@ -1733,7 +1747,7 @@ CWeapon::FireShotgun(CEntity *shooter, CVector *fireSource)
+@@ -1733,7 +1750,7 @@ CWeapon::FireShotgun(CEntity *shooter, CVector *fireSource)
  		CColPoint point;
  		CEntity *victim;
  
@@ -18834,7 +19127,7 @@ index cada168..9b728fe 100644
  		{
  			CVector Left;
  #ifdef FREE_CAM
-@@ -2187,7 +2201,7 @@ CWeapon::FireAreaEffect(CEntity *shooter, CVector *fireSource)
+@@ -2187,7 +2204,7 @@ CWeapon::FireAreaEffect(CEntity *shooter, CVector *fireSource)
  	CVector target;
  	CVector dir;
  
@@ -18845,10 +19138,10 @@ index cada168..9b728fe 100644
  		if (CCamera::bFreeCam) {
 diff --git a/utils/test_vc_adrenaline.py b/utils/test_vc_adrenaline.py
 new file mode 100644
-index 0000000..762e0f5
+index 0000000..464034f
 --- /dev/null
 +++ b/utils/test_vc_adrenaline.py
-@@ -0,0 +1,622 @@
+@@ -0,0 +1,628 @@
 +#!/usr/bin/env python3
 +import re
 +import subprocess
@@ -19288,7 +19581,13 @@ index 0000000..762e0f5
 +const char *VCModPathProbeLaneCell(void) { return ""; }
 +CPlayerPed *FindPlayerPed() { return &ped; }
 +struct CVector { float x, y, z; };
++#define VCMOD_RIDE_ZONE_AUTO	(-1)
 +int32 VCModRideZoneCount(void) { return 1; }
++/* RIDE TO's list is one longer than the stored entries */
++int32 VCModRideZoneValue(int32 position) {
++    return position <= 0 ? VCMOD_RIDE_ZONE_AUTO : position - 1;
++}
++const char *VCModRideZoneRowText(void) { return "auto: traffic"; }
 +bool VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos) {
 +    if (entry != 0) return false;
 +    if (outZoneIndex) *outZoneIndex = -1;
@@ -19757,10 +20056,10 @@ index 0000000..087b3a0
 +    unittest.main()
 diff --git a/utils/test_vc_character.py b/utils/test_vc_character.py
 new file mode 100644
-index 0000000..ffb3f65
+index 0000000..e80f9aa
 --- /dev/null
 +++ b/utils/test_vc_character.py
-@@ -0,0 +1,1076 @@
+@@ -0,0 +1,1082 @@
 +#!/usr/bin/env python3
 +import re
 +import subprocess
@@ -20463,6 +20762,11 @@ index 0000000..ffb3f65
 +bool VCModApplyPedModel(int16 modelIndex) { applied.push_back(modelIndex); return true; }
 +int32 zoneCount = 4;
 +int32 VCModRideZoneCount(void) { return zoneCount; }
++#define VCMOD_RIDE_ZONE_AUTO	(-1)
++/* the list is one longer than the stored entries: only its first slot is new */
++int32 VCModRideZoneValue(int32 position) {
++    return position <= 0 ? VCMOD_RIDE_ZONE_AUTO : position - 1;
++}
 +bool VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos) {
 +    if (entry < 0 || entry >= zoneCount) return false;
 +    if (outZoneIndex) *outZoneIndex = entry == 0 ? -1 : entry;
@@ -20645,13 +20949,14 @@ index 0000000..ffb3f65
 +    check(nVCModListAnchor == pageRowOf(rowNamed("RIDE TO")),
 +          "the ride list is anchored by the row that opened it");
 +    DrawList();
-+    check(cells.size() == 4 && cells[0].text == rosterName(0), "the ride list shows cruise first");
++    check(cells.size() == 4 && cells[0].text == "auto (marker / cruise)",
++          "the ride list opens on auto");
 +    clickList(2);
-+    check(nVCModRideZone == 2, "picking a zone stores that zone");
++    check(nVCModRideZone == 1, "picking the first zone stores entry 1");
 +    check(nVCModOpenList == VCMOD_LIST_NONE, "picking a zone closes the list");
 +    clickRow(rowNamed("RIDE TO"));
 +    clickList(0);
-+    check(nVCModRideZone == 0, "the cruise entry stores its own list entry");
++    check(nVCModRideZone == VCMOD_RIDE_ZONE_AUTO, "the auto entry stores its own value");
 +
 +    reset();
 +    for (uint32 i = 0; i < ARRAY_SIZE(aVCModSwitched); ++i) *aVCModSwitched[i] = false;
@@ -22474,10 +22779,10 @@ index 0000000..916916c
 +    unittest.main()
 diff --git a/utils/test_vc_crew.py b/utils/test_vc_crew.py
 new file mode 100644
-index 0000000..7976ca8
+index 0000000..fcb76ae
 --- /dev/null
 +++ b/utils/test_vc_crew.py
-@@ -0,0 +1,1273 @@
+@@ -0,0 +1,1308 @@
 +#!/usr/bin/env python3
 +"""Vercetti crew: the car shelf, the summon, the swap, the handover."""
 +import unittest
@@ -22845,6 +23150,14 @@ index 0000000..7976ca8
 +}
 +int32 nVCModRideZone = -1;
 +int32 nVCModRideStyle = VCMOD_RIDE_SAFE;
++/* RIDE TO's auto entry is -1; the crew tests resolve it to whatever entry autoZone
++   stands for, so a marker being placed or cleared is a change of entry */
++#define VCMOD_RIDE_ZONE_AUTO	(-1)
++int32 autoZone = 0;
++static int32 VCModRideZoneEntry(int32 stored) {
++    return stored == VCMOD_RIDE_ZONE_AUTO ? autoZone : stored;
++}
++static bool VCModRideZoneMoved(const CVector &) { return false; }
 +static bool VCModRideZoneAt(int32 entry, int32 *out, const char **name, CVector *pos) {
 +    if (entry < 0 || entry > 3) return false;
 +    if (entry == 0) { if (out) *out = -1; if (name) *name = "traffic"; return true; }
@@ -22965,6 +23278,8 @@ index 0000000..7976ca8
 +    nVCModCrewAppliedZone = -2;
 +    bVCModCrewHasDestination = false;
 +    nVCModCrewDismissAt = 0;
++    nVCModRideZone = -1;
++    autoZone = 0;
 +    gNearby.clear();
 +    nowMs = 10000;
 +    missingModel = -1;
@@ -23374,7 +23689,7 @@ index 0000000..7976ca8
 +    VCModCrewUpdate();	// PICKUP -> ABOARD
 +    VCModCrewUpdate();	// a man at the wheel: the ride starts
 +    check(car->AutoPilot.m_nCarMission == MISSION_CRUISE, "the ride starts");
-+    check(nVCModCrewAppliedZone == nVCModRideZone, "the ride zone is remembered");
++    check(nVCModCrewAppliedZone == VCModRideZoneEntry(nVCModRideZone), "the ride zone is remembered");
 +
 +    /* the car arrives and parks; Tommy gets out to do something */
 +    car->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
@@ -23545,6 +23860,31 @@ index 0000000..7976ca8
 +    check(car->AutoPilot.m_nDrivingStyle == DRIVINGSTYLE_STOP_FOR_CARS, "normal there too");
 +    check(car->AutoPilot.m_nCruiseSpeed == 15, "at cruising pace");
 +    std::printf("PASS: %d normal ride checks\n", checks);
++}
++''')
++
++    def test_auto_destination_follows_the_marker(self):
++        run_cpp(crew_source() + RIDE_HELPERS + r'''
++int main() {
++    reset();
++    CVehicle *car = boardForRide(VCMOD_RIDE_ZONE_AUTO);
++    check(car->AutoPilot.m_nCarMission == MISSION_CRUISE, "no marker yet: the crew cruises");
++    check(nVCModCrewAppliedZone == 0, "and the resolution is what is remembered");
++
++    /* a marker placed while they ride sends the car to it */
++    autoZone = 2;
++    events.clear();
++    VCModCrewUpdate();
++    check(car->AutoPilot.m_nCarMission == MISSION_GOTOCOORDS, "a placed marker routes the crew");
++    check(saw("goto"), "at the marker");
++    check(nVCModCrewAppliedZone == 2, "and the new resolution is remembered");
++
++    /* clearing it puts them back on the traffic */
++    autoZone = 0;
++    events.clear();
++    VCModCrewUpdate();
++    check(car->AutoPilot.m_nCarMission == MISSION_CRUISE, "clearing the marker returns them to traffic");
++    std::printf("PASS: %d auto destination checks\n", checks);
 +}
 +''')
 +
@@ -23852,10 +24192,10 @@ index 0000000..329bf03
 +    unittest.main()
 diff --git a/utils/test_vc_driver.py b/utils/test_vc_driver.py
 new file mode 100644
-index 0000000..51cbd7b
+index 0000000..e690b60
 --- /dev/null
 +++ b/utils/test_vc_driver.py
-@@ -0,0 +1,339 @@
+@@ -0,0 +1,407 @@
 +#!/usr/bin/env python3
 +"""Personal-driver tests: the summon, the drive to the pick-up, dismissal and the
 +skip-the-ride travel, all out of vcmodride.cpp and run against the passenger
@@ -24134,6 +24474,74 @@ index 0000000..51cbd7b
 +}
 +''')
 +
++    def test_the_destination_follows_the_map_marker(self):
++        run_cpp(ride_source(*SUMMON_FUNCTIONS) + r'''
++CVehicle veh;
++CAutomobile *limo = nil;
++void callDriverAuto(void) {
++    reset(veh);
++    lastLimo = nil;
++    nVCModRideZone = VCMOD_RIDE_ZONE_AUTO;
++    VCModCallDriver();
++    limo = lastLimo;
++}
++void board(void) {
++    limo->pos = CVector(5.0f, 0.0f, 0.0f);
++    VCModUpdateRide(&playerPed);
++    VCModPassengerEntry(limo);
++    playerPed.bInVehicle = true; playerPed.m_pMyVehicle = limo;
++    playerPed.m_nPedState = PED_DRIVING;
++    VCModUpdateRide(&playerPed);   /* notices the seat */
++    VCModUpdateRide(&playerPed);   /* picks the route */
++}
++int main() {
++    /* no marker: auto is ordinary traffic */
++    callDriverAuto();
++    board();
++    check(limo->AutoPilot.m_nCarMission == MISSION_CRUISE, "with no marker placed he cruises");
++    check(!bVCModRideHasDestination, "and nothing is watched for arrival");
++
++    /* placing one sends him there without the panel being touched */
++    autoMarkerPlaced = true;
++    autoMarkerPos = CVector(300.0f, 400.0f, 0.0f);
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(limo->AutoPilot.m_nCarMission == MISSION_GOTOCOORDS, "placing a marker routes him");
++    check(saw("goto:5:300,400"), "to the marker");
++    check(bVCModRideHasDestination, "with arrival watched");
++
++    /* moving it while he is on his way re-routes him */
++    autoMarkerPos = CVector(300.0f, 500.0f, 0.0f);
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(saw("goto:5:300,500"), "a moved marker re-routes him");
++
++    /* a nudge stays the same destination */
++    autoMarkerPos = CVector(310.0f, 505.0f, 0.0f);
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(!saw("goto"), "a marker moved a few metres does not re-route him");
++
++    /* clearing it sends him back to the traffic */
++    autoMarkerPlaced = false;
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(limo->AutoPilot.m_nCarMission == MISSION_CRUISE, "clearing the marker returns him to traffic");
++
++    /* a zone picked by hand is a fixed destination whatever the marker does */
++    nVCModRideZone = 1;
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(saw("goto:5:100,200"), "a hand-picked zone routes him");
++    autoMarkerPlaced = true;
++    autoMarkerPos = CVector(900.0f, 900.0f, 0.0f);
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(!saw("goto"), "and the marker does not move that destination");
++    std::printf("PASS: %d auto destination checks\n", checks);
++}
++''')
++
 +    def test_skip_button(self):
 +        run_cpp(ride_source(*SUMMON_FUNCTIONS) + r'''
 +int main() {
@@ -24164,8 +24572,8 @@ index 0000000..51cbd7b
 +    reset(veh);
 +    nVCModRideZone = -1;
 +    VCModSkipRide();
-+    check(!saw("teleport"), "cruise has no destination to skip to");
-+    check(saw("notice:skip the ride: pick a destination first"), "and it says why");
++    check(!saw("teleport"), "auto without a marker has no destination to skip to");
++    check(saw("notice:skip the ride: place a map marker first"), "and it says why");
 +
 +    /* and a zone with no road in it is refused */
 +    reset(veh);
@@ -28200,10 +28608,10 @@ index 0000000..5b90366
 +    unittest.main()
 diff --git a/utils/test_vc_passenger.py b/utils/test_vc_passenger.py
 new file mode 100644
-index 0000000..9a79775
+index 0000000..f33d652
 --- /dev/null
 +++ b/utils/test_vc_passenger.py
-@@ -0,0 +1,1270 @@
+@@ -0,0 +1,1358 @@
 +#!/usr/bin/env python3
 +"""Passenger-mode tests: the ride state machine out of vcmodride.cpp and the
 +destination list out of vcmodpanel.cpp, compiled against small engine stubs.
@@ -28312,7 +28720,8 @@ index 0000000..9a79775
 +#define MISSION_VEHICLE CAR_CREATED_BY_MISSION
 +enum eObjective { OBJECTIVE_NONE, OBJECTIVE_ENTER_CAR_AS_DRIVER, OBJECTIVE_ENTER_CAR_AS_PASSENGER, OBJECTIVE_LEAVE_CAR };
 +enum ePedState { PED_IDLE, PED_ENTER_CAR, PED_DRIVING, PED_ON_FOOT };
-+enum { MISSION_NONE, MISSION_CRUISE, MISSION_GOTOCOORDS, MISSION_STOP_FOREVER };
++enum { MISSION_NONE, MISSION_CRUISE, MISSION_GOTOCOORDS, MISSION_STOP_FOREVER,
++       MISSION_GOTOCOORDS_STRAIGHT };
 +enum { TEMPACT_NONE };
 +enum { DRIVINGSTYLE_STOP_FOR_CARS, DRIVINGSTYLE_SLOW_DOWN_FOR_CARS, DRIVINGSTYLE_AVOID_CARS,
 +       DRIVINGSTYLE_PLOUGH_THROUGH, DRIVINGSTYLE_STOP_FOR_CARS_IGNORE_LIGHTS };
@@ -28437,12 +28846,13 @@ index 0000000..9a79775
 +};
 +CVehiclePool vehiclePool;
 +struct CPools { static CVehiclePool *GetVehiclePool(void) { return &vehiclePool; } };
++bool noGotoRoute = false;
 +struct CCarCtrl {
 +    static int32 NumRandomCars, NumParkedCars, NumMissionCars;
 +    static void JoinCarWithRoadSystem(CVehicle *veh) { events.push_back("join:" + to_string(veh->handle)); }
 +    static bool JoinCarWithRoadSystemGotoCoors(CVehicle *veh, CVector dest, bool) {
 +        events.push_back("goto:" + to_string(veh->handle) + ":" + to_string((int) dest.x) + "," + to_string((int) dest.y));
-+        return false;
++        return noGotoRoute;
 +    }
 +    static void SwitchVehicleToRealPhysics(CVehicle *veh) {
 +        events.push_back("onrails-off:" + to_string(veh->handle));
@@ -28462,15 +28872,34 @@ index 0000000..9a79775
 +int32 CCarCtrl::NumRandomCars = 0;
 +int32 CCarCtrl::NumParkedCars = 0;
 +int32 CCarCtrl::NumMissionCars = 0;
-+/* the destination list, stubbed with the same cruise-first contract the panel has */
++/* the destination list, stubbed with the same cruise-first contract the panel has.
++   RIDE TO's auto entry is -1: these tests place a marker through autoMarkerPlaced
++   instead of reading CRadar, and entry 4 stands in for the marker. */
++#define VCMOD_RIDE_ZONE_AUTO	(-1)
++bool autoMarkerPlaced = false;
++CVector autoMarkerPos;
++static int32 VCModRideZoneEntry(int32 stored) {
++    if (stored != VCMOD_RIDE_ZONE_AUTO) return stored;
++    return autoMarkerPlaced ? 4 : 0;
++}
++static bool VCModRideZoneMoved(const CVector &applied) {
++    return autoMarkerPlaced && (autoMarkerPos - applied).Magnitude2D() > 25.0f;
++}
 +static bool VCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos) {
-+    if (entry < 0 || entry > 3) return false;
++    if (entry < 0 || entry > 4) return false;
 +    if (entry == 0) {
 +        if (outZoneIndex) *outZoneIndex = -1;
 +        if (outName) *outName = "traffic (cruise)";
 +        return true;
 +    }
 +    if (entry == 3) return false;                 /* a zone the list cannot resolve */
++    if (entry == 4) {                             /* the pause-map marker */
++        if (!autoMarkerPlaced) return false;
++        if (outZoneIndex) *outZoneIndex = 4;
++        if (outName) *outName = "map marker";
++        if (outPos) *outPos = autoMarkerPos;
++        return true;
++    }
 +    if (outZoneIndex) *outZoneIndex = entry;
 +    if (outName) *outName = "zone";
 +    if (outPos) *outPos = CVector((float) (100 * entry), (float) (200 * entry), 0.0f);
@@ -28597,12 +29026,15 @@ index 0000000..9a79775
 +    nVCModRideHandle = -1; nVCModRidePhase = VCMOD_RIDE_NONE;
 +    bVCModRideSummoned = false;
 +    bVCModRideHasDestination = false; nVCModRideAppliedStyle = -1;
++    nVCModRideAppliedZone = -2;
 +    vecVCModRideDestination = CVector(); vecVCModRidePickup = CVector();
 +    nVCModRideRetargetAt = 0; nowMs = 10000;
 +    spawnDriverFails = false;
 +    poolClear(); poolAdd(&veh);
 +    limoModelLoaded = true; limoPoolFull = false; noRoadNodes = false; requestedNode = -1;
 +    nVCModRideZone = -1; nVCModRideStyle = VCMOD_RIDE_SAFE;
++    autoMarkerPlaced = false; autoMarkerPos = CVector();
++    noGotoRoute = false;
 +    CCarCtrl::NumRandomCars = 0; CCarCtrl::NumParkedCars = 0; CCarCtrl::NumMissionCars = 0;
 +    placeRoadNodes();
 +}
@@ -29081,6 +29513,14 @@ index 0000000..9a79775
 +    beginRide(veh, 3);
 +    seated(veh);
 +    check(veh.AutoPilot.m_nCarMission == MISSION_CRUISE, "an unresolvable zone falls back to cruise");
++
++    /* a free point with no road route drives straight at it, the way a spawn does */
++    beginRide(veh, 2);
++    noGotoRoute = true;
++    seated(veh);
++    check(veh.AutoPilot.m_nCarMission == MISSION_GOTOCOORDS_STRAIGHT,
++          "an off-road destination drives straight at it");
++    noGotoRoute = false;
 +    std::printf("PASS: %d ride state checks\n", checks);
 +}
 +''')
@@ -29144,7 +29584,10 @@ index 0000000..9a79775
 +    events.clear();
 +    nVCModRideZone = 1;
 +    VCModUpdateRide(&playerPed);
-+    check(events.empty(), "the destination is read when the ride starts");
++    check(saw("goto:1:100,200"), "a new destination re-routes mid-ride");
++    events.clear();
++    VCModUpdateRide(&playerPed);
++    check(events.empty(), "and the same destination is not re-issued every frame");
 +    std::printf("PASS: %d ride style checks\n", checks);
 +}
 +''')
@@ -29185,8 +29628,8 @@ index 0000000..9a79775
 +    reset(veh);
 +    nVCModRideZone = -1;
 +    VCModSkipRide();
-+    check(!saw("teleport"), "cruise has no destination to skip to");
-+    check(saw("notice:skip the ride: pick a destination first"), "and it says why");
++    check(!saw("teleport"), "auto without a marker has no destination to skip to");
++    check(saw("notice:skip the ride: place a map marker first"), "and it says why");
 +
 +    /* a zone with no road in it is refused */
 +    reset(veh);
@@ -29257,6 +29700,10 @@ index 0000000..9a79775
 +        labelBuffer = re.findall(r"^static char aVCModZoneLabel\[32\];$", PANEL, re.M)[0]
 +        label = braced(PANEL, "static const char *\nVCModZoneLabel(CZone *zone)")
 +        count = braced(PANEL, "int32\nVCModRideZoneCount(void)")
++        value = braced(PANEL, "int32\nVCModRideZoneValue(int32 position)")
++        entry = braced(PANEL, "int32\nVCModRideZoneEntry(int32 stored)")
++        moved = braced(PANEL, "bool\nVCModRideZoneMoved(const CVector &applied)")
++        rowtext = braced(PANEL, "const char *\nVCModRideZoneRowText(void)")
 +        at = braced(PANEL, "bool\nVCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos)")
 +        run_cpp(ENGINE_STUBS + VEHICLE_STUBS + r'''
 +struct CZone {
@@ -29278,13 +29725,18 @@ index 0000000..9a79775
 +};
 +int CRadar::TargetMarkerId = -1;
 +CVector CRadar::TargetMarkerPos;
++/* the setting the row text and the moved test read */
++int32 nVCModRideZone = -1;
++#define VCMOD_RIDE_ZONE_AUTO	(-1)
++#define VCMOD_RIDE_RETARGET_NEAR	25.0f
 +void makeZone(int32 index, const char *name, float minX, float minY, float maxX, float maxY) {
 +    std::strcpy(zones[index].name, name);
 +    zones[index].minx = minX; zones[index].miny = minY; zones[index].maxx = maxX; zones[index].maxy = maxY;
 +    for (int i = 0; name[i] != '\0'; ++i) zones[index].translated[i] = (wchar) name[i];
 +    zones[index].translated[std::strlen(name)] = 0;
 +}
-+''' + labelBuffer + "\n" + label + "\n" + count + "\n" + at + CHECK_HELPER + r'''
++''' + labelBuffer + "\n" + label + "\n" + count + "\n" + value + "\n" + entry + "\n" +
++            moved + "\n" + at + "\n" + rowtext + CHECK_HELPER + r'''
 +int main() {
 +    const char *name = "?";
 +    int32 zoneIndex = -99;
@@ -29292,13 +29744,53 @@ index 0000000..9a79775
 +
 +    makeZone(1, "OceanB", -100.0f, -50.0f, 100.0f, 50.0f);
 +    numZones = 2;
-+    check(VCModRideZoneCount() == 3, "cruise, the zone, and the marker entry");
++    check(VCModRideZoneCount() == 4, "auto, cruise, the zone, and the marker entry");
 +
-+    /* nothing placed: the choice exists but has no point, so the ride keeps to
++    /* the list is one longer and only its first slot is new, so a RideZone an
++       older build saved still selects the same place */
++    check(VCModRideZoneValue(0) == VCMOD_RIDE_ZONE_AUTO, "the first position is auto");
++    check(VCModRideZoneValue(1) == 0, "cruise keeps its own entry");
++    check(VCModRideZoneValue(2) == 1, "the first zone keeps its entry");
++    check(VCModRideZoneValue(3) == 2, "the marker keeps the last entry");
++
++    /* auto follows the marker: traffic while none is placed, the marker with one */
++    CRadar::TargetMarkerId = -1;
++    nVCModRideZone = VCMOD_RIDE_ZONE_AUTO;
++    check(VCModRideZoneEntry(VCMOD_RIDE_ZONE_AUTO) == 0, "auto without a marker means traffic");
++    name = "?";
++    check(VCModRideZoneAt(VCMOD_RIDE_ZONE_AUTO, &zoneIndex, &name, &pos) && zoneIndex == -1,
++          "and auto is a cruise");
++    check(std::strcmp(VCModRideZoneRowText(), "auto: traffic") == 0, "the row says so");
++    check(!VCModRideZoneMoved(CVector(10.0f, 10.0f, 0.0f)), "with no marker nothing has moved");
++
++    CRadar::TargetMarkerId = 7;
++    CRadar::TargetMarkerPos = CVector(123.0f, -456.0f, 0.0f);
++    check(VCModRideZoneEntry(VCMOD_RIDE_ZONE_AUTO) == 2, "auto resolves to the marker entry");
++    name = "?";
++    zoneIndex = -99;
++    check(VCModRideZoneAt(VCMOD_RIDE_ZONE_AUTO, &zoneIndex, &name, &pos), "auto with a marker is a destination");
++    check(zoneIndex == 2, "at the marker's own entry");
++    check(pos.x == 123.0f && pos.y == -456.0f, "which is the marker point");
++    check(std::strcmp(name, "map marker") == 0, "named by what it is");
++    check(std::strcmp(VCModRideZoneRowText(), "auto: map marker") == 0,
++          "and the row names the marker");
++    check(!VCModRideZoneMoved(CVector(123.0f, -456.0f, 0.0f)), "the marker where it was is no move");
++    check(VCModRideZoneMoved(CVector(123.0f, -500.0f, 0.0f)), "a marker dragged away is a move");
++    check(!VCModRideZoneMoved(CVector(133.0f, -456.0f, 0.0f)), "a nudge of the marker is not");
++
++    /* a zone picked by hand is a fixed point, marker or no marker */
++    nVCModRideZone = 1;
++    check(!VCModRideZoneMoved(CVector(0.0f, 0.0f, 0.0f)), "a named zone never follows the marker");
++    check(std::strcmp(VCModRideZoneRowText(), "OceanB") == 0, "the row names the zone");
++
++    /* nothing placed: a hand-picked marker has no point, so the ride keeps to
 +       traffic instead of driving at the map origin */
 +    CRadar::TargetMarkerId = -1;
++    nVCModRideZone = 2;
 +    check(!VCModRideZoneAt(2, &zoneIndex, &name, &pos), "an unplaced marker has no destination");
 +    check(std::strcmp(name, "map marker") == 0, "the entry still names itself when unplaced");
++    check(std::strcmp(VCModRideZoneRowText(), "traffic (cruise)") == 0,
++          "and a hand-picked marker row reads traffic");
 +
 +    CRadar::TargetMarkerId = 7;
 +    CRadar::TargetMarkerPos = CVector(123.0f, -456.0f, 0.0f);
@@ -29317,6 +29809,8 @@ index 0000000..9a79775
 +        labelBuffer = re.findall(r"^static char aVCModZoneLabel\[32\];$", PANEL, re.M)[0]
 +        label = braced(PANEL, "static const char *\nVCModZoneLabel(CZone *zone)")
 +        count = braced(PANEL, "int32\nVCModRideZoneCount(void)")
++        value = braced(PANEL, "int32\nVCModRideZoneValue(int32 position)")
++        entry = braced(PANEL, "int32\nVCModRideZoneEntry(int32 stored)")
 +        at = braced(PANEL, "bool\nVCModRideZoneAt(int32 entry, int32 *outZoneIndex, const char **outName, CVector *outPos)")
 +        run_cpp(ENGINE_STUBS + VEHICLE_STUBS + r'''
 +struct CZone {
@@ -29338,27 +29832,29 @@ index 0000000..9a79775
 +};
 +int CRadar::TargetMarkerId = -1;
 +CVector CRadar::TargetMarkerPos;
++#define VCMOD_RIDE_ZONE_AUTO	(-1)
 +void makeZone(int32 index, const char *name, float minX, float minY, float maxX, float maxY) {
 +    std::strcpy(zones[index].name, name);
 +    zones[index].minx = minX; zones[index].miny = minY; zones[index].maxx = maxX; zones[index].maxy = maxY;
 +    for (int i = 0; name[i] != '\0'; ++i) zones[index].translated[i] = (wchar) name[i];
 +    zones[index].translated[std::strlen(name)] = 0;
 +}
-+''' + labelBuffer + "\n" + label + "\n" + count + "\n" + at + CHECK_HELPER + r'''
++''' + labelBuffer + "\n" + label + "\n" + count + "\n" + value + "\n" + entry + "\n" + at + CHECK_HELPER + r'''
 +int main() {
-+    check(VCModRideZoneCount() == 2, "only the whole-map box means cruise plus the marker");
++    check(VCModRideZoneCount() == 3, "auto, cruise, and the marker");
 +    const char *name;
 +    int32 zoneIndex;
 +    check(VCModRideZoneAt(0, &zoneIndex, &name, nil) && zoneIndex == -1,
 +          "entry 0 is cruise and stores no zone");
 +    check(std::strcmp(name, "traffic (cruise)") == 0, "the cruise entry is labelled");
 +    check(!VCModRideZoneAt(2, &zoneIndex, &name, nil), "a zone that is not there is refused");
-+    check(!VCModRideZoneAt(-1, &zoneIndex, &name, nil), "cruise below zero is refused");
++    check(VCModRideZoneAt(VCMOD_RIDE_ZONE_AUTO, &zoneIndex, &name, nil) && zoneIndex == -1,
++          "auto with no marker placed is cruise");
 +
 +    makeZone(1, "OceanB", -100.0f, -50.0f, 100.0f, 50.0f);
 +    makeZone(2, "ViceP", 300.0f, 400.0f, 500.0f, 600.0f);
 +    numZones = 3;
-+    check(VCModRideZoneCount() == 4, "cruise, every zone but the map box, and the marker");
++    check(VCModRideZoneCount() == 5, "auto, cruise, every zone but the map box, and the marker");
 +    CVector pos;
 +    check(VCModRideZoneAt(1, &zoneIndex, &name, &pos) && zoneIndex == 1 &&
 +          std::strcmp(name, "OceanB") == 0, "list entry one is the first real zone");
@@ -29430,7 +29926,7 @@ index 0000000..9a79775
 +        self.assertIn("case VCMOD_ROW_RIDESTYLE:\treturn VCMOD_LIST_RIDESTYLE;", rowlist)
 +        self.assertIn("case VCMOD_LIST_RIDEZONE:\treturn VCModRideZoneCount();", listcount)
 +        self.assertIn("case VCMOD_LIST_RIDESTYLE:\treturn NUM_VCMOD_RIDE_STYLES;", listcount)
-+        self.assertIn("nVCModRideZone = entry", pick)
++        self.assertIn("nVCModRideZone = VCModRideZoneValue(entry)", pick)
 +        self.assertIn("nVCModRideStyle = entry;", pick)
 +        self.assertIn("*selected = entry == nVCModRideStyle;", label)
 +        self.assertIn("case VCMOD_ROW_CALLDRIVER:\n\t\t\tVCModCallDriver();", click)
@@ -29439,7 +29935,7 @@ index 0000000..9a79775
 +        self.assertIn("value = aVCModRideStyleNames[nVCModRideStyle];", render)
 +        self.assertIn('"%s fire %s walk %s driver %s spin %s panel"', render)
 +
-+        self.assertIn("VCModRideZoneAt(nVCModRideZone", drive)
++        self.assertIn("VCModRideZoneEntry(nVCModRideZone)", drive)
 +        self.assertIn("VCModUpdatePickup(player, veh);", update)
 +        self.assertIn("VCModUpdateRide(this);", process)
 +        self.assertIn("KEYJUSTDOWN(aVCModKeys[VCKEY_DRIVER])", process)
@@ -29476,10 +29972,10 @@ index 0000000..9a79775
 +    unittest.main()
 diff --git a/utils/test_vc_player.py b/utils/test_vc_player.py
 new file mode 100644
-index 0000000..cc5fe8c
+index 0000000..bb4b58f
 --- /dev/null
 +++ b/utils/test_vc_player.py
-@@ -0,0 +1,263 @@
+@@ -0,0 +1,396 @@
 +#!/usr/bin/env python3
 +"""Player locomotion and lock-on: the walk cap, the no-strafe heading and the
 +aim latch out of vcmodplayer.cpp, compiled against small engine stubs."""
@@ -29495,6 +29991,8 @@ index 0000000..cc5fe8c
 +    "vcmodpanelinternal.h"))
 +PED = (ROOT / "src/peds/Ped.cpp").read_text()
 +CAM = (ROOT / "src/core/Cam.cpp").read_text()
++HUD = (ROOT / "src/renderer/Hud.cpp").read_text()
++WEAPONS = (ROOT / "src/weapons/Weapon.cpp").read_text()
 +
 +STUBS = r'''
 +#include <cstdio>
@@ -29518,6 +30016,7 @@ index 0000000..cc5fe8c
 +    eMoveState m_nMoveState;
 +    PedState m_nPedState;
 +    CEntity *m_pPointGunAt;
++    bool IsPlayer(void) { return true; }
 +};
 +typedef CPlayerPed CPed;
 +
@@ -29666,7 +30165,12 @@ index 0000000..cc5fe8c
 +
 +class NoStrafeTests(unittest.TestCase):
 +    def test_heading_ownership(self):
-+        source = STUBS + "\n".join((
++        source = STUBS + r'''
++struct CCamera { static bool m_bUseMouse3rdPerson; };
++bool CCamera::m_bUseMouse3rdPerson;
++''' + "\n".join((
++            braced(MODULE, "bool\nVCModFreeAimCameraLock(void)"),
++            braced(MODULE, "bool\nVCModFiringStance(void)"),
 +            braced(MODULE, "bool\nVCModPlayerTurnsWithInput(void)"),
 +        )) + r'''
 +static int checks;
@@ -29683,6 +30187,8 @@ index 0000000..cc5fe8c
 +    thePad.targetDown = thePad.weaponDown = false;
 +    thePlayer = p;
 +    bVCModNoStrafe = false;
++    bVCModMouseAimLockOn = true;
++    CCamera::m_bUseMouse3rdPerson = true;
 +
 +    check(!VCModPlayerTurnsWithInput(), "no-strafe is inert while its switch is off");
 +
@@ -29703,6 +30209,108 @@ index 0000000..cc5fe8c
 +
 +    thePad.weaponDown = false;
 +    check(VCModPlayerTurnsWithInput(), "letting go returns the heading");
++
++    // a locked target already owns the aim, so the keys keep the heading
++    CEntity target;
++    target.tag = 1;
++    thePlayer.m_pPointGunAt = &target;
++    thePlayer.m_nPedState = PED_IDLE;
++    thePad.targetDown = true;
++    check(VCModPlayerTurnsWithInput(), "a lock keeps the heading on the aim button");
++    // the trigger hands the body to the firing stance so the muzzle agrees
++    thePad.weaponDown = true;
++    check(VCModFiringStance(), "the trigger starts the firing stance");
++    check(!VCModPlayerTurnsWithInput(), "the firing stance takes the heading");
++    thePlayer.m_nPedState = PED_ATTACK;
++    thePad.weaponDown = false;
++    check(!VCModPlayerTurnsWithInput(), "the attack state carries the stance");
++    thePlayer.m_nPedState = PED_AIM_GUN;
++    check(VCModPlayerTurnsWithInput(), "the stance ends when the attack does");
++    CCamera::m_bUseMouse3rdPerson = false;
++    check(!VCModFiringStance(), "the stance belongs to the free camera");
++    check(VCModPlayerTurnsWithInput(), "the classic camera leaves the keys the heading");
++    CCamera::m_bUseMouse3rdPerson = true;
++    thePlayer.m_pPointGunAt = nil;
++    thePlayer.m_nPedState = PED_ATTACK;
++    thePad.targetDown = false;
++    check(!VCModPlayerTurnsWithInput(), "losing the lock hands it back while attacking");
++    std::printf("ok %d checks\n", checks);
++    return 0;
++}
++'''
++        run_cpp(source)
++
++
++class LockShotTests(unittest.TestCase):
++    def test_a_locked_target_owns_the_shot(self):
++        source = STUBS + braced(MODULE, "bool\nVCModLockShotHomes(CPed *shooter)") + r'''
++static int checks;
++static void check(bool condition, const char *name)
++{
++    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
++    ++checks;
++}
++
++int main() {
++    CPlayerPed p = {};
++    CEntity target;
++    target.tag = 1;
++    check(!VCModLockShotHomes(&p), "no lock leaves the shot to the pointed pose");
++    p.m_pPointGunAt = &target;
++    check(VCModLockShotHomes(&p), "a locked target owns the shot");
++    p.m_pPointGunAt = nil;
++    check(!VCModLockShotHomes(&p), "losing the lock returns it to the pose");
++    std::printf("ok %d checks\n", checks);
++    return 0;
++}
++'''
++        run_cpp(source)
++
++
++class FreeAimCameraTests(unittest.TestCase):
++    def test_free_camera_keeps_the_view_and_hides_the_crosshair(self):
++        source = STUBS + r'''
++struct CCamera { static bool m_bUseMouse3rdPerson; };
++bool CCamera::m_bUseMouse3rdPerson;
++''' + "\n".join((
++            braced(MODULE, "bool\nVCModFreeAimCameraLock(void)"),
++            braced(MODULE, "bool\nVCModFreeAimCrosshairHidden(CPed *player)"),
++        )) + r'''
++static int checks;
++static void check(bool condition, const char *name)
++{
++    if (!condition) { std::fprintf(stderr, "FAIL: %s\n", name); std::exit(1); }
++    ++checks;
++}
++
++int main() {
++    CPlayerPed p = {};
++    CEntity target;
++    target.tag = 1;
++    CCamera::m_bUseMouse3rdPerson = true;
++
++    bVCModMouseAimLockOn = false;
++    check(!VCModFreeAimCameraLock(),
++          "the row off leaves the stock lock camera to the game");
++
++    bVCModMouseAimLockOn = true;
++    check(VCModFreeAimCameraLock(),
++          "the row on keeps the free mouse camera over a lock");
++
++    CCamera::m_bUseMouse3rdPerson = false;
++    check(!VCModFreeAimCameraLock(),
++          "the classic control method keeps the stock lock camera");
++    CCamera::m_bUseMouse3rdPerson = true;
++
++    check(!VCModFreeAimCrosshairHidden(&p),
++          "the free-aim crosshair shows with no target");
++    p.m_pPointGunAt = &target;
++    check(VCModFreeAimCrosshairHidden(&p),
++          "a locked target hides the free-aim crosshair");
++    bVCModMouseAimLockOn = false;
++    check(!VCModFreeAimCrosshairHidden(&p),
++          "the row off leaves the crosshair alone");
++
 +    std::printf("ok %d checks\n", checks);
 +    return 0;
 +}
@@ -29739,6 +30347,27 @@ index 0000000..cc5fe8c
 +    def test_camera_and_velocity_read_the_predicate(self):
 +        self.assertIn("!VCModPlayerTurnsWithInput()", CAM)
 +        self.assertIn("|| VCModPlayerTurnsWithInput()", PED)
++
++    def test_free_camera_lock_sites(self):
++        # the lock camera stands down for the free mouse camera, and the HUD
++        # asks before stacking the crosshair over the target marker
++        self.assertIn("if (!VCModFreeAimCameraLock())", PLAYER)
++        self.assertIn("VCModFreeAimCrosshairHidden(playerPed)", HUD)
++        self.assertNotIn("MODE_SYPHON", HUD)
++
++    def test_the_lock_still_homes_the_shot(self):
++        # the arm's pointed flag fails once NO STRAFE turns the body; the lock
++        # has to win the shot back from the heading fallback
++        self.assertIn('#include "vcmodplayer.h"', WEAPONS)
++        self.assertIn("|| VCModLockShotHomes(shooterPed)", WEAPONS)
++        self.assertLess(WEAPONS.index("VCModLockShotHomes(shooterPed)"),
++                        WEAPONS.index("TransformToNode(target, PED_HANDR)"))
++
++    def test_the_firing_stance_sites(self):
++        # the aim owns the body while the trigger is held at a lock: the stock
++        # clamp stands down, the camera keeps its hands off the heading
++        self.assertIn("if (VCModFiringStanceTurn(this))", PLAYER)
++        self.assertIn("!VCModFiringStance()", CAM)
 +
 +
 +if __name__ == "__main__":
@@ -31458,10 +32087,10 @@ index 0000000..93d7513
 +    unittest.main()
 diff --git a/utils/test_vc_windup.py b/utils/test_vc_windup.py
 new file mode 100644
-index 0000000..22c6f32
+index 0000000..32ae6bc
 --- /dev/null
 +++ b/utils/test_vc_windup.py
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,137 @@
 +#!/usr/bin/env python3
 +"""AIM RAISE: a fresh lock enters the aim the way a ped does — the body sweeps
 +onto the target at CPed::TurnBody's stare rate and the trigger is dead until the
@@ -31524,6 +32153,49 @@ index 0000000..22c6f32
 +        weapon = braced(PLAYERPED.read_text(), "CPlayerPed::ProcessPlayerWeapon")
 +        self.assertEqual(weapon.count("SetAttack(m_pPointGunAt);"), 1)
 +        self.assertRegex(weapon, r"if\s*\(!VCModAimRaising\(\)\)\s*\n\s*SetAttack\(m_pPointGunAt\);")
++
++    def test_moving_and_ducked_entries_end_the_raise(self):
++        # only a planted standing entry winds up: AIM WALK and the two-hand hold
++        # keep the gun lowered while he moves, so waiting on the pose there
++        # swallows every shot; the ducked entry poses a different clip
++        weapon = braced(PLAYERPED.read_text(), "CPlayerPed::ProcessPlayerWeapon")
++        raise_at = weapon.index("if (VCModAimRaising())")
++        block = weapon[raise_at:weapon.index("RotatePlayerToTrackTarget();", raise_at)]
++        ducked = block[block.index("bIsDucking"):block.index("VCModAimHoldMoving")]
++        self.assertIn("VCModAimRaiseStop();", ducked)
++        standing_end = block.rindex("VCModAimPoseRaised")
++        moving = block[block.index("\n", standing_end):]
++        self.assertNotIn("VCModAimPoseRaised", moving)
++        self.assertIn("VCModAimRaiseStop();", moving)
++
++    def test_the_free_camera_raise_leaves_the_heading_to_the_camera(self):
++        # the free mouse camera rewrites the ped heading every frame, so the
++        # TurnBody sweep can never land there; only the pose blend may gate fire
++        weapon = braced(PLAYERPED.read_text(), "CPlayerPed::ProcessPlayerWeapon")
++        raise_at = weapon.index("if (VCModAimRaising())")
++        block = weapon[raise_at:weapon.index("RotatePlayerToTrackTarget();", raise_at)]
++        free_at = block.index("VCModFreeAimCameraLock()")
++        turn_at = block.index("TurnBody()")
++        self.assertLess(free_at, turn_at)
++        branch = block[free_at:turn_at]
++        self.assertIn("VCModAimPoseRaised(this)", branch)
++        self.assertIn("VCModAimRaiseStop();", branch)
++
++    def test_the_raise_plays_the_clip_to_the_hold(self):
++        # a fresh lock plays the climb: a parked recovery tail is played back and
++        # a cold clip runs its own raise frames; the stock snap only runs when no
++        # raise owns the clip
++        point = braced(PEDFIGHT.read_text(), "CPed::PointGunAt(void)")
++        self.assertIn("bool raising = IsPlayer() && VCModAimRaising();", point)
++        self.assertIn("weaponAssoc->speed = -1.0f;", point)
++        self.assertIn("VCModAimRaiseHoldLanded();", point)
++        # the hold park is what the trigger waits for
++        pose = braced(COMBAT.read_text(), "VCModAimPoseRaised(CPed *ped)")
++        self.assertIn("bVCModAimHoldLanded", pose)
++        start = braced(COMBAT.read_text(), "VCModAimRaiseStart(void)")
++        self.assertIn("bVCModAimHoldLanded = false;", start)
++        tails = braced(COMBAT.read_text(), "VCModCombatClearTails(CPed *ped)")
++        self.assertIn("bVCModAimHoldLanded = false;", tails)
 +
 +    def test_the_lock_release_owns_the_clear(self):
 +        clear = braced(PEDFIGHT.read_text(), "CPed::ClearPointGunAt(void)")

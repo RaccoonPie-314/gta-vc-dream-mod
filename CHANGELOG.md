@@ -96,6 +96,46 @@ offered through the panel or the debug menu, and the choice is live — no resta
   and parking on arrival. The car waits with `MISSION_STOP_FOREVER` until Tommy is
   seated. Harness.
 
+## Shipped — 2026-11-14, `1641b0f`
+
+### Lock-on and the free camera
+
+- **FREEAIM+LOCKON** keeps the free mouse camera over a lock instead of handing
+  the view to the stock lock angle, and the free-aim crosshair stands down while
+  a target is held — the target marker is the reticle. Classic control keeps the
+  stock lock camera. Seen.
+- **NO STRAFE** keeps the heading while locked, and the firing stance takes it
+  while the trigger is held: he turns onto the target at the ped stare rate and
+  W advances, S backs, A/D strafe under it. Releasing the trigger returns the
+  heading to the keys. Seen.
+- Locked shots home to the target's mid even when the arm's pointed flag fails,
+  so a turned body no longer sends the tracer along the heading. Seen.
+- **AIM RAISE** plays the authored climb on a fresh lock: a cold clip runs its
+  raise frames up to the hold, a clip parked in the lowered recovery hold plays
+  that tail back, and the trigger is dead until the clip parks on the hold and
+  the pose blend lands. Moving or ducked entries end it at once. Seen.
+
+### RIDE TO follows the map marker
+
+- **RIDE TO** starts on `auto`: while a pause-map marker is placed the chauffeur
+  and a crew driver use it as the destination, and with none placed they cruise
+  with traffic. Neither needs the panel opened to pick a destination. Harness.
+- The list gained one row at the top, `auto (marker / cruise)`, and every position
+  below it still stores the entry an older ini held, so a saved `RideZone` selects
+  the same place. An old `-1` (traffic) now reads as auto, which is the same drive
+  while no marker is placed.
+- The destination is live for both drivers: another zone, or a marker placed,
+  cleared or dragged more than 25 m from the point already applied, re-routes a
+  ride that is under way. The panel row names what auto resolved to
+  (`auto: map marker`, `auto: traffic`), and **SKIP RIDE** says `place a map
+  marker` rather than `pick RIDE TO` when auto has nowhere to go.
+- A marker off the road graph has no route; the chauffeur now ends in the engine's
+  own straight-line mission there, the way a spawned car drives at a point, instead
+  of holding a route search that found nothing. Harness.
+- `test_vc_passenger.py` and `test_vc_driver.py` cover the auto resolution and the
+  live re-route, `test_vc_crew.py` the crew's, `test_vc_character.py` the shifted
+  list positions. All forty-five drivers pass.
+
 ## Uncommitted — 2026-11-07
 
 ### Passenger riding

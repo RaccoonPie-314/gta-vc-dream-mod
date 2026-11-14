@@ -156,11 +156,14 @@ The swap is a small phase:
 
 - Tommy driving: no AI touches the wheel. The three men ride; the stock leader AI
   is idle while they are in vehicle states (see 5.2).
-- A crew man driving: the car follows the `RIDE TO` zone exactly like the chauffeur
-  (same destination list and style rows), or cruises when no zone is set. Changing
-  `RIDE TO` re-routes. Arriving at the destination stops the car and keeps the ride
-  open; getting out ends it. The mission is issued when Tommy boards as a passenger
-  (the car is held stopped during pick-up), including after the empty-car fill.
+- A crew man driving: the car follows `RIDE TO` exactly like the chauffeur
+  (same destination list and style rows). `RIDE TO` starts on **auto**: the
+  pause-map marker while one is placed, cruising with traffic otherwise. Changing
+  `RIDE TO`, or placing, clearing or moving the marker more than 25 m from the
+  applied point, re-routes. Arriving at the destination stops the car and keeps the
+  ride open; getting out ends it. The mission is issued when Tommy boards as a
+  passenger (the car is held stopped during pick-up), including after the empty-car
+  fill.
 - Tommy leaves the car: every crew man leaves with him (stock leader rule) and the
   phase becomes escort. The car stays parked where it was left.
 
