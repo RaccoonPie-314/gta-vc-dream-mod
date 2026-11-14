@@ -232,6 +232,7 @@ the shipped default, so deleting one resets that hotkey.
 | `CALL CREW` row | — | Calls the three-man crew, or dismisses one already out. The CALL CREW key (`V`) does the same |
 | `CREW CAR` row (key `CrewCar`) | Admiral | The four-door car the crew arrives in; the list is every four-door car this install loads |
 | `bVCModNoStrafe` | off | The direction keys choose the body's heading — `A`/`D` turn instead of side-stepping. Aiming or firing hands the heading back to the camera |
+| `bVCModNpcAutoType` (row `TYPE FROM BODY`) | on | BECOME NPC derives the profile from the worn body's stock ped type: Tommy and gang bodies run GANG as the body's own gang, police bodies COP, every other body CIVILIAN. NPC TYPE shows the derived profile while it runs; cycling NPC TYPE turns this off and applies the chosen value |
 | `bVCModManualReload` | on | The RELOAD key (`R` by default) starts the reload on foot instead of waiting for the clip to empty. `R` is also the car radio key, so the tick does nothing while driving |
 | `bVCModVanillaFixes` (row `VANILLA FIXES`) | on | One row for the four fixes below. It reads `[ON]` only when all four are on, and switching it on restores the whole set |
 | `bVCModHudCleanup` | on | Money shows as `$42` instead of `$00000042`, and empty wanted stars are not drawn. Ini and Ctrl-M only — the row is the master above |

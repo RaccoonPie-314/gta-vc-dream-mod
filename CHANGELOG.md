@@ -96,6 +96,21 @@ offered through the panel or the debug menu, and the choice is live — no resta
   and parking on arrival. The car waits with `MISSION_STOP_FOREVER` until Tommy is
   seated. Harness.
 
+## Shipped — 2026-11-14, `ff1f984`
+
+### BECOME NPC — TYPE FROM BODY
+
+- `TYPE FROM BODY` (default on) derives the profile from the worn model's stock
+  ped type: `PLAYER1` and the gang bodies run GANG as the body's own gang, the
+  `COP` bodies (`cop`, `swat`, `fbi`, `army`) COP, every other body CIVILIAN
+  with its own stat. The switch and the NPC TYPE label were seen in play; the
+  full body matrix is harness-pinned.
+- Off is the manual `NPC TYPE` on any skin, GANG7 included. Cycling `NPC TYPE`
+  while the switch is on turns it off and applies the chosen profile. Seen.
+- The identity borrow reads the body gang's stat, threat flags and kin mask, and
+  restores the player's own on toggle-off, break or profile switch. Gang-vs-gang
+  hunting still needs a save with the rival gangs out. Harness.
+
 ## Shipped — 2026-11-14, `c0477aa`
 
 ### BECOME NPC — the AI fires like a ped

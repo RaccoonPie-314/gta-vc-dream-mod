@@ -3,6 +3,7 @@
 Built against [https://github.com/mrxenginner/reVC](https://github.com/mrxenginner/reVC), branch `miami`, commit `a26fff4`.
 Mod commits on top of it:
 
+    ff1f984 Ship body-type banking for BECOME NPC
     c0477aa Ship NPC combat parity, the wander fixes and the module slices
     1641b0f Ship free-camera lock-on and the RIDE TO map-marker destination
     4fc7fcd Ship the NPC-mode module split and the standstill fix
@@ -49,9 +50,9 @@ Usage record for the build of this folder:
 
     System:   macOS arm64
     Operator: RaccoonPie-314
-    Date:     2026-11-14T10:29:10Z
+    Date:     2026-11-14T12:16:22Z
     Target:   https://github.com/mrxenginner/reVC
-    Hash:     340939a689fb1554ab39360eb0838b707e39092603069c3c4ae3a76c02820008
+    Hash:     8e8d6a4615a4f4a1d2953615a99a1542e25686ff84de79ae1565ff4748ad1f42
 
 ## Rebuilding
 
