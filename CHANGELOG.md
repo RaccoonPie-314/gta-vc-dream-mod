@@ -96,6 +96,37 @@ offered through the panel or the debug menu, and the choice is live — no resta
   and parking on arrival. The car waits with `MISSION_STOP_FOREVER` until Tommy is
   seated. Harness.
 
+## Shipped — 2026-11-14, `c0477aa`
+
+### BECOME NPC — the AI fires like a ped
+
+- **NPC DOOM AIM** now works mid-mode: the accuracy value is written every frame
+  instead of freezing at whatever normal play left, so the switch flips the AI's
+  spread immediately. Seen.
+- The player trigger ramp is off while NPC mode shoots. Its counter only ever
+  grew there (the decay lives in the player-only weapon pass), so a long hunt
+  collapsed the cop's aim; shots now use the accuracy value, like a ped's. Seen.
+- The burst end takes the ped branch: the aim pose drops between bursts, the AI
+  re-raises it on its own beat, the lowering recovery tail is off, and the gun
+  returns to the carry once the fight ends. Seen.
+- The cop ID check keeps its stock candidate gate (5 m, wandering pedestrian,
+  no look target), and a DIAGNOSTICS census names the near peds behind it.
+  Harness.
+- Chatter stays stock: bodies whose bank has no chat clip (Tommy's own, the
+  police bodies) decline a chat; civilian bodies chat.
+- The hands-behind-back clip is the stock dead-end, kerb and blocked look-about
+  pose; a cop keeps the look-about when blocked against the player and skips
+  the after-kill pose, as a stock mission char does.
+
+### Modules
+
+- The HUD help line goes through `vcmodhud`, and probe output sits behind
+  `VCMOD_DIAG`.
+- The never-wanted check has one home in `CWanted`; the `ProcessPlayerWeapon`
+  aim work lives in `vcmodcombat`.
+- Chase, ride, crew and sit share the notice, and the harnesses move to shared
+  test support in `utils/vcmod_test_support.py`.
+
 ## Shipped — 2026-11-14, `1641b0f`
 
 ### Lock-on and the free camera

@@ -72,6 +72,31 @@ To tie a number to a launcher run, the newest `===` block in `build-launch.log` 
 the time, the commit, and (once the launcher has been regenerated with the current
 scripts) the same `vcmods build N` line, followed by the binary's sha256.
 
+## Windows: the portable folder
+
+The Windows path is a folder you unpack anywhere and start with `Play.bat`. Nothing
+in it knows a drive letter or an install path.
+
+| Path | What it is |
+| --- | --- |
+| `scripts/package-win.sh` | Stages `dist/VC-mod-<date>-personal-win/` and zips it. `--public` drops the Rockstar data. |
+| `scripts/windows/Play.bat` | The launcher: `cd /d "%~dp0"`, then `reVC.exe >> reVC.log 2>&1`; a non-zero exit pauses so the log can be read. |
+| `reVC.exe` | The Windows build, from `premake-vs2022.cmd` (`reVC/bin/win-amd64-*/Vanilla/`). Not built on this Mac; `--exe` points at one built elsewhere. |
+| `mods/`, `mods.ini` | The same data-driven overrides as on macOS, resolved by `CFileMgr`. |
+| `reVC.log`, `reVC.ini` | Written next to the exe after the first run. |
+
+```sh
+scripts/package-win.sh                                  # personal, with game data
+scripts/package-win.sh --public --exe ~/reVC.exe        # mod assets only
+```
+
+`package.sh` (macOS, `ditto`) and `package-win.sh` (portable, `cp` + `zip`) stay
+separate on purpose: the first packs an app bundle for this machine, the second packs
+a game folder for a Windows machine.
+
+The `vcmods build N` counter is CMake-only. A premake build shows `vcmods <sha8>`, so
+quote the short hash from that line for a Windows play test.
+
 ## Troubleshooting
 
 ### Clicking the tile does nothing, or the wrong app opens

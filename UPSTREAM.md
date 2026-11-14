@@ -3,6 +3,7 @@
 Built against [https://github.com/mrxenginner/reVC](https://github.com/mrxenginner/reVC), branch `miami`, commit `a26fff4`.
 Mod commits on top of it:
 
+    c0477aa Ship NPC combat parity, the wander fixes and the module slices
     1641b0f Ship free-camera lock-on and the RIDE TO map-marker destination
     4fc7fcd Ship the NPC-mode module split and the standstill fix
     bb3fe88 Ship NPC mode, the Vercetti crew, panel help and diagnostics
@@ -48,9 +49,9 @@ Usage record for the build of this folder:
 
     System:   macOS arm64
     Operator: RaccoonPie-314
-    Date:     2026-11-14T04:06:50Z
+    Date:     2026-11-14T10:29:10Z
     Target:   https://github.com/mrxenginner/reVC
-    Hash:     0d0771cc0594a6f86c0362a48c6cac858cb94cf8d83821973081a550bc396ceb
+    Hash:     340939a689fb1554ab39360eb0838b707e39092603069c3c4ae3a76c02820008
 
 ## Rebuilding
 

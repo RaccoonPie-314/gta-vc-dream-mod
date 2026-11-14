@@ -874,10 +874,10 @@ index 18f5b90..4b119fc 100644
  	static void DecrementRef(int32 id);
  	static void RemoveModel(int32 id);
 diff --git a/src/core/Wanted.cpp b/src/core/Wanted.cpp
-index 65bc84d..7ef9a50 100644
+index 65bc84d..f976626 100644
 --- a/src/core/Wanted.cpp
 +++ b/src/core/Wanted.cpp
-@@ -11,6 +11,7 @@
+@@ -11,10 +11,21 @@
  #include "Wanted.h"
  #include "General.h"
  #include "Stats.h"
@@ -885,11 +885,25 @@ index 65bc84d..7ef9a50 100644
  
  int32 CWanted::MaximumWantedLevel = 6;
  int32 CWanted::nMaximumWantedLevel = 9600;
-@@ -88,6 +89,11 @@ CWanted::NumOfHelisRequired()
+ 
++// The NEVER WANTED switch, read in one place. True means this wanted record is
++// the player's and the mod holds it at zero stars: setting a level, queueing a
++// crime, reporting one, ticking and draining the queue all ask this. The COP
++// NPC profile hunts its own criminals and never reads the player's stars.
++bool
++CWanted::VCModNeverWanted(void)
++{
++	return bVCModNeverWanted;
++}
++
+ void
+ CWanted::Initialise()
+ {
+@@ -88,6 +99,11 @@ CWanted::NumOfHelisRequired()
  void
  CWanted::SetWantedLevel(int32 level)
  {
-+	if (bVCModNeverWanted) {
++	if (VCModNeverWanted()) {
 +		level = 0;
 +		m_nMinChaos = 0;
 +		m_nMinWantedLevel = 0;
@@ -897,42 +911,42 @@ index 65bc84d..7ef9a50 100644
  	if (level > MaximumWantedLevel)
  		level = MaximumWantedLevel;
  
-@@ -200,6 +206,10 @@ CWanted::ClearQdCrimes()
+@@ -200,6 +216,10 @@ CWanted::ClearQdCrimes()
  bool
  CWanted::AddCrimeToQ(eCrimeType type, int32 id, const CVector &coors, bool reported, bool policeDoesntCare)
  {
 +	// Returning true also suppresses the immediate-report fallback.
-+	if (bVCModNeverWanted)
++	if (VCModNeverWanted())
 +		return true;
 +
  	int i;
  
  	for(i = 0; i < 16; i++)
-@@ -228,6 +238,9 @@ CWanted::AddCrimeToQ(eCrimeType type, int32 id, const CVector &coors, bool repor
+@@ -228,6 +248,9 @@ CWanted::AddCrimeToQ(eCrimeType type, int32 id, const CVector &coors, bool repor
  void
  CWanted::ReportCrimeNow(eCrimeType type, const CVector &coors, bool policeDoesntCare)
  {
-+	if (bVCModNeverWanted)
++	if (VCModNeverWanted())
 +		return;
 +
  	float sensitivity, chaos;
  	int wantedLevelDrop;
  
-@@ -399,6 +412,9 @@ CWanted::WorkOutPolicePresence(CVector posn, float radius)
+@@ -399,6 +422,9 @@ CWanted::WorkOutPolicePresence(CVector posn, float radius)
  void
  CWanted::Update(void)
  {
-+	if (bVCModNeverWanted)
++	if (VCModNeverWanted())
 +		SetWantedLevel(0);
 +
  	if (CTimer::GetTimeInMilliseconds() > m_nLastTimeSuspended + 20000) {
  		m_nMinChaos = 0;
  		m_nMinWantedLevel = 0;
-@@ -483,6 +499,11 @@ CWanted::Reset(void)
+@@ -483,6 +509,11 @@ CWanted::Reset(void)
  void
  CWanted::UpdateCrimesQ(void)
  {
-+	if (bVCModNeverWanted) {
++	if (VCModNeverWanted()) {
 +		ClearQdCrimes();
 +		return;
 +	}
@@ -940,6 +954,18 @@ index 65bc84d..7ef9a50 100644
  	for(int i = 0; i < ARRAY_SIZE(m_aCrimes); i++) {
  
  		CCrimeBeingQd &crime = m_aCrimes[i];
+diff --git a/src/core/Wanted.h b/src/core/Wanted.h
+index 6f81b82..63885e3 100644
+--- a/src/core/Wanted.h
++++ b/src/core/Wanted.h
+@@ -58,6 +58,7 @@ public:
+ 	void Suspend();
+ 
+ 	bool IsIgnored(void) { return m_bIgnoredByCops || m_bIgnoredByEveryone; }
++	bool VCModNeverWanted(void);
+ 
+ 	static int32 WorkOutPolicePresence(CVector posn, float radius);
+ 	static void SetMaximumWantedLevel(int32 level);
 diff --git a/src/core/World.cpp b/src/core/World.cpp
 index 549c2cc..9515f82 100644
 --- a/src/core/World.cpp
@@ -1923,10 +1949,10 @@ index 0000000..ae04c5d
 \ No newline at end of file
 diff --git a/src/extras/vcmodchase.cpp b/src/extras/vcmodchase.cpp
 new file mode 100644
-index 0000000..260116b
+index 0000000..1cfc3dd
 --- /dev/null
 +++ b/src/extras/vcmodchase.cpp
-@@ -0,0 +1,1552 @@
+@@ -0,0 +1,1540 @@
 +#include "common.h"
 +
 +#include "vcmodchaseinternal.h"
@@ -1939,7 +1965,6 @@ index 0000000..260116b
 +#include "Wanted.h"
 +#include "Pad.h"
 +#include "ControllerConfig.h"
-+#include "Hud.h"
 +#include "World.h"
 +#include "SpecialFX.h"
 +#include "Radar.h"
@@ -2341,17 +2366,6 @@ index 0000000..260116b
 +
 +static eVCModChaseState nVCModChaseState;
 +
-+void
-+VCModChaseNotice(const char *text)
-+{
-+	static wchar notice[96];
-+	int32 i;
-+	for (i = 0; i < (int32) ARRAY_SIZE(notice) - 1 && text[i] != '\0'; i++)
-+		notice[i] = (wchar) text[i];
-+	notice[i] = 0;
-+	CHud::SetHelpMessage(notice, false);
-+}
-+
 +const char *
 +VCModChaseUnitName(eVCModChaseUnit unit)
 +{
@@ -2403,7 +2417,7 @@ index 0000000..260116b
 +{
 +	if (ped == nil)
 +		return;
-+	fprintf(stderr, "VCMOD CHASE cleanup ped %p\n", (void*)ped);
++	VCMOD_DIAG("VCMOD CHASE cleanup ped %p\n", (void*)ped);
 +	CWorld::Remove(ped);
 +	CWorld::RemoveReferencesToDeletedObject(ped);
 +	delete ped;
@@ -2438,7 +2452,7 @@ index 0000000..260116b
 +{
 +	if (veh == nil)
 +		return;
-+	fprintf(stderr, "VCMOD CHASE cleanup car %p\n", (void*)veh);
++	VCMOD_DIAG("VCMOD CHASE cleanup car %p\n", (void*)veh);
 +	CPlayerPed *player = FindPlayerPed();
 +	if (player != nil && player->m_pMyVehicle == veh) {
 +		// never free a car the player is sitting in; let traffic own it instead
@@ -2468,7 +2482,7 @@ index 0000000..260116b
 +		CCarCtrl::CarDensityMultiplier = VCMOD_CHASE_CAR_DENSITY;
 +		CPopulation::PedDensityMultiplier = VCMOD_CHASE_PED_DENSITY;
 +		bVCModChaseDensitySet = true;
-+		fprintf(stderr, "VCMOD CHASE density traffic %.2f crowds %.2f\n",
++		VCMOD_DIAG("VCMOD CHASE density traffic %.2f crowds %.2f\n",
 +			VCMOD_CHASE_CAR_DENSITY, VCMOD_CHASE_PED_DENSITY);
 +	} else if (bVCModChaseDensitySet) {
 +		CCarCtrl::CarDensityMultiplier = fVCModChasePreCarDensity;
@@ -2693,7 +2707,7 @@ index 0000000..260116b
 +	bool noRoute = CCarCtrl::JoinCarWithRoadSystemGotoCoors(car, dest, false);
 +	car->AutoPilot.m_nCarMission = noRoute ? MISSION_GOTOCOORDS_STRAIGHT : MISSION_GOTOCOORDS;
 +	if (noRoute)
-+		fprintf(stderr, "VCMOD CHASE no route to %.1f %.1f %.1f\n", dest.x, dest.y, dest.z);
++		VCMOD_DIAG("VCMOD CHASE no route to %.1f %.1f %.1f\n", dest.x, dest.y, dest.z);
 +	// chase pace: full speed and weave around traffic, but keep trying not to hit
 +	// it; PLOUGH_THROUGH is what makes a car ram everything in its lane
 +	car->AutoPilot.m_nCruiseSpeed = 40;
@@ -2756,7 +2770,7 @@ index 0000000..260116b
 +	CStreaming::RequestModel(model, 0);
 +	CStreaming::LoadAllRequestedModels(false);
 +	if (!CStreaming::HasModelLoaded(model)) {
-+		VCModChaseNotice("chase: a mission car cannot be loaded");
++		VCModHudNotice("chase: a mission car cannot be loaded");
 +		return nil;
 +	}
 +
@@ -2888,8 +2902,8 @@ index 0000000..260116b
 +	leader->SetObjective(OBJECTIVE_LEAVE_CAR, pVCModChaseLeaderCar);
 +	nVCModChaseTableau = VCMOD_TABLEAU_LEAVE;
 +	nVCModChaseTableauUntil = now + VCMOD_CHASE_TABLEAU_LEAVE;
-+	VCModChaseNotice("chase: he stops to clean the place out");
-+	fprintf(stderr, "VCMOD CHASE tableau shop %.1f %.1f %.1f\n",
++	VCModHudNotice("chase: he stops to clean the place out");
++	VCMOD_DIAG("VCMOD CHASE tableau shop %.1f %.1f %.1f\n",
 +		vecVCModChaseShop.x, vecVCModChaseShop.y, vecVCModChaseShop.z);
 +	return true;
 +}
@@ -3024,7 +3038,7 @@ index 0000000..260116b
 +	uint32 now = CTimer::GetTimeInMilliseconds();
 +	if (bVCModChaseBoating) {
 +		if (now - nVCModChaseBoatAt > VCMOD_CHASE_BOAT_ESCAPE) {
-+			VCModChaseNotice("chase: he escaped by boat");
++			VCModHudNotice("chase: he escaped by boat");
 +			return true;
 +		}
 +		return false;
@@ -3034,7 +3048,7 @@ index 0000000..260116b
 +	else if (dist <= VCMOD_CHASE_LEASH)
 +		nVCModChaseAwaySince = 0;
 +	if (VCModChaseHasEscaped(dist, nVCModChaseAwaySince, now)) {
-+		VCModChaseNotice("chase: the leader got away");
++		VCModHudNotice("chase: the leader got away");
 +		return true;
 +	}
 +
@@ -3112,7 +3126,7 @@ index 0000000..260116b
 +				else if (now - nVCModChaseLeaderStillSince > VCMOD_CHASE_STALL_TIME) {
 +					nVCModChaseLeaderStillSince = 0;
 +					arrived = true;
-+					fprintf(stderr, "VCMOD CHASE leader stalled %.1f m short of beat %d\n", toBeat, nVCModChaseBeat);
++					VCMOD_DIAG("VCMOD CHASE leader stalled %.1f m short of beat %d\n", toBeat, nVCModChaseBeat);
 +				}
 +			} else {
 +				nVCModChaseLeaderStillSince = 0;
@@ -3136,7 +3150,7 @@ index 0000000..260116b
 +				VCModChaseSpawnBoat();
 +			return false;
 +		}
-+		VCModChaseNotice("chase: the leader skipped his stop");
++		VCModHudNotice("chase: the leader skipped his stop");
 +		nVCModChaseLeaderStillSince = 0;
 +		nVCModChaseBeat++;
 +	}
@@ -3163,7 +3177,7 @@ index 0000000..260116b
 +		CRadar::ChangeBlipColour(nVCModChaseLeaderBlip, RADAR_TRACE_RED);
 +		CRadar::ChangeBlipBrightness(nVCModChaseLeaderBlip, 1);
 +	}
-+	fprintf(stderr, "VCMOD CHASE leader blip %d handle %d\n",
++	VCMOD_DIAG("VCMOD CHASE leader blip %d handle %d\n",
 +		nVCModChaseLeaderBlip, nVCModChaseLeaderHandle);
 +}
 +
@@ -3178,12 +3192,12 @@ index 0000000..260116b
 +	CStreaming::LoadAllRequestedModels(false);
 +	if (!CStreaming::HasModelLoaded(VCMOD_CHASE_LEADER_MODEL) ||
 +	    !CStreaming::HasModelLoaded(VCMOD_CHASE_LEADER_CAR)) {
-+		VCModChaseNotice("chase: the leader cannot be loaded");
++		VCModHudNotice("chase: the leader cannot be loaded");
 +		return false;
 +	}
 +
 +	if (!VCModChaseBuildRoute()) {
-+		fprintf(stderr, "VCMOD CHASE route fallback\n");
++		VCMOD_DIAG("VCMOD CHASE route fallback\n");
 +		vecVCModChaseLeaderSpawn = at;
 +		vecVCModChaseBeat[0] = vecVCModChaseBeatAnchor[0];
 +		vecVCModChaseBeat[1] = vecVCModChaseBeatAnchor[1];
@@ -3199,7 +3213,7 @@ index 0000000..260116b
 +	// the origin means the route walk never found a road; never put him there
 +	if (pos.Magnitude2D() < 1.0f)
 +		pos = at;
-+	fprintf(stderr, "VCMOD CHASE route spawn %.1f %.1f %.1f beat0 %.1f %.1f %.1f beat1 %.1f %.1f %.1f beats %d\n",
++	VCMOD_DIAG("VCMOD CHASE route spawn %.1f %.1f %.1f beat0 %.1f %.1f %.1f beat1 %.1f %.1f %.1f beats %d\n",
 +		pos.x, pos.y, pos.z,
 +		vecVCModChaseBeat[0].x, vecVCModChaseBeat[0].y, vecVCModChaseBeat[0].z,
 +		vecVCModChaseBeat[1].x, vecVCModChaseBeat[1].y, vecVCModChaseBeat[1].z,
@@ -3207,7 +3221,7 @@ index 0000000..260116b
 +
 +	CAutomobile *car = new CAutomobile(VCMOD_CHASE_LEADER_CAR, RANDOM_VEHICLE);
 +	if (car == nil) {
-+		VCModChaseNotice("chase: no room for the leader's car");
++		VCModHudNotice("chase: no room for the leader's car");
 +		return false;
 +	}
 +	car->m_nDoorLock = CARLOCK_UNLOCKED;
@@ -3222,7 +3236,7 @@ index 0000000..260116b
 +	if (car->SetUpDriver() == nil) {
 +		CWorld::Remove(car);
 +		delete car;
-+		VCModChaseNotice("chase: nobody to drive the leader's car");
++		VCModHudNotice("chase: nobody to drive the leader's car");
 +		return false;
 +	}
 +	// SetUpDriver refuses cars that already have mission ownership
@@ -3273,20 +3287,20 @@ index 0000000..260116b
 +	nVCModChaseCrewLostAt = 0;
 +	nVCModChaseCrewArriveAt = 0;
 +	nVCModChaseBackupAt = 0;
-+	fprintf(stderr, "VCMOD CHASE leader %p car %p crime %s threat %d crew %d+%d squad %d+%d\n",
++	VCMOD_DIAG("VCMOD CHASE leader %p car %p crime %s threat %d crew %d+%d squad %d+%d\n",
 +		(void*)leader, (void*)car, VCModChaseCrimeName(nVCModChaseCrime), crimeThreat,
 +		poolCrewActive, poolCrewReserve, poolSquadActive, poolSquadReserve);
 +	char text[96];
 +	snprintf(text, sizeof(text), "chase: %s, threat %d. Drive the team after him",
 +		VCModChaseCrimeDispatch(nVCModChaseCrime), crimeThreat);
-+	VCModChaseNotice(text);
++	VCModHudNotice(text);
 +	return true;
 +}
 +
 +void
 +VCModChaseEnd(void)
 +{
-+	fprintf(stderr, "VCMOD CHASE end\n");
++	VCMOD_DIAG("VCMOD CHASE end\n");
 +	nVCModChaseTier = 0;
 +	nVCModChaseVariant = 0;
 +	bVCModChaseUniformWanted = false;
@@ -3322,17 +3336,17 @@ index 0000000..260116b
 +
 +	if (!VCModKeyCapturing() && KEYJUSTDOWN(aVCModKeys[VCKEY_CAPTURE])) {
 +		CVector here = player->GetPosition();
-+		fprintf(stderr, "VCMOD CHASE spot %.2f %.2f %.2f\n", here.x, here.y, here.z);
-+		VCModChaseNotice("chase: spot logged");
++		VCMOD_DIAG("VCMOD CHASE spot %.2f %.2f %.2f\n", here.x, here.y, here.z);
++		VCModHudNotice("chase: spot logged");
 +	}
 +
 +	if (!VCModKeyCapturing() && KEYJUSTDOWN(aVCModKeys[VCKEY_SPOT])) {
 +		if (player->m_pMyVehicle != nil) {
-+			VCModChaseNotice("chase: leave the vehicle to teleport");
++			VCModHudNotice("chase: leave the vehicle to teleport");
 +		} else {
 +			player->Teleport(vecVCModChaseTeleport);
-+			VCModChaseNotice("chase: teleported to VCPD HQ");
-+			fprintf(stderr, "VCMOD CHASE teleport %.2f %.2f %.2f\n",
++			VCModHudNotice("chase: teleported to VCPD HQ");
++			VCMOD_DIAG("VCMOD CHASE teleport %.2f %.2f %.2f\n",
 +				vecVCModChaseTeleport.x, vecVCModChaseTeleport.y, vecVCModChaseTeleport.z);
 +		}
 +	}
@@ -3354,7 +3368,7 @@ index 0000000..260116b
 +		    bVCModChaseSpotSet &&
 +		    (FindPlayerCoors() - vecVCModChaseStation).Magnitude() < VCMOD_CHASE_ENTER_NEAR) {
 +			VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_ENTER_MARKER);
-+			VCModChaseNotice("chase: 1 COP, 2 SWAT, 3 VICE (tap to cycle), 4 FBI, 5 ARMY. ENTER to confirm");
++			VCModHudNotice("chase: 1 COP, 2 SWAT, 3 VICE (tap to cycle), 4 FBI, 5 ARMY. ENTER to confirm");
 +		}
 +		break;
 +	case VCMOD_CHASE_TIER_SELECT:
@@ -3376,35 +3390,35 @@ index 0000000..260116b
 +			else
 +				snprintf(text, sizeof(text), "chase: %s selected, threat %d. ENTER to confirm",
 +					VCModChaseUnitName(VCModChaseUnitForTier(tier)), threat);
-+			VCModChaseNotice(text);
++			VCModHudNotice(text);
 +		}
 +		if (bVCModChaseUniformWanted)
 +			VCModChaseApplyUniform();
 +		if (KEYJUSTDOWN(rsENTER)) {
 +			if (nVCModChaseTier == 0) {
-+				VCModChaseNotice("chase: pick a tier first");
++				VCModHudNotice("chase: pick a tier first");
 +			} else {
 +				VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_CONFIRM);
 +				eVCModChaseCrime crime = VCModChaseCrimeForTier(nVCModChaseTier);
 +				char brief[96];
 +				snprintf(brief, sizeof(brief), "chase: %s, threat %d. ENTER to start, BACKSPACE to cancel",
 +					VCModChaseCrimeDispatch(crime), VCModChaseCrimeThreat(crime));
-+				VCModChaseNotice(brief);
++				VCModHudNotice(brief);
 +			}
 +		} else if (KEYJUSTDOWN(rsBACKSP)) {
 +			VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_CANCEL);
 +			VCModChaseEnd();
-+			VCModChaseNotice("chase: cancelled");
++			VCModHudNotice("chase: cancelled");
 +		}
 +		break;
 +	case VCMOD_CHASE_BRIEFING:
 +		if (KEYJUSTDOWN(rsENTER)) {
 +			VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_CONFIRM);
-+			VCModChaseNotice("chase: the leader is fleeing. BACKSPACE to end");
++			VCModHudNotice("chase: the leader is fleeing. BACKSPACE to end");
 +		} else if (KEYJUSTDOWN(rsBACKSP)) {
 +			VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_CANCEL);
 +			VCModChaseEnd();
-+			VCModChaseNotice("chase: cancelled");
++			VCModHudNotice("chase: cancelled");
 +		}
 +		break;
 +	case VCMOD_CHASE_RUNNING:
@@ -3420,10 +3434,10 @@ index 0000000..260116b
 +		if (leader == nil || leader->DyingOrDead()) {
 +			// a driver who dies is destroyed by the engine inside the same world
 +			// update, so a nil handle here means he is already gone
-+			fprintf(stderr, "VCMOD CHASE leader lost %s\n", leader == nil ? "gone" : "dead");
++			VCMOD_DIAG("VCMOD CHASE leader lost %s\n", leader == nil ? "gone" : "dead");
 +			VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_FINISH);
 +			VCModChaseEnd();
-+			VCModChaseNotice("chase: the leader is down");
++			VCModHudNotice("chase: the leader is down");
 +			break;
 +		}
 +		VCModChaseBlipLeader();
@@ -3444,7 +3458,7 @@ index 0000000..260116b
 +				if (!bVCModChaseBoarding || now >= nVCModChaseGoTime) {
 +					bVCModChaseGo = true;
 +					VCModChaseDriveTo(VCModChaseBeatCoors(0));
-+					VCModChaseNotice("chase: he is moving");
++					VCModHudNotice("chase: he is moving");
 +				}
 +			} else if (VCModChaseTickLeader(player)) {
 +				VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_FINISH);
@@ -3455,7 +3469,7 @@ index 0000000..260116b
 +		if (KEYJUSTDOWN(rsBACKSP)) {
 +			VCModChaseNextState(&nVCModChaseState, VCMOD_CHASE_EV_FINISH);
 +			VCModChaseEnd();
-+			VCModChaseNotice("chase: ended");
++			VCModHudNotice("chase: ended");
 +		}
 +		break;
 +	}
@@ -3553,10 +3567,10 @@ index 0000000..7387a55
 +#endif
 diff --git a/src/extras/vcmodchaseair.cpp b/src/extras/vcmodchaseair.cpp
 new file mode 100644
-index 0000000..0fcd66b
+index 0000000..01f21c3
 --- /dev/null
 +++ b/src/extras/vcmodchaseair.cpp
-@@ -0,0 +1,1019 @@
+@@ -0,0 +1,1018 @@
 +#include "common.h"
 +
 +#include "vcmodchaseinternal.h"
@@ -3569,7 +3583,6 @@ index 0000000..0fcd66b
 +#include "Wanted.h"
 +#include "Pad.h"
 +#include "ControllerConfig.h"
-+#include "Hud.h"
 +#include "World.h"
 +#include "SpecialFX.h"
 +#include "Radar.h"
@@ -3868,7 +3881,7 @@ index 0000000..0fcd66b
 +	}
 +	pVCModChaseHeli = heli;
 +	vecVCModChaseHeliHold = pos;
-+	fprintf(stderr, "VCMOD CHASE heli %p model %d retail seats %d seats %d pilot %p at %.1f %.1f %.1f\n",
++	VCMOD_DIAG("VCMOD CHASE heli %p model %d retail seats %d seats %d pilot %p at %.1f %.1f %.1f\n",
 +		(void*)heli, heliModel, stockSeats, heli->m_nNumMaxPassengers, (void*)pilot, pos.x, pos.y, pos.z);
 +	return true;
 +}
@@ -3931,7 +3944,7 @@ index 0000000..0fcd66b
 +	VCModChasePoolForTier(nVCModChaseTier, &poolActive, &poolReserve, 0, 0);
 +	nVCModChaseSquadReserve = poolReserve;
 +	nVCModChaseSquadLostAt = 0;
-+	fprintf(stderr, "VCMOD CHASE air squad %d reserve %d from %.1f %.1f running to %.1f %.1f\n",
++	VCMOD_DIAG("VCMOD CHASE air squad %d reserve %d from %.1f %.1f running to %.1f %.1f\n",
 +		made, poolReserve, vecVCModChaseSquadDoor.x, vecVCModChaseSquadDoor.y,
 +		vecVCModChaseAirSpot.x, vecVCModChaseAirSpot.y);
 +}
@@ -3962,7 +3975,7 @@ index 0000000..0fcd66b
 +	ped->WarpPedIntoCar(pVCModChaseLeaderCar);
 +	nVCModChaseCrewHandle[0] = CPools::GetPedPool()->GetIndex(ped);
 +	bVCModChaseCrewOut = true;
-+	fprintf(stderr, "VCMOD CHASE crew aboard %p\n", (void*)ped);
++	VCMOD_DIAG("VCMOD CHASE crew aboard %p\n", (void*)ped);
 +}
 +
 +void
@@ -3987,8 +4000,8 @@ index 0000000..0fcd66b
 +	vecVCModChaseAirSpot = node >= 0 ? ThePaths.m_pathNodes[node].GetPosition() : vecVCModChaseSquadDoor;
 +	if (!VCModChaseSpawnHeli())
 +		return;
-+	VCModChaseNotice("chase: blue marker for the car, yellow under the heli");
-+	fprintf(stderr, "VCMOD CHASE approach markers ground %.1f %.1f %.1f air %.1f %.1f %.1f\n",
++	VCModHudNotice("chase: blue marker for the car, yellow under the heli");
++	VCMOD_DIAG("VCMOD CHASE approach markers ground %.1f %.1f %.1f air %.1f %.1f %.1f\n",
 +		vecVCModChaseSquadDoor.x, vecVCModChaseSquadDoor.y, vecVCModChaseSquadDoor.z,
 +		vecVCModChaseAirSpot.x, vecVCModChaseAirSpot.y, vecVCModChaseAirSpot.z);
 +}
@@ -4010,9 +4023,9 @@ index 0000000..0fcd66b
 +	fVCModChaseRopePos = VCMOD_CHASE_ROPE_BOTTOM;
 +	VCModChaseSetPedOnRope(player);
 +	nVCModChaseAir = VCMOD_AIR_CLIMB;
-+	VCModChaseNotice("chase: on the ropes, climb");
++	VCModHudNotice("chase: on the ropes, climb");
 +	CVector here = player->GetPosition();
-+	fprintf(stderr, "VCMOD CHASE air rally done, player at %.1f %.1f %.1f\n", here.x, here.y, here.z);
++	VCMOD_DIAG("VCMOD CHASE air rally done, player at %.1f %.1f %.1f\n", here.x, here.y, here.z);
 +}
 +
 +void
@@ -4057,7 +4070,7 @@ index 0000000..0fcd66b
 +	VCModChaseClearApproachBlips();
 +	uint32 now = CTimer::GetTimeInMilliseconds();
 +	if (ground <= VCMOD_CHASE_AIR_ENTER_NEAR) {
-+		fprintf(stderr, "VCMOD CHASE approach ground\n");
++		VCMOD_DIAG("VCMOD CHASE approach ground\n");
 +		VCModChaseClearSquad();	// the air team waiting at the heli is stood down
 +		VCModChaseSpawnSquad();
 +		VCModChaseRemoveHeli();
@@ -4066,11 +4079,11 @@ index 0000000..0fcd66b
 +		return;
 +	}
 +
-+	fprintf(stderr, "VCMOD CHASE approach air\n");
++	VCMOD_DIAG("VCMOD CHASE approach air\n");
 +	if (nVCModChaseSquadCount == 0)
 +		VCModChaseSpawnAirSquad();
 +	if (nVCModChaseSquadCount == 0) {
-+		VCModChaseNotice("chase: the air team is missing, using the car");
++		VCModHudNotice("chase: the air team is missing, using the car");
 +		VCModChaseSpawnSquad();
 +		VCModChaseRemoveHeli();
 +		nVCModChaseSetup = VCMOD_CHASE_SETUP_READY;
@@ -4094,8 +4107,8 @@ index 0000000..0fcd66b
 +	nVCModChaseAirAt = now + VCMOD_CHASE_RALLY_MAX;
 +	for (int32 i = 0; i < 3; i++)
 +		CRopes::RegisterRope(nVCModChaseRopeId[i], VCModChaseRopeTop(i), false);
-+	VCModChaseNotice("chase: get on the ropes");
-+	fprintf(stderr, "VCMOD CHASE air rally %d men, %u ms\n", nVCModChaseSquadCount, VCMOD_CHASE_RALLY_MAX);
++	VCModHudNotice("chase: get on the ropes");
++	VCMOD_DIAG("VCMOD CHASE air rally %d men, %u ms\n", nVCModChaseSquadCount, VCMOD_CHASE_RALLY_MAX);
 +}
 +
 +// Climb done: the team rides the rest of the way. A passenger player must not
@@ -4130,8 +4143,8 @@ index 0000000..0fcd66b
 +	if (pVCModChaseLeaderCar != nil)
 +		VCModChaseDriveCar(pVCModChaseLeaderCar, vecVCModChaseAirEscape);
 +	bVCModChaseGo = true;
-+	VCModChaseNotice("chase: stay on him, the guns are hot");
-+	fprintf(stderr, "VCMOD CHASE air seated %d chasing to %.1f %.1f %.1f\n", seated,
++	VCModHudNotice("chase: stay on him, the guns are hot");
++	VCMOD_DIAG("VCMOD CHASE air seated %d chasing to %.1f %.1f %.1f\n", seated,
 +		vecVCModChaseAirEscape.x, vecVCModChaseAirEscape.y, vecVCModChaseAirEscape.z);
 +}
 +
@@ -4389,8 +4402,8 @@ index 0000000..0fcd66b
 +	nVCModChaseAirAt = 0;	// armed once the hull is over the station
 +	nVCModChaseAirFollowAt = 0;
 +	bVCModChaseHeliHeld = false;
-+	VCModChaseNotice("chase: he is going down");
-+	fprintf(stderr, "VCMOD CHASE air crash health %.0f heli %.0f station %.1f %.1f %.1f\n",
++	VCModHudNotice("chase: he is going down");
++	VCMOD_DIAG("VCMOD CHASE air crash health %.0f heli %.0f station %.1f %.1f %.1f\n",
 +		car->m_fHealth, pVCModChaseHeli->m_fHealth,
 +		vecVCModChaseDropStation.x, vecVCModChaseDropStation.y, vecVCModChaseDropStation.z);
 +}
@@ -4421,8 +4434,8 @@ index 0000000..0fcd66b
 +	}
 +	fVCModChaseRopePos = 0.0f;
 +	nVCModChaseAir = VCMOD_AIR_DROP;
-+	VCModChaseNotice("chase: down the ropes");
-+	fprintf(stderr, "VCMOD CHASE air drop at %.1f %.1f %.1f\n",
++	VCModHudNotice("chase: down the ropes");
++	VCMOD_DIAG("VCMOD CHASE air drop at %.1f %.1f %.1f\n",
 +		vecVCModChaseHeliHold.x, vecVCModChaseHeliHold.y, vecVCModChaseHeliHold.z);
 +}
 +
@@ -4451,8 +4464,8 @@ index 0000000..0fcd66b
 +	bVCModChaseCornered = true;
 +	nVCModChaseSetup = VCMOD_CHASE_SETUP_READY;
 +	bVCModChaseGo = true;
-+	VCModChaseNotice("chase: take him down");
-+	fprintf(stderr, "VCMOD CHASE air down, stand at %.1f %.1f %.1f\n",
++	VCModHudNotice("chase: take him down");
++	VCMOD_DIAG("VCMOD CHASE air down, stand at %.1f %.1f %.1f\n",
 +		player->GetPosition().x, player->GetPosition().y, player->GetPosition().z);
 +}
 +
@@ -4534,7 +4547,7 @@ index 0000000..0fcd66b
 +		if (!bVCModChaseHeliHeld) {
 +			VCModChaseCaptureHeliHeading();
 +			bVCModChaseHeliHeld = true;
-+			fprintf(stderr, "VCMOD CHASE air station held, heading %.2f %.2f\n",
++			VCMOD_DIAG("VCMOD CHASE air station held, heading %.2f %.2f\n",
 +				vecVCModChaseHeliFwd.x, vecVCModChaseHeliFwd.y);
 +		}
 +		VCModChasePinHeli();
@@ -4578,15 +4591,17 @@ index 0000000..0fcd66b
 +}
 diff --git a/src/extras/vcmodchaseinternal.h b/src/extras/vcmodchaseinternal.h
 new file mode 100644
-index 0000000..ae35fb0
+index 0000000..9a1f9b9
 --- /dev/null
 +++ b/src/extras/vcmodchaseinternal.h
-@@ -0,0 +1,432 @@
+@@ -0,0 +1,433 @@
 +#ifndef __VCMODCHASEINTERNAL_H__
 +#define __VCMODCHASEINTERNAL_H__
 +
 +#include "common.h"
 +#include "vcmodchase.h"
++#include "vcmodhud.h"
++#include "vcmoddiag.h"
 +
 +#include "Ped.h"
 +#include "PlayerPed.h"
@@ -4912,7 +4927,6 @@ index 0000000..ae35fb0
 +bool VCModChaseReplaceDue(int32 alive, int32 cap, int32 reserve, uint32 lostSince, uint32 delay, uint32 now);
 +bool VCModChaseRestoreDue(bool pending, bool inControl, bool playerExists);
 +bool VCModChaseShouldShowMarker(eVCModChaseState state, bool spotSet);
-+void VCModChaseNotice(const char *text);
 +const char *VCModChaseUnitName(eVCModChaseUnit unit);
 +void VCModChaseApplyUniform(void);
 +void VCModChaseRestoreUniform(void);
@@ -5016,10 +5030,10 @@ index 0000000..ae35fb0
 +#endif
 diff --git a/src/extras/vcmodchasesquad.cpp b/src/extras/vcmodchasesquad.cpp
 new file mode 100644
-index 0000000..95305c7
+index 0000000..e68dad5
 --- /dev/null
 +++ b/src/extras/vcmodchasesquad.cpp
-@@ -0,0 +1,948 @@
+@@ -0,0 +1,947 @@
 +#include "common.h"
 +
 +#include "vcmodchaseinternal.h"
@@ -5032,7 +5046,6 @@ index 0000000..95305c7
 +#include "Wanted.h"
 +#include "Pad.h"
 +#include "ControllerConfig.h"
-+#include "Hud.h"
 +#include "World.h"
 +#include "SpecialFX.h"
 +#include "Radar.h"
@@ -5269,7 +5282,7 @@ index 0000000..95305c7
 +	nVCModChaseSquadLostAt = 0;
 +	bVCModChaseBoarding = made > 0;
 +	nVCModChaseBoardUntil = CTimer::GetTimeInMilliseconds() + 30000;
-+	fprintf(stderr, "VCMOD CHASE squad car %p seats %d crew %d reserve %d home %.1f %.1f %.1f\n",
++	VCMOD_DIAG("VCMOD CHASE squad car %p seats %d crew %d reserve %d home %.1f %.1f %.1f\n",
 +		(void*)pVCModChaseSquadCar, seats, made, poolReserve, home.x, home.y, home.z);
 +}
 +
@@ -5323,10 +5336,10 @@ index 0000000..95305c7
 +		return;
 +
 +	bVCModChaseBoarding = false;
-+	fprintf(stderr, "VCMOD CHASE board done driver %s seated %d alive %d\n",
++	VCMOD_DIAG("VCMOD CHASE board done driver %s seated %d alive %d\n",
 +		car->pDriver == player ? "player" : "none", seated, alive);
 +	if (car->pDriver == player)
-+		VCModChaseNotice("chase: you have the wheel, follow him");
++		VCModHudNotice("chase: you have the wheel, follow him");
 +}
 +
 +// ---- Force pools (design 6.7) --------------------------------------------
@@ -5388,7 +5401,7 @@ index 0000000..95305c7
 +	char text[96];
 +	snprintf(text, sizeof(text), "chase: %d squad in reserve, %d crew in reserve",
 +		nVCModChaseSquadReserve, nVCModChaseCrewReserve);
-+	VCModChaseNotice(text);
++	VCModHudNotice(text);
 +}
 +
 +// One replacement for a dead squad slot: a man at the wheel of a transport car
@@ -5446,7 +5459,7 @@ index 0000000..95305c7
 +	if (nVCModChaseBackupCars < VCMOD_CHASE_SQUAD_MAX)
 +		pVCModChaseBackupCar[nVCModChaseBackupCars++] = car;
 +	nVCModChaseSquadReserve--;
-+	fprintf(stderr, "VCMOD CHASE squad backup slot %d at %.1f %.1f reserve %d\n",
++	VCMOD_DIAG("VCMOD CHASE squad backup slot %d at %.1f %.1f reserve %d\n",
 +		slot, at.x, at.y, nVCModChaseSquadReserve);
 +	return true;
 +}
@@ -5511,7 +5524,7 @@ index 0000000..95305c7
 +	CVehicle *playerVeh = player != nil && player->bInVehicle ? player->m_pMyVehicle : nil;
 +	VCModChasePursueCar(car, playerVeh, player != nil ? player->GetPosition()
 +	                                                  : pVCModChaseLeaderCar->GetPosition());
-+	fprintf(stderr, "VCMOD CHASE crew car %p carrying %d at %.1f %.1f reserve %d\n",
++	VCMOD_DIAG("VCMOD CHASE crew car %p carrying %d at %.1f %.1f reserve %d\n",
 +		(void*)car, made, at.x, at.y, nVCModChaseCrewReserve);
 +	return made;
 +}
@@ -5550,7 +5563,7 @@ index 0000000..95305c7
 +		bailed = true;
 +	}
 +	if (bailed)
-+		fprintf(stderr, "VCMOD CHASE %s out at %.1f %.1f\n",
++		VCMOD_DIAG("VCMOD CHASE %s out at %.1f %.1f\n",
 +			crew ? "crew" : "squad backup", car->GetPosition().x, car->GetPosition().y);
 +}
 +
@@ -5571,7 +5584,7 @@ index 0000000..95305c7
 +				nVCModChaseSquadLostAt = 0;
 +			} else if (nVCModChaseSquadLostAt == 0) {
 +				nVCModChaseSquadLostAt = now;
-+				fprintf(stderr, "VCMOD CHASE squad loss %d/%d reserve %d\n",
++				VCMOD_DIAG("VCMOD CHASE squad loss %d/%d reserve %d\n",
 +					squadAlive, nVCModChaseSquadCount, nVCModChaseSquadReserve);
 +			} else if (VCModChaseReplaceDue(squadAlive, nVCModChaseSquadCount, nVCModChaseSquadReserve,
 +			                               nVCModChaseSquadLostAt, VCMOD_CHASE_SQUAD_REPLACE, now)) {
@@ -5581,7 +5594,7 @@ index 0000000..95305c7
 +			}
 +		} else if (squadAlive < nVCModChaseSquadCount && !bVCModChaseSquadSpent) {
 +			bVCModChaseSquadSpent = true;
-+			VCModChaseNotice("chase: the squad has no reserves left");
++			VCModHudNotice("chase: the squad has no reserves left");
 +		}
 +	}
 +
@@ -5592,7 +5605,7 @@ index 0000000..95305c7
 +				nVCModChaseCrewLostAt = 0;
 +			} else if (nVCModChaseCrewLostAt == 0) {
 +				nVCModChaseCrewLostAt = now;
-+				fprintf(stderr, "VCMOD CHASE crew loss %d/%d reserve %d\n",
++				VCMOD_DIAG("VCMOD CHASE crew loss %d/%d reserve %d\n",
 +					crewAlive, nVCModChaseCrewCap, nVCModChaseCrewReserve);
 +			} else if (VCModChaseReplaceDue(crewAlive, nVCModChaseCrewCap, nVCModChaseCrewReserve,
 +			                                nVCModChaseCrewLostAt, VCMOD_CHASE_CREW_REPLACE, now)) {
@@ -5602,7 +5615,7 @@ index 0000000..95305c7
 +			}
 +		} else if (crewAlive < nVCModChaseCrewCap && !bVCModChaseCrewSpent) {
 +			bVCModChaseCrewSpent = true;
-+			VCModChaseNotice("chase: the crew has no reserves left");
++			VCModHudNotice("chase: the crew has no reserves left");
 +		}
 +	}
 +
@@ -5666,7 +5679,7 @@ index 0000000..95305c7
 +		uint32 now = CTimer::GetTimeInMilliseconds();
 +		if (now - nVCModChaseCrewLogAt > 1000) {
 +			nVCModChaseCrewLogAt = now;
-+			fprintf(stderr, "VCMOD CHASE crew model still streaming\n");
++			VCMOD_DIAG("VCMOD CHASE crew model still streaming\n");
 +		}
 +		return;
 +	}
@@ -5679,7 +5692,7 @@ index 0000000..95305c7
 +		pos = pVCModChaseLeaderCar->GetPosition() + pVCModChaseLeaderCar->GetRight() * 4.0f;
 +	CPed *ped = CPopulation::AddPed(PEDTYPE_CIVMALE, VCMOD_CHASE_ACCOMPLICE_MODEL, pos);
 +	if (ped == nil) {
-+		fprintf(stderr, "VCMOD CHASE pickup spawn failed\n");
++		VCMOD_DIAG("VCMOD CHASE pickup spawn failed\n");
 +		return;
 +	}
 +	ped->CharCreatedBy = MISSION_CHAR;
@@ -5695,7 +5708,7 @@ index 0000000..95305c7
 +		ped->SetObjective(OBJECTIVE_ENTER_CAR_AS_PASSENGER, pVCModChaseLeaderCar);
 +	nVCModChaseCrewHandle[0] = CPools::GetPedPool()->GetIndex(ped);
 +	bVCModChaseCrewOut = true;
-+	fprintf(stderr, "VCMOD CHASE pickup %p at %.1f %.1f %.1f cornered %d\n",
++	VCMOD_DIAG("VCMOD CHASE pickup %p at %.1f %.1f %.1f cornered %d\n",
 +		(void*)ped, pos.x, pos.y, pos.z, bVCModChaseCornered);
 +}
 +
@@ -5771,7 +5784,7 @@ index 0000000..95305c7
 +		    !(playerOut && gap < VCMOD_CHASE_DISMOUNT_LEASH))
 +			return;
 +		bVCModChaseSquadDismounted = true;
-+		fprintf(stderr, "VCMOD CHASE squad dismount gap %.1f\n", gap);
++		VCMOD_DIAG("VCMOD CHASE squad dismount gap %.1f\n", gap);
 +	}
 +
 +	for (int32 i = 0; i < nVCModChaseSquadCount; i++) {
@@ -5868,8 +5881,8 @@ index 0000000..95305c7
 +{
 +	if (!bVCModChaseCornered) {
 +		bVCModChaseCornered = true;
-+		VCModChaseNotice("chase: he is cornered");
-+		fprintf(stderr, "VCMOD CHASE cornered at %.1f %.1f %.1f\n",
++		VCModHudNotice("chase: he is cornered");
++		VCMOD_DIAG("VCMOD CHASE cornered at %.1f %.1f %.1f\n",
 +			leader->GetPosition().x, leader->GetPosition().y, leader->GetPosition().z);
 +	}
 +	CVehicle *car = leader->m_pMyVehicle;
@@ -5953,7 +5966,7 @@ index 0000000..95305c7
 +		CVector spot;
 +		if (car != nil && VCModChasePullSpot(car, &spot)) {
 +			vecVCModChasePullSpot = spot;
-+			fprintf(stderr, "VCMOD CHASE pull over to %.1f %.1f %.1f\n", spot.x, spot.y, spot.z);
++			VCMOD_DIAG("VCMOD CHASE pull over to %.1f %.1f %.1f\n", spot.x, spot.y, spot.z);
 +			VCModChaseDriveCar(car, spot);
 +			car->AutoPilot.m_nCruiseSpeed = VCMOD_CHASE_PULL_SPEED;
 +			car->AutoPilot.m_fMaxTrafficSpeed = VCMOD_CHASE_PULL_SPEED;
@@ -5970,17 +5983,17 @@ index 0000000..95305c7
 +}
 diff --git a/src/extras/vcmodcombat.cpp b/src/extras/vcmodcombat.cpp
 new file mode 100644
-index 0000000..9c0f0e9
+index 0000000..93bea06
 --- /dev/null
 +++ b/src/extras/vcmodcombat.cpp
-@@ -0,0 +1,493 @@
+@@ -0,0 +1,556 @@
 +#include "common.h"
 +
 +#include <stdio.h>
 +
 +#include "vcmodcombat.h"
 +#include "vcmodnpc.h"
-+#include "vcmodride.h"
++#include "vcmodhud.h"
 +#include "vcmodsit.h"
 +#include "vcmodstreet.h"
 +
@@ -5989,6 +6002,7 @@ index 0000000..9c0f0e9
 +#include "AnimManager.h"
 +#include "General.h"
 +#include "Ped.h"
++#include "PlayerInfo.h"
 +#include "PlayerPed.h"
 +#include "RpAnimBlend.h"
 +#include "Timer.h"
@@ -6187,6 +6201,14 @@ index 0000000..9c0f0e9
 +	return bVCModAimRaising;
 +}
 +
++// the trigger is dead while the gun is climbing, so the engine asks instead of
++// reading the raise state
++bool
++VCModPlayerAttackAllowed(void)
++{
++	return !VCModAimRaising();
++}
++
 +void
 +VCModAimRaiseHoldLanded(void)
 +{
@@ -6233,6 +6255,55 @@ index 0000000..9c0f0e9
 +	return bVCModAimWalk && ped->IsPlayer() && !ped->bIsDucking
 +		&& !VCModCopTwoHandPose(ped, info)
 +		&& !info->IsFlagSet(WEAPONFLAG_CANAIM_WITHARM);
++}
++
++// The player's per-frame accuracy, the value PlayerPed used to write into
++// itself: 95 for a gun weapon.dat marks CANAIM, 100 otherwise, and 60 with DOOM
++// AIM so a locked-on shot sprays like an NPC's instead of landing dead centre.
++void
++VCModPlayerWepAccuracy(CPlayerPed *player, CWeaponInfo *info)
++{
++	if (info->IsFlagSet(WEAPONFLAG_CANAIM))
++		player->m_wepAccuracy = 95;
++	else
++		player->m_wepAccuracy = 100;
++	// what CPed's constructor hands every ped. Their locked-on shots spray, and the
++	// first round of a burst is no more accurate than the last.
++	if (bVCModPlayerDoomAim)
++		player->m_wepAccuracy = 60;
++}
++
++// The ramp is the player's trigger feel: the first round of a burst is dead-on
++// and sustained fire wanders. It is driven off m_fAttackButtonCounter, which only
++// ProcessPlayerWeapon maintains; NPC mode skips that function, so the counter
++// only ever grows and the cop's aim collapsed the longer a hunt ran. The AI has
++// no trigger to model, so it fires like the ped it is: off the accuracy value.
++bool
++VCModPlayerAimRamp(CEntity *shooter)
++{
++	return shooter == FindPlayerPed() && !bVCModPlayerDoomAim && !VCModNpcCombatActive();
++}
++
++// The post-burst aim hold belongs to the trigger: the player keeps the pose parked
++// while the button is down. NPC mode has no button, and a ped's burst end drops
++// the pose (ClearAimFlag) so the AI can lower the gun, run in, or re-raise on the
++// next beat; keeping the hold made the cop's gun never come down during a hunt.
++bool
++VCModPlayerAimPoseHold(CPed *ped)
++{
++	return ped->IsPlayer() && !VCModNpcCombatActive();
++}
++
++// NO SCOPED AIM: the scope camera owns these weapons' first-person entry, and the
++// camera weapon keeps it either way.
++bool
++VCModScopeSkip(CPlayerPed *player)
++{
++	eWeaponType weapon = player->GetWeapon()->m_eWeaponType;
++	return bVCModNoScopedAim && weapon != WEAPONTYPE_CAMERA &&
++		(weapon == WEAPONTYPE_ROCKETLAUNCHER || weapon == WEAPONTYPE_SNIPERRIFLE ||
++		 weapon == WEAPONTYPE_LASERSCOPE || weapon == WEAPONTYPE_M4 ||
++		 weapon == WEAPONTYPE_RUGER || weapon == WEAPONTYPE_M60);
 +}
 +
 +bool
@@ -6299,6 +6370,11 @@ index 0000000..9c0f0e9
 +bool
 +VCModCombatArmRecovery(CPed *ped, CWeaponInfo *info, CAnimBlendAssociation *assoc, float loopEnd)
 +{
++	// NPC mode fires on the AI's beat, not a trigger: a ped holds the aim pose
++	// between beats and never plays the player's lowering tail, so taking the
++	// recovery here made the cop lower the gun after every burst
++	if (VCModNpcCombatActive())
++		return false;
 +	if (VCModCopTwoHandPose(ped, info)) {
 +		// leave the clip running: the lowering tail is the recovery
 +		bVCModCopRecovering = true;
@@ -6377,7 +6453,7 @@ index 0000000..9c0f0e9
 +		if (lastAt == 0 || now - lastAt > 5000) {
 +			lastAt = now;
 +			fprintf(stderr, "VCMOD spin kick: fists only\n");
-+			VCModRideNotice("spin kick: select fists");
++			VCModHudNotice("spin kick: select fists");
 +		}
 +		return;
 +	}
@@ -6469,10 +6545,10 @@ index 0000000..9c0f0e9
 +}
 diff --git a/src/extras/vcmodcombat.h b/src/extras/vcmodcombat.h
 new file mode 100644
-index 0000000..b8ba056
+index 0000000..8f7901c
 --- /dev/null
 +++ b/src/extras/vcmodcombat.h
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,118 @@
 +#ifndef VCMODCOMBAT_H
 +#define VCMODCOMBAT_H
 +
@@ -6480,6 +6556,7 @@ index 0000000..b8ba056
 +
 +class CPed;
 +class CPlayerPed;
++class CEntity;
 +class CWeaponInfo;
 +class CAnimBlendAssociation;
 +
@@ -6542,6 +6619,19 @@ index 0000000..b8ba056
 +void VCModAimRaiseStart(void);
 +void VCModAimRaiseStop(void);
 +bool VCModAimRaising(void);
++// the player's fire trigger, gated by the raise: false while the gun is climbing
++bool VCModPlayerAttackAllowed(void);
++// PlayerPed's per-frame aim accuracy, the value it used to set itself: 95 for an
++// aimable gun, 100 otherwise, 60 with DOOM AIM
++void VCModPlayerWepAccuracy(CPlayerPed *player, CWeaponInfo *info);
++// the player-only aim ramp: off under DOOM AIM, and off while NPC mode fires the
++// shots, because the AI shoots like a ped off the accuracy value, not the trigger
++bool VCModPlayerAimRamp(CEntity *shooter);
++// the player-only post-burst aim hold: a human still holds the trigger, so the
++// pose stays parked; NPC mode's AI has no trigger and a ped drops the pose
++bool VCModPlayerAimPoseHold(CPed *ped);
++// NO SCOPED AIM: the scope camera must leave these weapons' first-person entry alone
++bool VCModScopeSkip(CPlayerPed *player);
 +// CPed::PointGunAt parks the aim clip on the hold frame; the raise only counts
 +// as landed from here
 +void VCModAimRaiseHoldLanded(void);
@@ -6614,15 +6704,17 @@ index 0000000..37672b5
 +#endif
 diff --git a/src/extras/vcmodcrew.cpp b/src/extras/vcmodcrew.cpp
 new file mode 100644
-index 0000000..effa5d0
+index 0000000..952f6bb
 --- /dev/null
 +++ b/src/extras/vcmodcrew.cpp
-@@ -0,0 +1,1016 @@
+@@ -0,0 +1,1006 @@
 +#include "common.h"
 +
 +#include <stdio.h>
 +
 +#include "vcmodcrew.h"
++#include "vcmodhud.h"
++#include "vcmoddiag.h"
 +#include "vcmodride.h"
 +#include "vcmodpanel.h"
 +
@@ -6630,7 +6722,6 @@ index 0000000..effa5d0
 +#include "CarCtrl.h"
 +#include "Gangs.h"
 +#include "General.h"
-+#include "Hud.h"
 +#include "ModelIndices.h"
 +#include "ModelInfo.h"
 +#include "PathFind.h"
@@ -6688,8 +6779,8 @@ index 0000000..effa5d0
 +static uint32 nVCModCrewDismissAt;
 +static uint32 nVCModCrewDriveRetryAt;
 +
-+static void VCModCrewNotice(const char *text);
 +static void VCModCrewCarBuild(void);
++
 +static CPed *VCModCrewPed(int32 slot);
 +static void VCModCrewApplyStyle(CVehicle *car, bool goingSomewhere, bool rails);
 +static CPed *VCModCrewAddMan(CVehicle *car, int32 model, bool driver);
@@ -6715,17 +6806,6 @@ index 0000000..effa5d0
 +static void VCModCrewDismiss(void);
 +static void VCModCrewTickDismissWait(CPlayerPed *player, CVehicle *car);
 +static void VCModCrewTelemetry(CPlayerPed *player, CVehicle *car);
-+
-+static void
-+VCModCrewNotice(const char *text)
-+{
-+	static wchar notice[64];
-+	int32 i;
-+	for (i = 0; i < (int32) ARRAY_SIZE(notice) - 1 && text[i] != '\0'; i++)
-+		notice[i] = (wchar) text[i];
-+	notice[i] = 0;
-+	CHud::SetHelpMessage(notice, false);
-+}
 +
 +static void
 +VCModCrewCarBuild(void)
@@ -6982,15 +7062,15 @@ index 0000000..effa5d0
 +	CStreaming::RequestModel(MI_PGB, 0);
 +	CStreaming::LoadAllRequestedModels(false);
 +	if (!CStreaming::HasModelLoaded(nVCModCrewCar)) {
-+		VCModCrewNotice("crew: the car cannot be loaded");
++		VCModHudNotice("crew: the car cannot be loaded");
 +		return false;
 +	}
 +	if (!CStreaming::HasModelLoaded(MI_M4)) {
-+		VCModCrewNotice("crew: the M4 cannot be loaded");
++		VCModHudNotice("crew: the M4 cannot be loaded");
 +		return false;
 +	}
 +	if (!CStreaming::HasModelLoaded(MI_PGA) || !CStreaming::HasModelLoaded(MI_PGB)) {
-+		VCModCrewNotice("crew: the crew cannot be loaded");
++		VCModHudNotice("crew: the crew cannot be loaded");
 +		return false;
 +	}
 +
@@ -7001,13 +7081,13 @@ index 0000000..effa5d0
 +	if (node < 0)
 +		node = ThePaths.FindNodeClosestToCoors(here, PATH_CAR, 200.0f, true, true);
 +	if (node < 0) {
-+		VCModCrewNotice("crew: no road to come from");
++		VCModHudNotice("crew: no road to come from");
 +		return false;
 +	}
 +
 +	CAutomobile *car = new CAutomobile(nVCModCrewCar, RANDOM_VEHICLE);
 +	if (car == nil) {
-+		VCModCrewNotice("crew: no room for the car");
++		VCModHudNotice("crew: no room for the car");
 +		return false;
 +	}
 +
@@ -7040,7 +7120,7 @@ index 0000000..effa5d0
 +	}
 +	if (made < VCMOD_CREW_SIZE) {
 +		VCModCrewStandDown();
-+		VCModCrewNotice("crew: the men could not be made");
++		VCModHudNotice("crew: the men could not be made");
 +		return false;
 +	}
 +
@@ -7050,7 +7130,7 @@ index 0000000..effa5d0
 +	nVCModCrewRetargetAt = 0;
 +	VCModCrewGoto(car, vecVCModCrewPickup);
 +	VCModCrewFaceRoute(car);
-+	VCModCrewNotice("your crew is on the way");
++	VCModHudNotice("your crew is on the way");
 +	return true;
 +}
 +
@@ -7081,7 +7161,7 @@ index 0000000..effa5d0
 +		car->AutoPilot.m_nCruiseSpeed = 0;
 +		CRadar::ClearBlipForEntity(BLIP_CAR, nVCModCrewHandle);
 +		nVCModCrewPhase = VCMOD_CREW_PICKUP;
-+		VCModCrewNotice("your crew is here");
++		VCModHudNotice("your crew is here");
 +	}
 +}
 +
@@ -7096,7 +7176,7 @@ index 0000000..effa5d0
 +		return;
 +	}
 +	if (player->bInVehicle) {
-+		VCModCrewNotice("crew: get out first");
++		VCModHudNotice("crew: get out first");
 +		return;
 +	}
 +	VCModCrewSummon(player);
@@ -7107,7 +7187,7 @@ index 0000000..effa5d0
 +{
 +	CVector here = player->GetPosition();
 +	if ((here - car->GetPosition()).Magnitude2D() > VCMOD_CREW_ABANDON_FAR) {
-+		VCModCrewNotice("crew left: too far away");
++		VCModHudNotice("crew left: too far away");
 +		VCModCrewStandDown();
 +		return;
 +	}
@@ -7127,7 +7207,7 @@ index 0000000..effa5d0
 +		return false;
 +	// every press on the crew car belongs to us; none of them may become a carjack
 +	if (nVCModCrewPhase == VCMOD_CREW_APPROACH) {
-+		VCModCrewNotice("crew: wait for the car to stop");
++		VCModHudNotice("crew: wait for the car to stop");
 +		return true;
 +	}
 +	// the wheel can be asked for again after leaving an escort, if a man is in it
@@ -7152,7 +7232,7 @@ index 0000000..effa5d0
 +	nVCModCrewSwapFrom = nVCModCrewPhase;
 +	bVCModCrewPlayerObjective = false;
 +	nVCModCrewPhase = VCMOD_CREW_SWAP;
-+	VCModCrewNotice("the driver is getting out");
++	VCModHudNotice("the driver is getting out");
 +	return true;
 +}
 +
@@ -7191,7 +7271,7 @@ index 0000000..effa5d0
 +			driver->SetObjective(OBJECTIVE_ENTER_CAR_AS_DRIVER, car);
 +		bVCModCrewPlayerObjective = false;
 +		nVCModCrewPhase = nVCModCrewSwapFrom;
-+		VCModCrewNotice("crew: the driver is back at the wheel");
++		VCModHudNotice("crew: the driver is back at the wheel");
 +	}
 +}
 +
@@ -7323,7 +7403,7 @@ index 0000000..effa5d0
 +			car->AutoPilot.m_nCruiseSpeed = 0;
 +			car->AutoPilot.m_nTempAction = TEMPACT_NONE;
 +			bVCModCrewHasDestination = false;
-+			VCModCrewNotice("your crew has arrived");
++			VCModHudNotice("your crew has arrived");
 +		}
 +	}
 +}
@@ -7422,14 +7502,14 @@ index 0000000..effa5d0
 +		}
 +		nVCModCrewDismissAt = CTimer::GetTimeInMilliseconds();
 +		nVCModCrewPhase = VCMOD_CREW_DISMISS_WAIT;
-+		VCModCrewNotice("crew dismissed");
++		VCModHudNotice("crew dismissed");
 +		return;
 +	}
 +	VCModCrewHandover();
 +	VCModCrewRemoveDead();
 +	VCModCrewRemoveCar();
 +	VCModCrewReset();
-+	VCModCrewNotice("crew dismissed");
++	VCModHudNotice("crew dismissed");
 +}
 +
 +static void
@@ -7592,7 +7672,7 @@ index 0000000..effa5d0
 +	if (now < next)
 +		return;
 +	next = now + 1000;
-+	fprintf(stderr, "VCMOD CREW state phase %d car %p seat %d driver %d speed %d"
++	VCMOD_DIAG("VCMOD CREW state phase %d car %p seat %d driver %d speed %d"
 +		" mission %d style %d status %d temp %d gas %d brake %d slowed %d%d"
 +		" pos %.1f %.1f %.1f tommy %.1f %.1f target %.1f %.1f dT %.1f dN %.1f\n",
 +		(int) nVCModCrewPhase, (void*) car,
@@ -8335,6 +8415,45 @@ index 0000000..2f74681
 +
 +#endif
 \ No newline at end of file
+diff --git a/src/extras/vcmodhud.cpp b/src/extras/vcmodhud.cpp
+new file mode 100644
+index 0000000..b0a6ab6
+--- /dev/null
++++ b/src/extras/vcmodhud.cpp
+@@ -0,0 +1,16 @@
++#include "common.h"
++
++#include "vcmodhud.h"
++
++#include "Hud.h"
++
++void
++VCModHudNotice(const char *text)
++{
++	static wchar notice[96];
++	int32 i;
++	for (i = 0; i < (int32) ARRAY_SIZE(notice) - 1 && text[i] != '\0'; i++)
++		notice[i] = (wchar) text[i];
++	notice[i] = 0;
++	CHud::SetHelpMessage(notice, false);
++}
+\ No newline at end of file
+diff --git a/src/extras/vcmodhud.h b/src/extras/vcmodhud.h
+new file mode 100644
+index 0000000..6f8fa6d
+--- /dev/null
++++ b/src/extras/vcmodhud.h
+@@ -0,0 +1,9 @@
++#ifndef VCMODHUD_H
++#define VCMODHUD_H
++
++// The mod's one HUD help line. Every module speaks to the player through it:
++// plain ASCII text, shown for a few seconds. The 96-character buffer takes the
++// longest message (the chase tier list) without truncating.
++void VCModHudNotice(const char *text);
++
++#endif
+\ No newline at end of file
 diff --git a/src/extras/vcmodinteriors.cpp b/src/extras/vcmodinteriors.cpp
 new file mode 100644
 index 0000000..840fcf3
@@ -8829,10 +8948,10 @@ index 0000000..aad3d7c
 +#endif
 diff --git a/src/extras/vcmodnpc.cpp b/src/extras/vcmodnpc.cpp
 new file mode 100644
-index 0000000..704779c
+index 0000000..2bfec63
 --- /dev/null
 +++ b/src/extras/vcmodnpc.cpp
-@@ -0,0 +1,584 @@
+@@ -0,0 +1,681 @@
 +#include "common.h"
 +
 +#include <string.h>
@@ -8840,6 +8959,7 @@ index 0000000..704779c
 +#include "vcmodnpc.h"
 +#include "vcmodsit.h"
 +#include "vcmodstreet.h"
++#include "vcmodcombat.h"
 +#include "vcmoddiag.h"
 +
 +#include "DMAudio.h"
@@ -8855,6 +8975,9 @@ index 0000000..704779c
 +#include "PlayerPed.h"
 +#include "Timer.h"
 +#include "Wanted.h"
++#include "Weapon.h"
++#include "WeaponInfo.h"
++#include "World.h"
 +
 +bool bVCModNpcMode = false;
 +int32 nVCModNpcType = 0;
@@ -8999,6 +9122,62 @@ index 0000000..704779c
 +VCModNpcCombatActive(void)
 +{
 +	return bVCModNpcMode;
++}
++
++// temporary probe (DIAGNOSTICS): the ID-check candidate gate is stock-tight - a
++// random pedestrian in WANDER_PATH, no objective, no look target, within 5 m and
++// in sight. This names how far the nearest pedestrians get through it, so one
++// play test separates "the check is broken" from "the street had no candidate"
++void
++VCModNpcCopScanDiag(CPed *cop)
++{
++	if (!bVCModNpcMode || nVCModNpcType != VCMOD_NPC_COP || !cop->IsPlayer())
++		return;
++	static uint32 nDiag;
++	uint32 now = CTimer::GetTimeInMilliseconds();
++	if (now < nDiag)
++		return;
++	nDiag = now + 1000;
++
++	CPed *nearest = nil;
++	float nearestDist = 9999.0f;
++	int32 nRand = 0, nWalk = 0, nFree = 0, nClose = 0, nLos = 0;
++	for (int i = 0; i < cop->m_numNearPeds; i++) {
++		CPed *ped = cop->m_nearPeds[i];
++		if (ped == nil)
++			continue;
++		float d = (ped->GetPosition() - cop->GetPosition()).Magnitude2D();
++		if (d < nearestDist) {
++			nearest = ped;
++			nearestDist = d;
++		}
++		if (ped->CharCreatedBy != RANDOM_CHAR)
++			continue;
++		nRand++;
++		if (ped->m_objective != OBJECTIVE_NONE || ped->m_nPedState != PED_WANDER_PATH)
++			continue;
++		nWalk++;
++		if (ped->m_pLookTarget != nil || ped->m_lookTimer >= now)
++			continue;
++		nFree++;
++		if (d >= 5.0f)
++			continue;
++		nClose++;
++		if (CWorld::GetIsLineOfSightClear(cop->GetPosition(), ped->GetPosition(),
++			true, false, false, false, false, false, false))
++			nLos++;
++	}
++
++	VCMOD_DIAG("VCMOD cop scan: n=%d rand=%d walk=%d free=%d close=%d los=%d | near model=%d type=%d created=%d state=%d obj=%d look=%d lookLeft=%d dist=%.1f\n",
++		cop->m_numNearPeds, nRand, nWalk, nFree, nClose, nLos,
++		nearest ? nearest->GetModelIndex() : -1,
++		nearest ? nearest->m_nPedType : -1,
++		nearest ? nearest->CharCreatedBy : -1,
++		nearest ? nearest->m_nPedState : -1,
++		nearest ? nearest->m_objective : -1,
++		nearest ? nearest->m_pLookTarget != nil : -1,
++		nearest ? (int32)(nearest->m_lookTimer - now) : 0,
++		nearest ? nearestDist : -1.0f);
 +}
 +
 +// the blocked-path panic (tired, scratch, turn180) starts from a collision for
@@ -9202,6 +9381,22 @@ index 0000000..704779c
 +			VCModNpcReleasePed(player);
 +		VCMOD_DIAG("VCMOD npc mode: engaged type=%d\n", nVCModNpcType);
 +	}
++	// NPC mode never runs ProcessPlayerWeapon, so the accuracy froze at whatever
++	// normal play left: the DOOM AIM row did nothing mid-mode and the stale value
++	// decided every shot the AI fired. Keep it current every frame, as normal play
++	// does; the aim ramp itself is off in NPC mode (VCModPlayerAimRamp), so this
++	// value is the whole spread
++	VCModPlayerWepAccuracy(player, CWeaponInfo::GetWeaponInfo(player->GetWeapon()->m_eWeaponType));
++	// The armed objective leaves the aim pose up. Nothing releases it when the
++	// fight ends here - that is ClearPointGunAt from the player's weapon code,
++	// which NPC mode skips - so the parked fire clip kept the gun raised for the
++	// whole walk back. A ped drops the pose once it leaves the combat states.
++	if (player->bIsPointingGunAt
++		&& player->m_objective != OBJECTIVE_KILL_CHAR_ON_FOOT
++		&& player->m_objective != OBJECTIVE_KILL_CHAR_ANY_MEANS
++		&& player->m_nPedState != PED_ATTACK && player->m_nPedState != PED_AIM_GUN
++		&& player->m_nPedState != PED_FIGHT)
++		player->ClearPointGunAt();
 +	// the street layer stands down while the command runs, so a chat opened
 +	// before the switch has no owner: KeepChat holds both peds in PED_CHAT and
 +	// the wander (and the cop patrol) never starts. Hand it back first.
@@ -9333,9 +9528,30 @@ index 0000000..704779c
 +			static uint32 nCivDiag = 0;
 +			if (now >= nCivDiag) {
 +				nCivDiag = now + 1000;
-+				VCMOD_DIAG("VCMOD civ layer: state=%d fear=%u created=%d obj=%d ctrl=%d threat=%u near=%d\n",
++				// temporary probe (DIAGNOSTICS): the chat gate needs a wandering
++				// pedestrian within 1.8 m that accepts the player; name the nearest
++				// one and the player's own chat voice so a play test says which side
++				// refuses
++				CPed *nearest = nil;
++				float nearestDist = 9999.0f;
++				for (int i = 0; i < player->m_numNearPeds; i++) {
++					CPed *ped = player->m_nearPeds[i];
++					if (ped == nil)
++						continue;
++					float d = (ped->GetPosition() - player->GetPosition()).Magnitude2D();
++					if (d < nearestDist) {
++						nearest = ped;
++						nearestDist = d;
++					}
++				}
++				VCMOD_DIAG("VCMOD civ layer: state=%d fear=%u created=%d obj=%d ctrl=%d threat=%u near=%d | chat model=%d will=%d dist=%.1f partnerState=%d partnerModel=%d\n",
 +					player->m_nPedState, player->m_fearFlags, player->CharCreatedBy,
-+					player->m_objective, player->IsPedInControl(), player->m_threatFlags, player->m_numNearPeds);
++					player->m_objective, player->IsPedInControl(), player->m_threatFlags,
++					player->m_numNearPeds, player->GetModelIndex(),
++					nearest ? nearest->WillChat((CPed*)player) : -1,
++					nearest ? nearestDist : -1.0f,
++					nearest ? nearest->m_nPedState : -1,
++					nearest ? nearest->GetModelIndex() : -1);
 +			}
 +			player->ProcessCivilianState();
 +			if (player->IsPedInControl())
@@ -9419,15 +9635,16 @@ index 0000000..704779c
 +
 diff --git a/src/extras/vcmodnpc.h b/src/extras/vcmodnpc.h
 new file mode 100644
-index 0000000..bdfd222
+index 0000000..e3ac066
 --- /dev/null
 +++ b/src/extras/vcmodnpc.h
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,49 @@
 +#ifndef VCMODNPC_H
 +#define VCMODNPC_H
 +
 +class CPlayerPed;
 +class CPad;
++class CPed;
 +
 +// BECOME NPC: Tommy walks the street on the engine's own AI until switched off
 +extern bool bVCModNpcMode;
@@ -9462,6 +9679,9 @@ index 0000000..bdfd222
 +bool VCModNpcStatsBorrowed(void);
 +// per frame: drives the chosen profile and the toggle-off hand-back
 +void VCModUpdateNpcMode(CPlayerPed *player, CPad *pad);
++// temporary probe (DIAGNOSTICS): why the cop ID-check candidate gate refuses the
++// nearest pedestrian
++void VCModNpcCopScanDiag(CPed *cop);
 +// the stroll easing runs every frame the mode owns the walk
 +void VCModNpcStrollGait(CPlayerPed *ped);
 +// a fresh wander starts the stroll from a standstill
@@ -12169,15 +12389,16 @@ index 0000000..e2d4e02
 +#endif
 diff --git a/src/extras/vcmodride.cpp b/src/extras/vcmodride.cpp
 new file mode 100644
-index 0000000..9ed6da6
+index 0000000..45743d5
 --- /dev/null
 +++ b/src/extras/vcmodride.cpp
-@@ -0,0 +1,652 @@
+@@ -0,0 +1,639 @@
 +#include "common.h"
 +
 +#include <stdio.h>
 +
 +#include "vcmodride.h"
++#include "vcmodhud.h"
 +#include "vcmodcrew.h"
 +#include "vcmodpanel.h"
 +#include "vcmodplayer.h"
@@ -12187,7 +12408,6 @@ index 0000000..9ed6da6
 +#include "CarCtrl.h"
 +#include "ColStore.h"
 +#include "General.h"
-+#include "Hud.h"
 +#include "ModelIndices.h"
 +#include "PathFind.h"
 +#include "Ped.h"
@@ -12244,19 +12464,6 @@ index 0000000..9ed6da6
 +
 +static CVehicle *VCModRideVehicle(void);
 +static bool VCModRideSkipTravel(void);
-+
-+// shared HUD line for the ride, the sit refusals and the spin kick; the sit
-+// module calls it until the HUD notice is deduped into one helper
-+void
-+VCModRideNotice(const char *text)
-+{
-+	static wchar notice[64];
-+	int32 i;
-+	for (i = 0; i < (int32) ARRAY_SIZE(notice) - 1 && text[i] != '\0'; i++)
-+		notice[i] = (wchar) text[i];
-+	notice[i] = 0;
-+	CHud::SetHelpMessage(notice, false);
-+}
 +
 +int32
 +VCModRidePhase(void)
@@ -12373,11 +12580,11 @@ index 0000000..9ed6da6
 +VCModPassengerSeats(CVehicle *veh)
 +{
 +	if (veh->IsPlane() || veh->IsHeli() || veh->IsTrain()) {
-+		VCModRideNotice("passenger: no seat in this");
++		VCModHudNotice("passenger: no seat in this");
 +		return false;
 +	}
 +	if (!VCModPassengerSeatFree(veh)) {
-+		VCModRideNotice("passenger: every seat taken");
++		VCModHudNotice("passenger: every seat taken");
 +		return false;
 +	}
 +	return true;
@@ -12399,7 +12606,7 @@ index 0000000..9ed6da6
 +
 +	CVehicle *veh = VCModNearestCar(player);
 +	if (veh == nil) {
-+		VCModRideNotice("passenger: no car nearby");
++		VCModHudNotice("passenger: no car nearby");
 +		return false;
 +	}
 +	if (!VCModPassengerSeats(veh))
@@ -12460,11 +12667,11 @@ index 0000000..9ed6da6
 +
 +	// planes and helis have no passenger seat at all, trains are not rideable here
 +	if (vehicle->IsPlane() || vehicle->IsHeli() || vehicle->IsTrain()) {
-+		VCModRideNotice("passenger: no seat in this");
++		VCModHudNotice("passenger: no seat in this");
 +		return true;
 +	}
 +	if (!VCModPassengerSeatFree(vehicle)) {
-+		VCModRideNotice("passenger: every seat taken");
++		VCModHudNotice("passenger: every seat taken");
 +		return true;
 +	}
 +
@@ -12558,13 +12765,13 @@ index 0000000..9ed6da6
 +	CVector dest;
 +	if (!VCModRideZoneAt(nVCModRideZone, &zoneIndex, nil, &dest) || zoneIndex < 0) {
 +		// auto has no destination exactly when no marker is placed
-+		VCModRideNotice(nVCModRideZone == VCMOD_RIDE_ZONE_AUTO ?
++		VCModHudNotice(nVCModRideZone == VCMOD_RIDE_ZONE_AUTO ?
 +			"skip the ride: place a map marker first" : "skip the ride: pick a destination first");
 +		return false;
 +	}
 +	int32 node = ThePaths.FindNodeClosestToCoors(dest, PATH_CAR, 999999.9f, true, true);
 +	if (node < 0) {
-+		VCModRideNotice("skip the ride: no road there");
++		VCModHudNotice("skip the ride: no road there");
 +		return false;
 +	}
 +	dest = ThePaths.m_pathNodes[node].GetPosition();
@@ -12585,7 +12792,7 @@ index 0000000..9ed6da6
 +	// the camera has to accept a discontinuous jump, the same way the engine's
 +	// own map teleport does; there is no fade-out to wait for here
 +	TheCamera.RestoreWithJumpCut();
-+	VCModRideNotice("skip the ride: arrived");
++	VCModHudNotice("skip the ride: arrived");
 +	return true;
 +}
 +
@@ -12595,7 +12802,7 @@ index 0000000..9ed6da6
 +	CStreaming::RequestModel(VCMOD_DRIVER_MODEL, 0);
 +	CStreaming::LoadAllRequestedModels(false);
 +	if (!CStreaming::HasModelLoaded(VCMOD_DRIVER_MODEL)) {
-+		VCModRideNotice("driver: the limo cannot be loaded");
++		VCModHudNotice("driver: the limo cannot be loaded");
 +		return false;
 +	}
 +
@@ -12606,13 +12813,13 @@ index 0000000..9ed6da6
 +	if (node < 0)
 +		node = ThePaths.FindNodeClosestToCoors(here, PATH_CAR, 200.0f, true, true);
 +	if (node < 0) {
-+		VCModRideNotice("driver: no road to come from");
++		VCModHudNotice("driver: no road to come from");
 +		return false;
 +	}
 +
 +	CAutomobile *limo = new CAutomobile(VCMOD_DRIVER_MODEL, RANDOM_VEHICLE);
 +	if (limo == nil) {
-+		VCModRideNotice("driver: no room for a limo");
++		VCModHudNotice("driver: no room for a limo");
 +		return false;
 +	}
 +
@@ -12635,7 +12842,7 @@ index 0000000..9ed6da6
 +		// nowhere to put a chauffeur: leave it as an abandoned car and say so
 +		limo->SetStatus(STATUS_ABANDONED);
 +		CWorld::Add(limo);
-+		VCModRideNotice("driver: nobody to drive this");
++		VCModHudNotice("driver: nobody to drive this");
 +		return false;
 +	}
 +
@@ -12656,7 +12863,7 @@ index 0000000..9ed6da6
 +	limo->AutoPilot.m_nCarMission = MISSION_GOTOCOORDS;
 +	limo->AutoPilot.m_nTempAction = TEMPACT_NONE;
 +	VCModRideApplyStyle(limo, true);
-+	VCModRideNotice("your driver is on the way");
++	VCModHudNotice("your driver is on the way");
 +	return true;
 +}
 +
@@ -12665,7 +12872,7 @@ index 0000000..9ed6da6
 +{
 +	CPlayerPed *player = FindPlayerPed();
 +	if (player == nil || !player->IsPedInControl()) {
-+		VCModRideNotice("driver: not right now");
++		VCModHudNotice("driver: not right now");
 +		return;
 +	}
 +
@@ -12682,12 +12889,12 @@ index 0000000..9ed6da6
 +			veh->AutoPilot.m_nTempAction = TEMPACT_NONE;
 +			nVCModDismissedHandle = CPools::GetVehiclePool()->GetIndex(veh);
 +		}
-+		VCModRideNotice("driver dismissed");
++		VCModHudNotice("driver dismissed");
 +		return;
 +	}
 +
 +	if (player->bInVehicle) {
-+		VCModRideNotice("driver: get out first");
++		VCModHudNotice("driver: get out first");
 +		return;
 +	}
 +	VCModRideStandDown();
@@ -12739,7 +12946,7 @@ index 0000000..9ed6da6
 +			veh->AutoPilot.m_nCarMission = MISSION_STOP_FOREVER;
 +			veh->AutoPilot.m_nCruiseSpeed = 0;
 +			nVCModRidePhase = VCMOD_RIDE_PICKUP;
-+			VCModRideNotice("your driver is here");
++			VCModHudNotice("your driver is here");
 +		}
 +		return;
 +	}
@@ -12747,7 +12954,7 @@ index 0000000..9ed6da6
 +	// waiting at the kerb: walking far enough away calls it off, the taxi's own rule
 +	if ((here - veh->GetPosition()).Magnitude2D() > VCMOD_ABANDON_FAR) {
 +		VCModRideStandDown();
-+		VCModRideNotice("driver left: too far away");
++		VCModHudNotice("driver left: too far away");
 +	}
 +}
 +
@@ -12822,16 +13029,16 @@ index 0000000..9ed6da6
 +		veh->AutoPilot.m_nCruiseSpeed = 0;
 +		veh->AutoPilot.m_nTempAction = TEMPACT_NONE;
 +		bVCModRideHasDestination = false;
-+		VCModRideNotice(bVCModRideSummoned ? "your driver has arrived" : "passenger: arrived");
++		VCModHudNotice(bVCModRideSummoned ? "your driver has arrived" : "passenger: arrived");
 +	}
 +}
 \ No newline at end of file
 diff --git a/src/extras/vcmodride.h b/src/extras/vcmodride.h
 new file mode 100644
-index 0000000..106edab
+index 0000000..f9d82cd
 --- /dev/null
 +++ b/src/extras/vcmodride.h
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,47 @@
 +#ifndef VCMODRIDE_H
 +#define VCMODRIDE_H
 +
@@ -12863,9 +13070,6 @@ index 0000000..106edab
 +	VCMOD_RIDE_DRIVING
 +};
 +
-+// shared HUD line for the ride, the sit refusals and the spin kick; the sit
-+// module calls it until the HUD notice is deduped into one helper
-+void VCModRideNotice(const char *text);
 +// where the ride has got to, one of eVCModRidePhase
 +int32 VCModRidePhase(void);
 +// takes over an enter-vehicle press so Tommy rides as a passenger; false means
@@ -13012,7 +13216,7 @@ index 0000000..60c2aa0
 +#endif
 diff --git a/src/extras/vcmodsit.cpp b/src/extras/vcmodsit.cpp
 new file mode 100644
-index 0000000..dfffd62
+index 0000000..3ec79ca
 --- /dev/null
 +++ b/src/extras/vcmodsit.cpp
 @@ -0,0 +1,406 @@
@@ -13022,7 +13226,7 @@ index 0000000..dfffd62
 +
 +#include "vcmodsit.h"
 +#include "vcmodpanel.h"
-+#include "vcmodride.h"
++#include "vcmodhud.h"
 +#include "vcmodstreet.h"
 +#include "vcmodnpc.h"
 +
@@ -13315,7 +13519,7 @@ index 0000000..dfffd62
 +		lastAt = now;
 +		fprintf(stderr, "VCMOD sit: %s\n", why);
 +		if (notice)
-+			VCModRideNotice(notice);
++			VCModHudNotice(notice);
 +	}
 +}
 +
@@ -15701,7 +15905,7 @@ index 1efd773..9f67b01 100644
  				}
  			}
 diff --git a/src/peds/Ped.cpp b/src/peds/Ped.cpp
-index aa63c32..5faf284 100644
+index aa63c32..968b9bc 100644
 --- a/src/peds/Ped.cpp
 +++ b/src/peds/Ped.cpp
 @@ -1,4 +1,5 @@
@@ -15808,7 +16012,7 @@ index aa63c32..5faf284 100644
  	if (m_pSeekTarget) {
  		if (m_pSeekTarget->IsPed()) {
  			((CPed*)m_pSeekTarget)->m_pedIK.GetComponentPosition(vector, PED_MID);
-@@ -1398,19 +1429,650 @@ CPed::WillChat(CPed *stranger)
+@@ -1398,19 +1429,651 @@ CPed::WillChat(CPed *stranger)
  		return false;
  	if (stranger == this)
  		return false;
@@ -16404,6 +16608,7 @@ index aa63c32..5faf284 100644
 +bool
 +CPed::CopPatrolScan(uint32& hassleTimer)
 +{
++	VCModNpcCopScanDiag(this);
 +	// the COP profile keeps Tommy MISSION_CHAR so civilian scans still skip him; he
 +	// patrols as a random cop would
 +	bool randomCop = CharCreatedBy == RANDOM_CHAR || (IsPlayer() && VCModNpcCopActive());
@@ -16423,7 +16628,7 @@ index aa63c32..5faf284 100644
 +										}
 +										if (!anotherCopChasesHim) {
 +											SetObjective(OBJECTIVE_KILL_CHAR_ON_FOOT, nearPed);
-+											fprintf(stderr, "VCMOD cop: chase model=%d dist=%.1f\n",
++											VCMOD_DIAG("VCMOD cop: chase model=%d dist=%.1f\n",
 +												nearPed->GetModelIndex(), (nearPed->GetPosition() - GetPosition()).Magnitude2D());
 +											nearPed->SetObjective(OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE, this);
 +											nearPed->bBeingChasedByPolice = true;
@@ -16442,7 +16647,7 @@ index aa63c32..5faf284 100644
 +														true, false, false, false, false, false, false)) {
 +														Say(SOUND_PED_COP_ASK_FOR_ID);
 +														SetObjective(OBJECTIVE_HASSLE_CHAR, nearPed);
-+														fprintf(stderr, "VCMOD cop: id check model=%d dist=%.1f\n",
++														VCMOD_DIAG("VCMOD cop: id check model=%d dist=%.1f\n",
 +															nearPed->GetModelIndex(), (nearPed->GetPosition() - GetPosition()).Magnitude2D());
 +														nearPed->SetObjective(OBJECTIVE_WAIT_ON_FOOT_FOR_COP, this);
 +														hassleTimer = CTimer::GetTimeInMilliseconds()
@@ -16463,7 +16668,7 @@ index aa63c32..5faf284 100644
  void
  CPed::CalculateNewVelocity(void)
  {
-@@ -1447,8 +2109,10 @@ CPed::CalculateNewVelocity(void)
+@@ -1447,8 +2110,10 @@ CPed::CalculateNewVelocity(void)
  		m_moved = m_moved * (1 / 100.0f);
  	}
  
@@ -16475,7 +16680,7 @@ index aa63c32..5faf284 100644
  
  		if (FindPlayerPed() == this)
  			FindPlayerPed()->m_fWalkAngle = 0.0f;
-@@ -1867,7 +2531,12 @@ CPed::ProcessControl(void)
+@@ -1867,7 +2532,12 @@ CPed::ProcessControl(void)
  		bCollidedWithMyVehicle = false;
  
  		CEntity *collidingEnt = m_pDamageEntity;
@@ -16489,7 +16694,7 @@ index aa63c32..5faf284 100644
  			bHitSomethingLastFrame = false;
  			if (m_nPedStateTimer <= 500 && bIsInTheAir) {
  				if (m_nPedStateTimer)
-@@ -3142,6 +3811,9 @@ CPed::PlayFootSteps(void)
+@@ -3142,6 +3812,9 @@ CPed::PlayFootSteps(void)
  	CAnimBlendAssociation *walkRunAssoc = nil;
  	float walkRunAssocBlend = 0.0f, idleAssocBlend = 0.0f;
  	bool isSkater = m_pedStats == CPedStats::ms_apPedStats[PEDSTAT_SKATER];
@@ -16499,7 +16704,7 @@ index aa63c32..5faf284 100644
  
  	CVector footPosL(0.0f, 0.0f, 0.0f), footPosR(0.0f, 0.0f, 0.0f);
  	bool footPosLok = false, footPosRok = false;
-@@ -3173,7 +3845,7 @@ CPed::PlayFootSteps(void)
+@@ -3173,7 +3846,7 @@ CPed::PlayFootSteps(void)
  		float stepEnd = walkRunAssoc->hierarchy->totalLength / 2.0f + stepStart;
  		float currentTime = walkRunAssoc->currentTime;
  
@@ -16508,7 +16713,7 @@ index aa63c32..5faf284 100644
  			// both are unused
  			static float stepStartSection = 1.0f;
  			static float animSections = 15.f;
-@@ -3189,22 +3861,25 @@ CPed::PlayFootSteps(void)
+@@ -3189,22 +3862,25 @@ CPed::PlayFootSteps(void)
  			switch (CSurfaceTable::GetAdhesionGroup(m_nSurfaceTouched)) {
  				case ADHESIVE_LOOSE:
  					if (CGeneral::GetRandomNumber() % 128) {
@@ -16539,7 +16744,7 @@ index aa63c32..5faf284 100644
  					soundVolume = 0.2f;
  					break;
  				default:
-@@ -3909,6 +4584,14 @@ CPed::CanStrafeOrMouseControl(void)
+@@ -3909,6 +4585,14 @@ CPed::CanStrafeOrMouseControl(void)
  	if (CCamera::bFreeCam)
  		return false;
  #endif
@@ -16554,7 +16759,7 @@ index aa63c32..5faf284 100644
  	return m_nPedState == PED_NONE || m_nPedState == PED_IDLE || m_nPedState == PED_FLEE_POS || m_nPedState == PED_FLEE_ENTITY ||
  		m_nPedState == PED_ATTACK || m_nPedState == PED_FIGHT || m_nPedState == PED_AIM_GUN || m_nPedState == PED_JUMP || m_nPedState == PED_ANSWER_MOBILE;
  }
-@@ -4495,6 +5178,12 @@ CPed::PedSetInCarCB(CAnimBlendAssociation *animAssoc, void *arg)
+@@ -4495,6 +5179,12 @@ CPed::PedSetInCarCB(CAnimBlendAssociation *animAssoc, void *arg)
  bool
  CPed::CanBeDeleted(void)
  {
@@ -16567,7 +16772,7 @@ index aa63c32..5faf284 100644
  	if (bInVehicle)
  		return false;
  
-@@ -4513,6 +5202,9 @@ CPed::CanBeDeleted(void)
+@@ -4513,6 +5203,9 @@ CPed::CanBeDeleted(void)
  bool
  CPed::CanBeDeletedEvenInVehicle(void)
  {
@@ -16577,7 +16782,7 @@ index aa63c32..5faf284 100644
  	switch (CharCreatedBy) {
  		case RANDOM_CHAR:
  			return true;
-@@ -5772,6 +6464,10 @@ CPed::Seek(void)
+@@ -5772,6 +6465,10 @@ CPed::Seek(void)
  void
  CPed::SetFlee(CVector2D const &from, int time)
  {
@@ -16588,7 +16793,7 @@ index aa63c32..5faf284 100644
  	if (CTimer::GetTimeInMilliseconds() < m_nPedStateTimer || !IsPedInControl() || bKindaStayInSamePlace)
  		return;
  
-@@ -5801,6 +6497,8 @@ CPed::SetFlee(CVector2D const &from, int time)
+@@ -5801,6 +6498,8 @@ CPed::SetFlee(CVector2D const &from, int time)
  void
  CPed::SetFlee(CEntity *fleeFrom, int time)
  {
@@ -16597,7 +16802,7 @@ index aa63c32..5faf284 100644
  	if (!IsPedInControl() || bKindaStayInSamePlace || !fleeFrom)
  		return;
  
-@@ -6029,7 +6727,9 @@ CPed::SetWanderPath(int8 pathStateDest)
+@@ -6029,7 +6728,9 @@ CPed::SetWanderPath(int8 pathStateDest)
  {
  	uint8 nextPathState;
  
@@ -16608,12 +16813,14 @@ index aa63c32..5faf284 100644
  		return false;
  
  	if (IsPedInControl()) {
-@@ -6075,6 +6775,17 @@ CPed::SetWanderPath(int8 pathStateDest)
+@@ -6075,6 +6776,19 @@ CPed::SetWanderPath(int8 pathStateDest)
  void
  CPed::WanderPath(void)
  {
-+	// a player in NPC mode holds the after-kill pose; the wander must not
-+	// override it while it plays
++	// A player stands through the wait pose while a ped's walk clip would blend
++	// over it, and the wander's node bookkeeping then restarts the timer; holding
++	// here lets the stock pose run its length and release. This is the only
++	// divergence the NPC-mode player takes in the wander
 +	if (IsPlayer() && bVCModNpcMode && m_nWaitState == WAITSTATE_DOUBLEBACK)
 +		return;
 +	bool playerNpc = IsPlayer() && bVCModNpcMode;
@@ -16626,30 +16833,7 @@ index aa63c32..5faf284 100644
  	if (!m_pNextPathNode) {
  		printf("THIS SHOULDN@T HAPPEN TOO OFTEN\n");
  		SetIdle();
-@@ -6168,13 +6879,17 @@ CPed::WanderPath(void)
- 	m_nPathDir = dirToSet;
- 	if (m_pLastPathNode == m_pNextPathNode) {
- 		m_pNextPathNode = previousLastNode;
--		SetWaitState(WAITSTATE_DOUBLEBACK, nil);
--		Say(SOUND_PED_WAIT_DOUBLEBACK);
--	} else if (ThePaths.TestForPedTrafficLight(m_pLastPathNode, m_pNextPathNode)) {
-+		// a player stands through the node poses, so they would only re-issue
-+		// at the same node; he keeps the deliberate after-kill pose instead
-+		if (!playerNpc) {
-+			SetWaitState(WAITSTATE_DOUBLEBACK, nil);
-+			Say(SOUND_PED_WAIT_DOUBLEBACK);
-+		}
-+	} else if (!playerNpc && ThePaths.TestForPedTrafficLight(m_pLastPathNode, m_pNextPathNode)) {
- 		SetWaitState(WAITSTATE_TRAFFIC_LIGHTS, nil);
--	} else if (ThePaths.TestCrossesRoad(m_pLastPathNode, m_pNextPathNode)) {
-+	} else if (!playerNpc && ThePaths.TestCrossesRoad(m_pLastPathNode, m_pNextPathNode)) {
- 		SetWaitState(WAITSTATE_CROSS_ROAD, nil);
--	} else if (m_pNextPathNode == previousLastNode) {
-+	} else if (!playerNpc && m_pNextPathNode == previousLastNode) {
- 		SetWaitState(WAITSTATE_DOUBLEBACK, nil);
- 		Say(SOUND_PED_WAIT_DOUBLEBACK);
- 	}
-@@ -7038,6 +7753,11 @@ CPed::SetDie(AnimationId animId, float delta, float speed)
+@@ -7038,6 +7752,11 @@ CPed::SetDie(AnimationId animId, float delta, float speed)
  	if (DyingOrDead())
  		return;
  
@@ -16661,7 +16845,7 @@ index aa63c32..5faf284 100644
  	CAnimBlendAssociation *dieAssoc = nil;
  	if (m_nPedState == PED_FALL || m_nPedState == PED_GETUP)
  		delta *=  0.5f;
-@@ -7163,7 +7883,10 @@ CPed::Chat(void)
+@@ -7163,7 +7882,10 @@ CPed::Chat(void)
  
  	CPed *partner = (CPed*) m_pLookTarget;
  
@@ -16673,7 +16857,7 @@ index aa63c32..5faf284 100644
  		ClearChat();
  		m_chatTimer = CTimer::GetTimeInMilliseconds() + 30000;
  		if (partner->m_pedInObjective) {
-@@ -7173,32 +7896,40 @@ CPed::Chat(void)
+@@ -7173,32 +7895,40 @@ CPed::Chat(void)
  		}
  		return;
  	}
@@ -16735,7 +16919,7 @@ index aa63c32..5faf284 100644
  		ClearChat();
  		m_chatTimer = CTimer::GetTimeInMilliseconds() + 30000;
  	}
-@@ -7682,7 +8413,8 @@ CPed::IsPlayer(void) const
+@@ -7682,7 +8412,8 @@ CPed::IsPlayer(void) const
  bool
  CPed::IsGangMember(void) const
  {
@@ -16745,7 +16929,7 @@ index aa63c32..5faf284 100644
  }
  
  bool
-@@ -7821,7 +8553,7 @@ CPed::LookForSexyPeds(void)
+@@ -7821,7 +8552,7 @@ CPed::LookForSexyPeds(void)
  	if ((!IsPedInControl() && m_nPedState != PED_DRIVING)
  		|| m_lookTimer >= CTimer::GetTimeInMilliseconds() ||
  #ifdef FIX_BUGS
@@ -16754,7 +16938,7 @@ index aa63c32..5faf284 100644
  #else
  		m_nPedType != PEDTYPE_CIVMALE
  #endif
-@@ -8205,7 +8937,8 @@ CPed::SetWaitState(eWaitState state, void *time)
+@@ -8205,7 +8936,8 @@ CPed::SetWaitState(eWaitState state, void *time)
  			break;
  		case WAITSTATE_DOUBLEBACK:
  			m_headingRate = 0.0f;
@@ -16764,7 +16948,7 @@ index aa63c32..5faf284 100644
  			animAssoc = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_IDLE_HBHB, 4.0f);
  #ifdef FIX_BUGS
  			animAssoc->SetFinishCallback(RestoreHeadingRateCB, this);
-@@ -8508,6 +9241,13 @@ CPed::Wait(void)
+@@ -8508,6 +9240,13 @@ CPed::Wait(void)
  					SetMoveState(PEDMOVE_WALK);
  					m_nStoredMoveState = PEDMOVE_NONE;
  					m_panicCounter = 0;
@@ -16778,7 +16962,7 @@ index aa63c32..5faf284 100644
  					return;
  				}
  			}
-@@ -8717,7 +9457,10 @@ CPed::Wait(void)
+@@ -8717,7 +9456,10 @@ CPed::Wait(void)
  					SetWaitState(WAITSTATE_SIT_UP, 0);
  				} else {
  					uint32 threatFlag = ScanForThreats();
@@ -17085,7 +17269,7 @@ index a27d489..7b38d90 100644
  			case SOUND_PED_DEATH:
  			case SOUND_PED_DAMAGE:
 diff --git a/src/peds/PedFight.cpp b/src/peds/PedFight.cpp
-index 8a3b971..f6c23e9 100644
+index 8a3b971..56f34d1 100644
 --- a/src/peds/PedFight.cpp
 +++ b/src/peds/PedFight.cpp
 @@ -25,6 +25,10 @@
@@ -17308,12 +17492,14 @@ index 8a3b971..f6c23e9 100644
  	float animStart = animLoopStart * 0.4f;
  	weaponAnimTime = weaponAnimAssoc->currentTime;
  	if (weaponAnimTime > animStart && weaponAnimTime - weaponAnimAssoc->timeStep <= animStart) {
-@@ -1023,8 +1106,10 @@ CPed::Attack(void)
+@@ -1022,9 +1105,11 @@ CPed::Attack(void)
+ 				weaponAnimAssoc->SetCurrentTime(animLoopStart);
  				weaponAnimAssoc->SetRun();
  			}
- 		} else if (IsPlayer() && m_pPointGunAt && bIsAimingGun && GetWeapon()->m_eWeaponState != WEAPONSTATE_RELOADING) {
+-		} else if (IsPlayer() && m_pPointGunAt && bIsAimingGun && GetWeapon()->m_eWeaponState != WEAPONSTATE_RELOADING) {
 -			weaponAnimAssoc->SetCurrentTime(animLoopEnd);
 -			weaponAnimAssoc->flags &= ~ASSOC_RUNNING;
++		} else if (VCModPlayerAimPoseHold(this) && m_pPointGunAt && bIsAimingGun && GetWeapon()->m_eWeaponState != WEAPONSTATE_RELOADING) {
 +			if (!VCModCombatArmRecovery(this, ourWeapon, weaponAnimAssoc, animLoopEnd)) {
 +				weaponAnimAssoc->SetCurrentTime(animLoopEnd);
 +				weaponAnimAssoc->flags &= ~ASSOC_RUNNING;
@@ -17471,7 +17657,7 @@ index ea3cf1a..90507d6 100644
  
  	return result;
 diff --git a/src/peds/PlayerPed.cpp b/src/peds/PlayerPed.cpp
-index cd8da42..f61e99e 100644
+index cd8da42..5a5d8f0 100644
 --- a/src/peds/PlayerPed.cpp
 +++ b/src/peds/PlayerPed.cpp
 @@ -1,5 +1,7 @@
@@ -17918,22 +18104,20 @@ index cd8da42..f61e99e 100644
  
  		if (m_fWalkAngle >= -DEGTORAD(130.0f) && m_fWalkAngle <= DEGTORAD(130.0f)) {
  			if (m_fWalkAngle > 0.0f) {
-@@ -1263,15 +1431,24 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
- 		m_wepAccuracy = 95;
- 	else
- 		m_wepAccuracy = 100;
-+	// what CPed's constructor hands every ped. Their locked-on shots spray, and the
-+	// first round of a burst is no more accurate than the last.
-+	if (bVCModPlayerDoomAim)
-+		m_wepAccuracy = 60;
+@@ -1259,19 +1427,18 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+ 		bCrouchWhenShooting = false;
+ 	}
+ 
+-	if(weaponInfo->IsFlagSet(WEAPONFLAG_CANAIM))
+-		m_wepAccuracy = 95;
+-	else
+-		m_wepAccuracy = 100;
++	VCModPlayerWepAccuracy(this, weaponInfo);
  
  	if (!m_pFire) {
  		eWeaponType weapon = GetWeapon()->m_eWeaponType;
 +		// the scope camera is what keeps these weapons off the lock-on path further down
-+		bool bVCModScopeSkip = bVCModNoScopedAim && weapon != WEAPONTYPE_CAMERA &&
-+			(weapon == WEAPONTYPE_ROCKETLAUNCHER || weapon == WEAPONTYPE_SNIPERRIFLE ||
-+			 weapon == WEAPONTYPE_LASERSCOPE || weapon == WEAPONTYPE_M4 ||
-+			 weapon == WEAPONTYPE_RUGER || weapon == WEAPONTYPE_M60);
++		bool bVCModScopeSkip = VCModScopeSkip(this);
  		if (weapon == WEAPONTYPE_ROCKETLAUNCHER || weapon == WEAPONTYPE_SNIPERRIFLE ||
  			weapon == WEAPONTYPE_LASERSCOPE || weapon == WEAPONTYPE_M4 ||
  			weapon == WEAPONTYPE_RUGER || weapon == WEAPONTYPE_M60 ||
@@ -17944,7 +18128,7 @@ index cd8da42..f61e99e 100644
  #ifdef FREE_CAM
  				if (CCamera::bFreeCam && TheCamera.Cams[0].Using3rdPersonMouseCam()) {
  					m_fRotationCur = CGeneral::LimitRadianAngle(-TheCamera.Orientation);
-@@ -1292,7 +1469,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1292,7 +1459,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				SetPedState(PED_SNIPER_MODE);
  				return;
  			}
@@ -17953,18 +18137,18 @@ index cd8da42..f61e99e 100644
  				if (weapon == WEAPONTYPE_ROCKETLAUNCHER || weapon == WEAPONTYPE_SNIPERRIFLE || weapon == WEAPONTYPE_LASERSCOPE || weapon == WEAPONTYPE_CAMERA)
  					return;
  		}
-@@ -1306,7 +1483,9 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1306,7 +1473,9 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				} else {
  					m_fAttackButtonCounter = 0.0f;
  				}
 -				SetAttack(m_pPointGunAt);
 +				// AIM RAISE: the trigger is dead until the gun is up
-+				if (!VCModAimRaising())
++				if (VCModPlayerAttackAllowed())
 +					SetAttack(m_pPointGunAt);
  			} else {
  				if (m_nPedState == PED_ATTACK) {
  					if (padUsed->WeaponJustDown()) {
-@@ -1416,14 +1595,14 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1416,14 +1585,14 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  	}
  #endif
  
@@ -17982,7 +18166,7 @@ index cd8da42..f61e99e 100644
  #endif		
  			) {
  				ClearWeaponTarget();
-@@ -1438,14 +1617,45 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1438,14 +1607,45 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				ClearWeaponTarget();
  				return;
  			}
@@ -18031,7 +18215,7 @@ index cd8da42..f61e99e 100644
  			}
  
  			if (m_pPointGunAt) {
-@@ -1454,10 +1664,13 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1454,10 +1654,13 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				if (padUsed->ShiftTargetRightJustDown())
  					FindNextWeaponLockOnTarget(m_pPointGunAt, false);
  			}
@@ -18047,7 +18231,7 @@ index cd8da42..f61e99e 100644
  			if (padUsed->TargetJustDown() || TheCamera.m_bJustJumpedOutOf1stPersonBecauseOfTarget)
  				FindWeaponLockOnTarget();
  		}
-@@ -1484,7 +1697,15 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1484,7 +1687,15 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  bool
  CPlayerPed::MovementDisabledBecauseOfTargeting(void)
  {
@@ -18064,7 +18248,7 @@ index cd8da42..f61e99e 100644
  }
  
  void
-@@ -1556,6 +1777,9 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
+@@ -1556,6 +1767,9 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
  			m_nMoveState = PEDMOVE_SPRINT;
  	}
  
@@ -18074,7 +18258,7 @@ index cd8da42..f61e99e 100644
  	if (m_nPedState != PED_FIGHT)
  		SetRealMoveAnim();
  
-@@ -1663,6 +1887,10 @@ CPlayerPed::FindNewAttackPoints(void)
+@@ -1663,6 +1877,10 @@ CPlayerPed::FindNewAttackPoints(void)
  void
  CPlayerPed::ProcessControl(void)
  {
@@ -18085,7 +18269,7 @@ index cd8da42..f61e99e 100644
  	// Mobile has some debug/abandoned cheat thing in here: "gbFrankenTommy"
  
  	if (m_nEvadeAmount != 0)
-@@ -1704,8 +1932,45 @@ CPlayerPed::ProcessControl(void)
+@@ -1704,8 +1922,45 @@ CPlayerPed::ProcessControl(void)
  	if (bWasPostponed)
  		return;
  
@@ -18131,7 +18315,7 @@ index cd8da42..f61e99e 100644
  	PruneReferences();
  
  	if (GetWeapon()->m_eWeaponType == WEAPONTYPE_MINIGUN) {
-@@ -1778,12 +2043,14 @@ CPlayerPed::ProcessControl(void)
+@@ -1778,12 +2033,14 @@ CPlayerPed::ProcessControl(void)
  		}
  		return;
  	}
@@ -18148,7 +18332,7 @@ index cd8da42..f61e99e 100644
  		// ...Really?
  		eWeaponType playerWeapon = FindPlayerPed()->GetWeapon()->m_eWeaponType;
  		if (playerWeapon == WEAPONTYPE_SNIPERRIFLE || playerWeapon == WEAPONTYPE_LASERSCOPE) {
-@@ -1793,15 +2060,53 @@ CPlayerPed::ProcessControl(void)
+@@ -1793,15 +2050,53 @@ CPlayerPed::ProcessControl(void)
  		}
  	}
  
@@ -18204,7 +18388,7 @@ index cd8da42..f61e99e 100644
  			if (!RpAnimBlendClumpGetFirstAssociation(GetClump(), ASSOC_BLOCK) && !m_attachedTo) {
  				if (TheCamera.Using1stPersonWeaponMode()) {
  					if (padUsed)
-@@ -1823,10 +2128,35 @@ CPlayerPed::ProcessControl(void)
+@@ -1823,10 +2118,35 @@ CPlayerPed::ProcessControl(void)
  					PlayerControlZelda(padUsed);
  				}
  			}
@@ -18241,7 +18425,7 @@ index cd8da42..f61e99e 100644
  			m_vecSeekPos = m_pSeekTarget->GetPosition();
  
  			// fall through
-@@ -1845,10 +2175,21 @@ CPlayerPed::ProcessControl(void)
+@@ -1845,10 +2165,21 @@ CPlayerPed::ProcessControl(void)
  					m_fMoveSpeed = 0.0f;
  					break;
  			}
@@ -18265,7 +18449,7 @@ index cd8da42..f61e99e 100644
  			}
  			break;
  		case PED_SNIPER_MODE:
-@@ -1913,7 +2254,7 @@ CPlayerPed::ProcessControl(void)
+@@ -1913,7 +2244,7 @@ CPlayerPed::ProcessControl(void)
  		GetWeapon()->Update(m_audioEntityId, this);
  	}
  	ProcessAnimGroups();
@@ -18274,7 +18458,7 @@ index cd8da42..f61e99e 100644
  		if (TheCamera.Cams[TheCamera.ActiveCam].Mode == CCam::MODE_FOLLOWPED
  			&& TheCamera.Cams[TheCamera.ActiveCam].DirectionWasLooking == LOOKING_BEHIND) {
  
-@@ -1940,10 +2281,27 @@ CPlayerPed::ProcessControl(void)
+@@ -1940,10 +2271,27 @@ CPlayerPed::ProcessControl(void)
  			}
  		}
  	}
@@ -19016,7 +19200,7 @@ index d21f8bf..66dea4d 100644
  };
  
 diff --git a/src/weapons/Weapon.cpp b/src/weapons/Weapon.cpp
-index cada168..1abe40e 100644
+index cada168..ee0376a 100644
 --- a/src/weapons/Weapon.cpp
 +++ b/src/weapons/Weapon.cpp
 @@ -29,6 +29,11 @@
@@ -19073,7 +19257,7 @@ index cada168..1abe40e 100644
 -			if (shooter == FindPlayerPed() && inaccuracy != 0.f)
 +			// the player-only ramp starts at zero, so the first round of a burst is
 +			// dead-on; doom aim hands the shot to the ped branch, which is always wild
-+			if (shooter == FindPlayerPed() && !bVCModPlayerDoomAim && inaccuracy != 0.f)
++			if (VCModPlayerAimRamp(shooter) && inaccuracy != 0.f)
  			{
  				float newInaccuracy = fPlayerAimScale * FindPlayerPed()->m_fAttackButtonCounter * (inaccuracy * Min(1.f, fPlayerAimScaleDist / distToTarget));
  				if (FindPlayerPed()->bIsDucking)
@@ -21408,7 +21592,7 @@ index 0000000..8e343bd
 +    unittest.main()
 diff --git a/utils/test_vc_civilian_ai.py b/utils/test_vc_civilian_ai.py
 new file mode 100644
-index 0000000..d0f9681
+index 0000000..d460e68
 --- /dev/null
 +++ b/utils/test_vc_civilian_ai.py
 @@ -0,0 +1,100 @@
@@ -21420,7 +21604,7 @@ index 0000000..d0f9681
 +import unittest
 +from pathlib import Path
 +
-+from test_vc_passenger import braced, run_cpp
++from vcmod_test_support import braced, run_cpp
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +PED = (ROOT / "src/peds/Ped.cpp").read_text()
@@ -21515,7 +21699,7 @@ index 0000000..d0f9681
 \ No newline at end of file
 diff --git a/utils/test_vc_combat.py b/utils/test_vc_combat.py
 new file mode 100644
-index 0000000..dca84bd
+index 0000000..9bb861c
 --- /dev/null
 +++ b/utils/test_vc_combat.py
 @@ -0,0 +1,244 @@
@@ -21562,7 +21746,7 @@ index 0000000..dca84bd
 +int notices = 0, fades = 0, aborts = 0, attacks = 0, lastMove = -1;
 +uint8 lastPressure = 0;
 +
-+void VCModRideNotice(const char *) { ++notices; }
++void VCModHudNotice(const char *) { ++notices; }
 +void VCModStreetFadePose(void *) { ++fades; }
 +bool VCModStreetChatActive(void) { return streetChat; }
 +void VCModStreetAbortChat(void *, const char *) { ++aborts; }
@@ -21765,7 +21949,7 @@ index 0000000..dca84bd
 +    unittest.main()
 diff --git a/utils/test_vc_cop_chase.py b/utils/test_vc_cop_chase.py
 new file mode 100644
-index 0000000..5093448
+index 0000000..481ed9c
 --- /dev/null
 +++ b/utils/test_vc_cop_chase.py
 @@ -0,0 +1,179 @@
@@ -21782,7 +21966,7 @@ index 0000000..5093448
 +import unittest
 +from pathlib import Path
 +
-+from test_vc_passenger import run_cpp
++from vcmod_test_support import run_cpp
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +PLAYER = (ROOT / "src/peds/PlayerPed.cpp").read_text()
@@ -21950,10 +22134,10 @@ index 0000000..5093448
 +    unittest.main()
 diff --git a/utils/test_vc_cop_patrol.py b/utils/test_vc_cop_patrol.py
 new file mode 100644
-index 0000000..573cf06
+index 0000000..d69f7e9
 --- /dev/null
 +++ b/utils/test_vc_cop_patrol.py
-@@ -0,0 +1,278 @@
+@@ -0,0 +1,281 @@
 +#!/usr/bin/env python3
 +"""Behavior checks for the cop foot-patrol scan extracted from CCopPed onto CPed
 +(NPC mode full 1:1). Pins the chase early-exit (bool true) and the hassle path
@@ -21973,6 +22157,7 @@ index 0000000..573cf06
 +#include <cmath>
 +#define nil NULL
 +#define sq(x) ((x)*(x))
++#define VCMOD_DIAG(...) do { } while (0)
 +typedef int8_t int8;
 +typedef int32_t int32;
 +typedef uint32_t uint32;
@@ -22037,6 +22222,7 @@ index 0000000..573cf06
 +    void Say(int) {}
 +    bool CopPatrolScan(uint32& hassleTimer);
 +};
++void VCModNpcCopScanDiag(CPed *) {}
 +'''
 +
 +SIG = "bool\nCPed::CopPatrolScan(uint32& hassleTimer)"
@@ -22211,9 +22397,10 @@ index 0000000..573cf06
 +
 +
 +class WanderGuardTests(unittest.TestCase):
-+    def test_wander_guards_cover_every_profile(self):
-+        # players stand through the node poses, so an NPC-mode player gets no
-+        # wander-node waits at all; only the deliberate after-kill pose remains
++    def test_wander_node_poses_stay_stock_for_every_profile(self):
++        # the stock node poses run for every profile, the NPC-mode player
++        # included; the only player divergence is the DOUBLEBACK hold and the
++        # ped seek radius
 +        guard = braced(PED, "void\nCPed::WanderPath(void)")
 +        start = guard.index("if (IsPlayer() && bVCModNpcMode")
 +        earlyReturn = guard[start:guard.index("return;", start) + len("return;")]
@@ -22223,11 +22410,11 @@ index 0000000..573cf06
 +        self.assertIn("bool playerNpc = IsPlayer() && bVCModNpcMode;", guard)
 +        self.assertIn("if (playerNpc && m_nWaitState == WAITSTATE_FALSE)", guard)
 +        self.assertIn("m_distanceToCountSeekDone = 1.0f", guard)
-+        # all four node-wait branches are gated off for players
-+        self.assertEqual(guard.count("if (!playerNpc)"), 1)
-+        self.assertEqual(guard.count("!playerNpc && ThePaths.TestForPedTrafficLight"), 1)
-+        self.assertEqual(guard.count("!playerNpc && ThePaths.TestCrossesRoad"), 1)
-+        self.assertEqual(guard.count("!playerNpc && m_pNextPathNode == previousLastNode"), 1)
++        # no stock node-wait branch carries a player gate
++        self.assertNotIn("!playerNpc", guard)
++        self.assertEqual(guard.count("SetWaitState(WAITSTATE_DOUBLEBACK"), 2)
++        self.assertIn("ThePaths.TestForPedTrafficLight(m_pLastPathNode, m_pNextPathNode)", guard)
++        self.assertIn("ThePaths.TestCrossesRoad(m_pLastPathNode, m_pNextPathNode)", guard)
 +
 +
 +if __name__ == "__main__":
@@ -22779,19 +22966,21 @@ index 0000000..916916c
 +    unittest.main()
 diff --git a/utils/test_vc_crew.py b/utils/test_vc_crew.py
 new file mode 100644
-index 0000000..fcb76ae
+index 0000000..824d96c
 --- /dev/null
 +++ b/utils/test_vc_crew.py
-@@ -0,0 +1,1308 @@
+@@ -0,0 +1,1310 @@
 +#!/usr/bin/env python3
 +"""Vercetti crew: the car shelf, the summon, the swap, the handover."""
 +import unittest
 +from pathlib import Path
 +
-+from test_vc_passenger import ENGINE_STUBS, braced, ride_enums, run_cpp
++from vcmod_test_support import ENGINE_STUBS, braced, run_cpp
++from test_vc_passenger import ride_enums
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +CREW = (ROOT / "src/extras/vcmodcrew.cpp").read_text()
++HUD = (ROOT / "src/extras/vcmodhud.cpp").read_text()
 +CREW_H = (ROOT / "src/extras/vcmodcrew.h").read_text()
 +PANEL = "".join((ROOT / "src/extras" / name).read_text() for name in (
 +    "vcmodpanel.cpp", "vcmodpanelregistry.cpp", "vcmodpanelcatalog.cpp",
@@ -23169,7 +23358,7 @@ index 0000000..fcb76ae
 +'''
 +
 +SIGS = {
-+    "notice": "static void\nVCModCrewNotice(const char *text)",
++    "notice": "void\nVCModHudNotice(const char *text)",
 +    "carcount": "int32\nVCModCrewCarCount(void)",
 +    "carat": "bool\nVCModCrewCarAt(int32 entry, int16 *outModel, const char **outName)",
 +    "carbuild": "static void\nVCModCrewCarBuild(void)",
@@ -23213,7 +23402,7 @@ index 0000000..fcb76ae
 +
 +def crew_statics():
 +    start = CREW.index("#define VCMOD_CREW_SIZE")
-+    end = CREW.index("static void\nVCModCrewNotice")
++    end = CREW.index("static void\nVCModCrewCarBuild(void)")
 +    return CREW[start:end]
 +
 +
@@ -23223,7 +23412,7 @@ index 0000000..fcb76ae
 +
 +def crew_source():
 +    return (ENGINE_STUBS + ride_enums() + crew_enums() + CREW_STUBS + crew_statics() +
-+            "\n".join(braced(CREW, SIGS[n]) for n in SIGS) +
++            "\n".join(braced(HUD if n == "notice" else CREW, SIGS[n]) for n in SIGS) +
 +            braced(CARCTRL, "void CCarCtrl::SwitchVehicleToRealPhysics(CVehicle* pVehicle)") +
 +            HELPERS)
 +
@@ -24093,10 +24282,10 @@ index 0000000..fcb76ae
 +    unittest.main()
 diff --git a/utils/test_vc_diag.py b/utils/test_vc_diag.py
 new file mode 100644
-index 0000000..329bf03
+index 0000000..3739578
 --- /dev/null
 +++ b/utils/test_vc_diag.py
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,153 @@
 +#!/usr/bin/env python3
 +"""Diagnostic probes: temporary logging stays in the tree behind one switch.
 +
@@ -24130,6 +24319,12 @@ index 0000000..329bf03
 +        "src/extras/vcmodride.cpp",
 +        "src/extras/vcmodcharacter.cpp",
 +        "src/extras/vcmodcombat.cpp",
++        "src/extras/vcmodchase.cpp",
++        "src/extras/vcmodchasesquad.cpp",
++        "src/extras/vcmodchaseair.cpp",
++        "src/extras/vcmodcrew.cpp",
++        "src/extras/vcmodpanelregistry.cpp",
++        "src/extras/vcmodkeys.cpp",
 +    )
 +)
 +
@@ -24150,6 +24345,51 @@ index 0000000..329bf03
 +    "VCMOD npc body:",
 +    "VCMOD npc mode:",
 +    "VCMOD move:",
++    # the cop decision probes
++    "VCMOD cop: chase model",
++    "VCMOD cop: id check",
++    # chase telemetry: the 1 Hz state line is the one anchor, the rest is probes
++    "VCMOD CHASE cleanup ped",
++    "VCMOD CHASE cleanup car",
++    "VCMOD CHASE density traffic",
++    "VCMOD CHASE no route to",
++    "VCMOD CHASE tableau shop",
++    "VCMOD CHASE leader stalled",
++    "VCMOD CHASE leader blip",
++    "VCMOD CHASE route fallback",
++    "VCMOD CHASE route spawn",
++    "VCMOD CHASE leader %p",
++    "VCMOD CHASE end",
++    "VCMOD CHASE spot",
++    "VCMOD CHASE teleport",
++    "VCMOD CHASE leader lost",
++    "VCMOD CHASE squad car",
++    "VCMOD CHASE board done",
++    "VCMOD CHASE squad backup slot",
++    "VCMOD CHASE crew car",
++    "VCMOD CHASE %s out at",
++    "VCMOD CHASE squad loss",
++    "VCMOD CHASE crew loss",
++    "VCMOD CHASE crew model still streaming",
++    "VCMOD CHASE pickup spawn failed",
++    "VCMOD CHASE pickup %p",
++    "VCMOD CHASE squad dismount gap",
++    "VCMOD CHASE cornered at",
++    "VCMOD CHASE pull over to",
++    "VCMOD CHASE heli %p",
++    "VCMOD CHASE air squad",
++    "VCMOD CHASE crew aboard",
++    "VCMOD CHASE approach markers",
++    "VCMOD CHASE air rally done",
++    "VCMOD CHASE approach ground",
++    "VCMOD CHASE approach air",
++    "VCMOD CHASE air rally %d men",
++    "VCMOD CHASE air seated",
++    "VCMOD CHASE air crash health",
++    "VCMOD CHASE air drop at",
++    "VCMOD CHASE air down",
++    "VCMOD CHASE air station held",
++    "VCMOD CREW state",
 +)
 +
 +KEPT = (
@@ -24157,6 +24397,15 @@ index 0000000..329bf03
 +    "VCMOD sit:",
 +    "VCMOD spin kick:",
 +    "VCMOD passengers:",
++    "VCMOD CHASE state",
++    # one-shot decisions and errors: a pin, a rebind, a refused anim group
++    "VCMOD pinned",
++    "VCMOD unpinned",
++    "VCMOD key %s",
++    "VCMOD keys reset",
++    "VCMOD selecting",
++    "VCMOD refusing",
++    "VCMOD could not write",
 +)
 +
 +
@@ -24192,17 +24441,18 @@ index 0000000..329bf03
 +    unittest.main()
 diff --git a/utils/test_vc_driver.py b/utils/test_vc_driver.py
 new file mode 100644
-index 0000000..e690b60
+index 0000000..be17bab
 --- /dev/null
 +++ b/utils/test_vc_driver.py
-@@ -0,0 +1,407 @@
+@@ -0,0 +1,408 @@
 +#!/usr/bin/env python3
 +"""Personal-driver tests: the summon, the drive to the pick-up, dismissal and the
 +skip-the-ride travel, all out of vcmodride.cpp and run against the passenger
 +suite's engine stubs."""
 +import unittest
 +
-+from test_vc_passenger import ride_source, run_cpp
++from vcmod_test_support import run_cpp
++from test_vc_passenger import ride_source
 +
 +SUMMON_FUNCTIONS = ("notice", "phase", "vehicle", "release", "handback", "standdown", "seatfree",
 +                    "nearest", "seats", "passkey",
@@ -24934,16 +25184,16 @@ index 0000000..015c44c
 +    unittest.main()
 diff --git a/utils/test_vc_gangfaction.py b/utils/test_vc_gangfaction.py
 new file mode 100644
-index 0000000..a358495
+index 0000000..864bc3c
 --- /dev/null
 +++ b/utils/test_vc_gangfaction.py
-@@ -0,0 +1,691 @@
+@@ -0,0 +1,696 @@
 +#!/usr/bin/env python3
 +"""Gang faction identity: IsGangMember / VCModGangEffectiveType / VCModNpcGangActive
 +and the gang damage gate, extracted from the engine and compiled against stubs."""
 +import unittest
 +from pathlib import Path
-+from test_vc_passenger import braced, run_cpp
++from vcmod_test_support import braced, run_cpp
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +PED = (ROOT / "src/peds/Ped.cpp").read_text()
@@ -25516,31 +25766,34 @@ index 0000000..a358495
 +
 +
 +class DoublebackTests(unittest.TestCase):
-+    def test_player_wander_never_issues_node_poses(self):
++    def test_player_wander_keeps_every_stock_node_pose(self):
 +        run_cpp(doubleback_source() + r'''
 +int main(void) {
-+    // both doubleback branches, the traffic light and the cross-road wait:
-+    // a player in NPC mode gets none of them from the wander
++    // the stock node poses run for the player in every NPC profile
 +    g_destination = &g_nodeB;
-+    CPed sameNode;
-+    sameNode.m_pLastPathNode = &g_nodeB;
-+    sameNode.m_pNextPathNode = &g_nodeB;
-+    sameNode.WanderPath();
-+    if (sameNode.m_nWaitState != WAITSTATE_FALSE) return 1;
-+    if (sameNode.m_nMoveState != PEDMOVE_WALK) return 2;
++    bVCModNpcMode = true;
++    for (int type = VCMOD_NPC_GANG; type <= VCMOD_NPC_COP; ++type) {
++        nVCModNpcType = type;
++        CPed deadEnd;                  // both nodes equal: the dead-end pose
++        deadEnd.m_pLastPathNode = &g_nodeB;
++        deadEnd.m_pNextPathNode = &g_nodeB;
++        deadEnd.WanderPath();
++        if (deadEnd.m_nWaitState != WAITSTATE_DOUBLEBACK) return 1 + type;
++    }
 +    g_destination = &g_nodeA;
++    nVCModNpcType = VCMOD_NPC_CIVILIAN;
 +    CPed backNode;                     // next == previousLastNode branch
 +    backNode.WanderPath();
-+    if (backNode.m_nWaitState != WAITSTATE_FALSE) return 3;
++    if (backNode.m_nWaitState != WAITSTATE_DOUBLEBACK) return 10;
 +    g_trafficLight = true;
 +    CPed atLight;
 +    atLight.WanderPath();
-+    if (atLight.m_nWaitState != WAITSTATE_FALSE) return 4;
++    if (atLight.m_nWaitState != WAITSTATE_TRAFFIC_LIGHTS) return 11;
 +    g_trafficLight = false;
 +    g_crossRoad = true;
 +    CPed atCrossing;
 +    atCrossing.WanderPath();
-+    if (atCrossing.m_nWaitState != WAITSTATE_FALSE) return 5;
++    if (atCrossing.m_nWaitState != WAITSTATE_CROSS_ROAD) return 12;
 +    return 0;
 +}
 +''')
@@ -25549,6 +25802,8 @@ index 0000000..a358495
 +        run_cpp(doubleback_source() + r'''
 +int main(void) {
 +    CPed tommy;
++    tommy.m_pLastPathNode = &g_nodeB;
++    tommy.m_pNextPathNode = &g_nodeA;  // a real walk back: beyond the ped radius
 +    tommy.SetWaitState(WAITSTATE_DOUBLEBACK, nil);
 +    uint32 deadline = tommy.m_nWaitTimer;
 +    CPathNode* next = tommy.m_pNextPathNode;
@@ -25606,7 +25861,7 @@ index 0000000..a358495
 +}
 +''')
 +
-+    def test_npc_keeps_the_stock_light_wait_the_player_skips(self):
++    def test_light_wait_is_stock_for_player_and_npc(self):
 +        run_cpp(doubleback_source() + r'''
 +int main(void) {
 +    g_trafficLight = true;
@@ -25615,7 +25870,7 @@ index 0000000..a358495
 +    tommy.m_pLastPathNode = &g_nodeB;
 +    tommy.m_pNextPathNode = &g_nodeB;
 +    tommy.WanderPath();
-+    if (tommy.m_nWaitState != WAITSTATE_FALSE) return 1;
++    if (tommy.m_nWaitState != WAITSTATE_TRAFFIC_LIGHTS) return 1;
 +    CPed npc;
 +    npc.m_isPlayer = false;
 +    npc.m_pLastPathNode = &g_nodeB;
@@ -25632,7 +25887,7 @@ index 0000000..a358495
 \ No newline at end of file
 diff --git a/utils/test_vc_ganggaze.py b/utils/test_vc_ganggaze.py
 new file mode 100644
-index 0000000..74c5ad7
+index 0000000..7139437
 --- /dev/null
 +++ b/utils/test_vc_ganggaze.py
 @@ -0,0 +1,463 @@
@@ -25640,7 +25895,7 @@ index 0000000..74c5ad7
 +import re
 +import unittest
 +from pathlib import Path
-+from test_vc_passenger import braced, run_cpp
++from vcmod_test_support import braced, run_cpp
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +PLAYER = (ROOT / 'src/peds/PlayerPed.cpp').read_text()
@@ -26943,7 +27198,7 @@ index 0000000..c2272ad
 +    unittest.main()
 diff --git a/utils/test_vc_npcaim.py b/utils/test_vc_npcaim.py
 new file mode 100644
-index 0000000..afa6cc4
+index 0000000..8315d8d
 --- /dev/null
 +++ b/utils/test_vc_npcaim.py
 @@ -0,0 +1,66 @@
@@ -26951,7 +27206,7 @@ index 0000000..afa6cc4
 +import re
 +import unittest
 +from pathlib import Path
-+from test_vc_passenger import braced, run_cpp
++from vcmod_test_support import braced, run_cpp
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +PED = (ROOT / 'src/peds/Ped.cpp').read_text()
@@ -27015,10 +27270,10 @@ index 0000000..afa6cc4
 +    unittest.main()
 diff --git a/utils/test_vc_npcmode.py b/utils/test_vc_npcmode.py
 new file mode 100644
-index 0000000..68dbec7
+index 0000000..6d5a431
 --- /dev/null
 +++ b/utils/test_vc_npcmode.py
-@@ -0,0 +1,1022 @@
+@@ -0,0 +1,1033 @@
 +#!/usr/bin/env python3
 +"""Manual BECOME NPC command: input ignored until toggle-off, terminal-only
 +break/resume, and the GANG/CIVILIAN/COP profile dispatch.
@@ -27032,7 +27287,7 @@ index 0000000..68dbec7
 +import unittest
 +from pathlib import Path
 +
-+from test_vc_passenger import braced, run_cpp
++from vcmod_test_support import braced, run_cpp
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +PLAYER = (ROOT / "src/peds/PlayerPed.cpp").read_text()
@@ -27119,14 +27374,18 @@ index 0000000..68dbec7
 +    bool bInVehicle;
 +    bool m_isPlayer;
 +    int m_objective;
-+    CPed() : m_nPedState(PED_IDLE), bInVehicle(false), m_isPlayer(false), m_objective(0) {}
++    int16 m_modelIndex;
++    CPed() : m_nPedState(PED_IDLE), bInVehicle(false), m_isPlayer(false), m_objective(0),
++             m_modelIndex() {}
 +    int IsPed(void) { return 1; }
 +    bool IsPlayer(void) { return m_isPlayer; }
 +    CVector GetPosition(void) { return m_pos; }
 +    bool DyingOrDead(void) { return false; }
++    bool WillChat(CPed *) { return true; }
++    int16 GetModelIndex(void) { return m_modelIndex; }
 +};
 +bool g_meleeWeapon = false;
-+struct CWeapon { bool IsTypeMelee(void) { return g_meleeWeapon; } };
++struct CWeapon { int m_eWeaponType; bool IsTypeMelee(void) { return g_meleeWeapon; } };
 +static CWeapon g_weapon;
 +struct CEntity { void CleanUpOldReference(CEntity **) {} };
 +struct CPedAttractor { void *GetEffect(void) { return 0; } };
@@ -27159,6 +27418,7 @@ index 0000000..68dbec7
 +    int m_nPedState;
 +    int m_objective;
 +    int m_numNearPeds;
++    CPed *m_nearPeds[10];
 +    uint32 m_chatTimer;
 +    int CharCreatedBy;
 +    int m_nPedType;
@@ -27173,6 +27433,7 @@ index 0000000..68dbec7
 +    int m_nStoredMoveState;
 +    CVector m_vecMoveSpeed;
 +    bool bInVehicle, bIsDucking, bDead, bIsRunning;
++    bool bIsPointingGunAt;
 +    uint32 m_leaveCarTimer;
 +    CPed *m_pNextPathNode, *m_pLookTarget;
 +    void *m_pLastPathNode;
@@ -27189,10 +27450,13 @@ index 0000000..68dbec7
 +                   m_pedStats(CPedStats::ms_apPedStats[PEDSTAT_PLAYER]), m_gangFlags(0xFF),
 +                   m_threatFlags(0),
 +                   m_fMoveSpeed(0), m_nMoveState(0), m_headingRate(0), m_nWaitState(0),
-+                   bInVehicle(false), bIsDucking(false), bDead(false), bIsRunning(false), m_leaveCarTimer(0),
++                   bInVehicle(false), bIsDucking(false), bDead(false), bIsRunning(false),
++                   bIsPointingGunAt(false), m_leaveCarTimer(0),
 +                   m_pNextPathNode(nil), m_pLookTarget(nil), m_pLastPathNode(nil),
 +                   m_attractor(nil), m_threatEntity(nil), m_pEventEntity(nil),
-+                   objectivesCleared(0), waitsCleared(0), chatsCleared(0) {}
++                   objectivesCleared(0), waitsCleared(0), chatsCleared(0) {
++        for (int i = 0; i < 10; i++) m_nearPeds[i] = nil;
++    }
 +    bool DyingOrDead(void) { return bDead; }
 +    bool IsPlayer(void) { return true; }
 +    bool IsPedInControl(void) { return g_inControl; }
@@ -27274,6 +27538,8 @@ index 0000000..68dbec7
 +static void VCModStreetFadeGesture(CPlayerPed *) { events.push_back("fadeGesture"); }
 +static void VCModStreetFadeScratch(CPlayerPed *) { events.push_back("fadeScratch"); }
 +static void VCModStreetFadeCrossLook(CPlayerPed *) { events.push_back("fadeCrossLook"); }
++struct CWeaponInfo { static CWeaponInfo *GetWeaponInfo(int) { return nil; } };
++void VCModPlayerWepAccuracy(CPlayerPed *, CWeaponInfo *) {}
 +'''
 +
 +SIGS = [
@@ -28044,7 +28310,7 @@ index 0000000..68dbec7
 \ No newline at end of file
 diff --git a/utils/test_vc_npcstrong.py b/utils/test_vc_npcstrong.py
 new file mode 100644
-index 0000000..f59f8ae
+index 0000000..a90e37f
 --- /dev/null
 +++ b/utils/test_vc_npcstrong.py
 @@ -0,0 +1,223 @@
@@ -28067,7 +28333,7 @@ index 0000000..f59f8ae
 +import unittest
 +from pathlib import Path
 +
-+from test_vc_passenger import braced, run_cpp
++from vcmod_test_support import braced, run_cpp
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +PLAYER = (ROOT / "src/peds/PlayerPed.cpp").read_text()
@@ -28273,7 +28539,7 @@ index 0000000..f59f8ae
 +    unittest.main()
 diff --git a/utils/test_vc_npcvoice.py b/utils/test_vc_npcvoice.py
 new file mode 100644
-index 0000000..85c084d
+index 0000000..35bcd01
 --- /dev/null
 +++ b/utils/test_vc_npcvoice.py
 @@ -0,0 +1,133 @@
@@ -28285,7 +28551,7 @@ index 0000000..85c084d
 +import unittest
 +from pathlib import Path
 +
-+from test_vc_passenger import braced, run_cpp
++from vcmod_test_support import braced, run_cpp
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +CHAT = (ROOT / "src/peds/PedChat.cpp").read_text()
@@ -28412,7 +28678,7 @@ index 0000000..85c084d
 +    unittest.main()
 diff --git a/utils/test_vc_npcwalk.py b/utils/test_vc_npcwalk.py
 new file mode 100644
-index 0000000..a1fe201
+index 0000000..447e616
 --- /dev/null
 +++ b/utils/test_vc_npcwalk.py
 @@ -0,0 +1,92 @@
@@ -28425,7 +28691,7 @@ index 0000000..a1fe201
 +import unittest
 +from pathlib import Path
 +
-+from test_vc_passenger import braced, run_cpp
++from vcmod_test_support import braced, run_cpp
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +NPC = (ROOT / "src/extras/vcmodnpc.cpp").read_text()
@@ -28608,23 +28874,23 @@ index 0000000..5b90366
 +    unittest.main()
 diff --git a/utils/test_vc_passenger.py b/utils/test_vc_passenger.py
 new file mode 100644
-index 0000000..f33d652
+index 0000000..59adcf3
 --- /dev/null
 +++ b/utils/test_vc_passenger.py
-@@ -0,0 +1,1358 @@
+@@ -0,0 +1,1300 @@
 +#!/usr/bin/env python3
 +"""Passenger-mode tests: the ride state machine out of vcmodride.cpp and the
 +destination list out of vcmodpanel.cpp, compiled against small engine stubs.
 +
-+The stubs here are shared with test_vc_driver.py, which covers the chauffeur.
++The stubs here are shared with test_vc_driver.py, which covers the chauffeur;
++the compiler step, the brace matcher and the engine preamble live in
++vcmod_test_support.py.
 +"""
 +import re
-+import subprocess
-+import tempfile
 +import unittest
-+from pathlib import Path
 +
-+ROOT = Path(__file__).resolve().parents[1]
++from vcmod_test_support import ENGINE_STUBS, ROOT, braced, run_cpp
++
 +PANEL = "".join((ROOT / "src/extras" / name).read_text() for name in (
 +    "vcmodpanel.cpp", "vcmodpanelregistry.cpp", "vcmodpanelcatalog.cpp",
 +    "vcmodpanelinternal.h"))
@@ -28632,81 +28898,22 @@ index 0000000..f33d652
 +PLAYERMOD = (ROOT / "src/extras/vcmodplayer.cpp").read_text()
 +HEAD = (ROOT / "src/extras/vcmodpanel.h").read_text()
 +RIDE = (ROOT / "src/extras/vcmodride.cpp").read_text()
++HUD = (ROOT / "src/extras/vcmodhud.cpp").read_text()
 +RIDE_H = (ROOT / "src/extras/vcmodride.h").read_text()
 +INI = (ROOT / "src/core/re3.cpp").read_text()
 +KEYS = (ROOT / "src/extras/vcmodkeys.cpp").read_text()
 +ZONES = (ROOT / "src/core/Zones.h").read_text()
 +
-+ENGINE_STUBS = r'''
-+#include <cstdio>
-+#include <cstdlib>
-+#include <cstring>
-+#include <cmath>
-+#include <sstream>
-+#include <string>
-+#include <vector>
-+#include <stdint.h>
-+#define nil NULL
-+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
-+#define VCMOD_DIAG(...) do { } while (0)
-+bool bVCModDiagnostics = false;
-+typedef int8_t int8;
-+typedef uint8_t uint8;
-+typedef int16_t int16;
-+typedef uint16_t uint16;
-+typedef int32_t int32;
-+typedef uint32_t uint32;
-+typedef uint16_t wchar;
-+std::string to_string(int value) {
-+    std::ostringstream out;
-+    out << value;
-+    return out.str();
-+}
-+'''
-+
-+
-+def braced(source, marker):
-+    start = source.index(marker)
-+    opening = source.index("{", start)
-+    depth = 1
-+    end = opening + 1
-+    while depth:
-+        depth += (source[end] == "{") - (source[end] == "}")
-+        end += 1
-+    return source[start:end]
-+
-+
 +def ride_statics():
 +    """The ride's own state, tuning constants and forward declarations."""
 +    start = RIDE.index("static int32 nVCModRideHandle")
-+    end = RIDE.index("void\nVCModRideNotice")
++    end = RIDE.index("int32\nVCModRidePhase(void)")
 +    return RIDE[start:end]
 +
 +
 +def ride_enums():
 +    return (braced(RIDE_H, "enum eVCModRideStyle") + ";\n" +
 +            braced(RIDE_H, "enum eVCModRidePhase") + ";\n")
-+
-+
-+def run_cpp(source):
-+    with tempfile.TemporaryDirectory(prefix="vc-passenger-test-") as directory:
-+        cpp = Path(directory) / "test.cpp"
-+        binary = Path(directory) / "test"
-+        cpp.write_text(source)
-+        # each test compiles only the functions it drives, so some statics are unused
-+        build = subprocess.run(["c++", "-std=c++98", "-Wall", "-Wextra", "-Wno-unused-function",
-+                                str(cpp), "-o", str(binary)],
-+                               capture_output=True, text=True)
-+        if build.returncode:
-+            print(build.stderr)
-+            numbered = "".join(f"{n}: {line}\n" for n, line in enumerate(source.splitlines(), 1))
-+            raise RuntimeError("compile failed\n" + numbered)
-+        if build.stderr:
-+            print(build.stderr)
-+        run = subprocess.run([str(binary)], capture_output=True, text=True)
-+        if run.returncode:
-+            print(run.stdout, run.stderr)
-+            raise RuntimeError("test binary failed")
 +
 +
 +VEHICLE_STUBS = r'''
@@ -29049,7 +29256,7 @@ index 0000000..f33d652
 +    if "passkey" in order and "releaseaim" not in order:
 +        order.insert(order.index("passkey"), "releaseaim")
 +    signatures = {
-+        "notice": "void\nVCModRideNotice(const char *text)",
++        "notice": "void\nVCModHudNotice(const char *text)",
 +        "phase": "int32\nVCModRidePhase(void)",
 +        "release": "static void\nVCModRideReleaseToTraffic(CVehicle *veh)",
 +        "handback": "static void\nVCModRideHandBack(CVehicle *veh)",
@@ -29070,7 +29277,8 @@ index 0000000..f33d652
 +        "update": "void\nVCModUpdateRide(CPlayerPed *player)",
 +        "skipride": "void\nVCModSkipRide(void)",
 +    }
-+    return "\n".join(braced(PLAYERMOD if name == "releaseaim" else RIDE, signatures[name])
++    sources = {"releaseaim": PLAYERMOD, "notice": HUD}
++    return "\n".join(braced(sources.get(name, RIDE), signatures[name])
 +                     for name in order) + "\n"
 +
 +
@@ -29972,7 +30180,7 @@ index 0000000..f33d652
 +    unittest.main()
 diff --git a/utils/test_vc_player.py b/utils/test_vc_player.py
 new file mode 100644
-index 0000000..bb4b58f
+index 0000000..c61bec1
 --- /dev/null
 +++ b/utils/test_vc_player.py
 @@ -0,0 +1,396 @@
@@ -29981,7 +30189,7 @@ index 0000000..bb4b58f
 +aim latch out of vcmodplayer.cpp, compiled against small engine stubs."""
 +import unittest
 +from pathlib import Path
-+from test_vc_passenger import braced, run_cpp
++from vcmod_test_support import braced, run_cpp
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +MODULE = (ROOT / "src/extras/vcmodplayer.cpp").read_text()
@@ -30954,7 +31162,7 @@ index 0000000..4d3295c
 +    unittest.main()
 diff --git a/utils/test_vc_sit.py b/utils/test_vc_sit.py
 new file mode 100644
-index 0000000..3f5e95f
+index 0000000..4456a64
 --- /dev/null
 +++ b/utils/test_vc_sit.py
 @@ -0,0 +1,233 @@
@@ -30976,7 +31184,7 @@ index 0000000..3f5e95f
 +import unittest
 +from pathlib import Path
 +
-+from test_vc_passenger import braced, run_cpp
++from vcmod_test_support import braced, run_cpp
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +SIT = (ROOT / "src/extras/vcmodsit.cpp").read_text()
@@ -31356,7 +31564,7 @@ index 0000000..b7bebfd
 +    unittest.main()
 diff --git a/utils/test_vc_wander.py b/utils/test_vc_wander.py
 new file mode 100644
-index 0000000..4684c91
+index 0000000..547b298
 --- /dev/null
 +++ b/utils/test_vc_wander.py
 @@ -0,0 +1,226 @@
@@ -31370,7 +31578,7 @@ index 0000000..4684c91
 +import unittest
 +from pathlib import Path
 +
-+from test_vc_passenger import braced, run_cpp
++from vcmod_test_support import braced, run_cpp
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +STREET = (ROOT / "src/extras/vcmodstreet.cpp").read_text()
@@ -31589,14 +31797,14 @@ index 0000000..4684c91
 \ No newline at end of file
 diff --git a/utils/test_vc_wanted.py b/utils/test_vc_wanted.py
 new file mode 100644
-index 0000000..78cfe34
+index 0000000..c18eedc
 --- /dev/null
 +++ b/utils/test_vc_wanted.py
-@@ -0,0 +1,145 @@
+@@ -0,0 +1,151 @@
 +#!/usr/bin/env python3
 +import unittest
 +from pathlib import Path
-+from test_vc_passenger import braced, run_cpp
++from vcmod_test_support import braced, run_cpp
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +WANTED = (ROOT / 'src/core/Wanted.cpp').read_text()
@@ -31632,7 +31840,7 @@ index 0000000..78cfe34
 +CVector FindPlayerCoors() { return CVector(); }
 +'''
 +
-+FUNCTIONS = ('Initialise()', 'SetWantedLevel(int32 level)', 'SetWantedLevelNoDrop(int32 level)',
++FUNCTIONS = ('VCModNeverWanted(void)', 'Initialise()', 'SetWantedLevel(int32 level)', 'SetWantedLevelNoDrop(int32 level)',
 +             'CheatWantedLevel(int32 level)',
 +             'RegisterCrime(eCrimeType type, const CVector &coors, uint32 id, bool policeDoesntCare)',
 +             'RegisterCrime_Immediately(eCrimeType type, const CVector &coors, uint32 id, bool policeDoesntCare)',
@@ -31646,8 +31854,8 @@ index 0000000..78cfe34
 +int32 CWanted::nMaximumWantedLevel = 9600;
 +int32 CWanted::WorkOutPolicePresence(CVector, float) { return 1; }
 +void CWanted::ResetPolicePursuit() { ++pursuitResets; }
-+''' + '\n'.join(braced(WANTED, 'void\nCWanted::' + f) if not f.startswith('AddCrimeToQ')
-+                else braced(WANTED, 'bool\nCWanted::' + f) for f in FUNCTIONS)
++''' + '\n'.join(braced(WANTED, ('bool\nCWanted::' if f.startswith(('AddCrimeToQ', 'VCModNeverWanted'))
++                                    else 'void\nCWanted::') + f) for f in FUNCTIONS)
 +
 +
 +class NeverWantedTests(unittest.TestCase):
@@ -31712,6 +31920,12 @@ index 0000000..78cfe34
 +    w.SetWantedLevelNoDrop(0);
 +    CHECK(w.GetWantedLevel() == 0 && w.m_nChaos == 0);
 +''')
++
++    def test_one_helper_reads_the_switch(self):
++        # the flag is read once, in the helper; every gate goes through it
++        self.assertEqual(WANTED.count("bVCModNeverWanted"), 1)
++        self.assertEqual(WANTED.count("if (VCModNeverWanted())"), 5)
++        self.assertIn("bool VCModNeverWanted(void);", HEADER)
 +
 +    def test_off_retains_direct_and_suspended_levels(self):
 +        self.check(r'''
@@ -32087,10 +32301,10 @@ index 0000000..93d7513
 +    unittest.main()
 diff --git a/utils/test_vc_windup.py b/utils/test_vc_windup.py
 new file mode 100644
-index 0000000..32ae6bc
+index 0000000..66d4e5e
 --- /dev/null
 +++ b/utils/test_vc_windup.py
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,142 @@
 +#!/usr/bin/env python3
 +"""AIM RAISE: a fresh lock enters the aim the way a ped does — the body sweeps
 +onto the target at CPed::TurnBody's stare rate and the trigger is dead until the
@@ -32152,7 +32366,12 @@ index 0000000..32ae6bc
 +    def test_the_trigger_waits_for_the_raise(self):
 +        weapon = braced(PLAYERPED.read_text(), "CPlayerPed::ProcessPlayerWeapon")
 +        self.assertEqual(weapon.count("SetAttack(m_pPointGunAt);"), 1)
-+        self.assertRegex(weapon, r"if\s*\(!VCModAimRaising\(\)\)\s*\n\s*SetAttack\(m_pPointGunAt\);")
++        # the gate is the module's call, not a read of the raise state
++        self.assertIn("if (VCModPlayerAttackAllowed())\n\t\t\t\t\tSetAttack(m_pPointGunAt);",
++                      weapon)
++        self.assertNotIn("!VCModAimRaising()", weapon)
++        gate = braced(COMBAT.read_text(), "VCModPlayerAttackAllowed")
++        self.assertIn("return !VCModAimRaising();", gate)
 +
 +    def test_moving_and_ducked_entries_end_the_raise(self):
 +        # only a planted standing entry winds up: AIM WALK and the two-hand hold
@@ -32228,3 +32447,87 @@ index 0000000..32ae6bc
 +
 +if __name__ == "__main__":
 +    unittest.main()
+diff --git a/utils/vcmod_test_support.py b/utils/vcmod_test_support.py
+new file mode 100644
+index 0000000..e1dcc28
+--- /dev/null
++++ b/utils/vcmod_test_support.py
+@@ -0,0 +1,77 @@
++#!/usr/bin/env python3
++"""Shared plumbing for the vc-mod harnesses.
++
++Every harness extracts a function out of the mod sources and compiles it against
++small engine stubs. This module owns the three pieces all of them need: the
++brace matcher that cuts a function out of a source file, the compiler step, and
++the engine preamble the extracted code is compiled against.
++
++A harness-specific stub lives in its own test_vc_<feature>.py; only what two or
++more harnesses use belongs here.
++"""
++import subprocess
++import tempfile
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++
++ENGINE_STUBS = r'''
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <cmath>
++#include <sstream>
++#include <string>
++#include <vector>
++#include <stdint.h>
++#define nil NULL
++#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
++#define VCMOD_DIAG(...) do { } while (0)
++bool bVCModDiagnostics = false;
++typedef int8_t int8;
++typedef uint8_t uint8;
++typedef int16_t int16;
++typedef uint16_t uint16;
++typedef int32_t int32;
++typedef uint32_t uint32;
++typedef uint16_t wchar;
++std::string to_string(int value) {
++    std::ostringstream out;
++    out << value;
++    return out.str();
++}
++'''
++
++
++def braced(source, marker):
++    """The marker and its balanced brace block, braces included."""
++    start = source.index(marker)
++    opening = source.index("{", start)
++    depth = 1
++    end = opening + 1
++    while depth:
++        depth += (source[end] == "{") - (source[end] == "}")
++        end += 1
++    return source[start:end]
++
++
++def run_cpp(source):
++    """Compile one test program with the host C++ compiler and run it."""
++    with tempfile.TemporaryDirectory(prefix="vcmod-test-") as directory:
++        cpp = Path(directory) / "test.cpp"
++        binary = Path(directory) / "test"
++        cpp.write_text(source)
++        # each test compiles only the functions it drives, so some statics are unused
++        build = subprocess.run(["c++", "-std=c++98", "-Wall", "-Wextra", "-Wno-unused-function",
++                                str(cpp), "-o", str(binary)],
++                               capture_output=True, text=True)
++        if build.returncode:
++            print(build.stderr)
++            numbered = "".join(f"{n}: {line}\n" for n, line in enumerate(source.splitlines(), 1))
++            raise RuntimeError("compile failed\n" + numbered)
++        if build.stderr:
++            print(build.stderr)
++        run = subprocess.run([str(binary)], capture_output=True, text=True)
++        if run.returncode:
++            print(run.stdout, run.stderr)
++            raise RuntimeError("test binary failed")
+\ No newline at end of file

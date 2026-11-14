@@ -35,6 +35,7 @@ scripts/sync.sh        # vc-mods.patch := git diff miami..vcmods   (run after ev
 scripts/build.sh       # cmake Release
 scripts/install.sh     # bundle -> game folder, re-sign
 scripts/package.sh     # zip the game folder for a flash drive; --public drops Rockstar data
+scripts/package-win.sh # portable Windows folder: reVC.exe, Play.bat, game data, mods
 scripts/publish.sh     # small folder fit to hand out: patch, docs, scripts, nothing else
 scripts/bootstrap.sh   # rebuild the whole thing from a clean machine
 ```
@@ -42,6 +43,14 @@ scripts/bootstrap.sh   # rebuild the whole thing from a clean machine
 `package.sh` and `publish.sh` are for two different audiences: the first is your
 own stick copy and keeps the game data, the second is what goes anywhere public
 and refuses to run if it finds any.
+
+`package-win.sh` is the second machine's path. It stages a portable folder —
+`reVC.exe`, the game folder, `mods/` and `scripts/windows/Play.bat` — and zips it.
+`Play.bat` starts the game with `cd /d "%~dp0"`, so the folder runs from wherever
+it is unpacked: no drive letter, no install path. `--public` leaves the Rockstar
+data out. The exe has to be built on Windows (`premake-vs2022.cmd`); pass `--exe`
+when it is not under `reVC/bin`. That build has no CMake build counter, so the
+version line shows `vcmods <sha8>` rather than a build number.
 
 The loop while features are still being added: edit in `reVC/`, commit to
 `vcmods`, `sync.sh`, `build.sh`, `install.sh`, play. Half-way states live in
