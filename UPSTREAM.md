@@ -3,6 +3,7 @@
 Built against [https://github.com/mrxenginner/reVC](https://github.com/mrxenginner/reVC), branch `miami`, commit `a26fff4`.
 Mod commits on top of it:
 
+    3f62c78 Ship the drive camera's stock deadzone hold
     ff1f984 Ship body-type banking for BECOME NPC
     c0477aa Ship NPC combat parity, the wander fixes and the module slices
     1641b0f Ship free-camera lock-on and the RIDE TO map-marker destination
@@ -50,9 +51,9 @@ Usage record for the build of this folder:
 
     System:   macOS arm64
     Operator: RaccoonPie-314
-    Date:     2026-11-14T12:16:22Z
+    Date:     2026-11-14T12:59:10Z
     Target:   https://github.com/mrxenginner/reVC
-    Hash:     8e8d6a4615a4f4a1d2953615a99a1542e25686ff84de79ae1565ff4748ad1f42
+    Hash:     bd7a28ac9bbafa6cc8accdeaaa2ad0766f24bbd0a2f458f3e01df0c63c0a080b
 
 ## Rebuilding
 

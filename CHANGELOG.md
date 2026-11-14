@@ -96,6 +96,20 @@ offered through the panel or the debug menu, and the choice is live — no resta
   and parking on arrival. The car waits with `MISSION_STOP_FOREVER` until Tommy is
   seated. Harness.
 
+## Shipped — 2026-11-14, `3f62c78`
+
+### Drive free camera — the idle hold
+
+- After the camera input stops, the view freezes in the world instead of staying
+  pinned to the car, so small steering corrections rotate the car under it. Past
+  the stock deadzone — the car's own turn past 20°, moving forward, the rule
+  `RotCamIfInFrontCar` uses — the view follows the car again at the held angle
+  and never centres on its own. After 1.5 s idle it still eases back to directly
+  behind over 0.6 s. Seen; two earlier shapes (instant stock-camera handoff, and
+  swinging behind at the deadzone) were played and rejected.
+- Boats take the same hold through `Process_BehindBoat`; the return at the idle
+  mark is unplayed there.
+
 ## Shipped — 2026-11-14, `ff1f984`
 
 ### BECOME NPC — TYPE FROM BODY
@@ -561,9 +575,10 @@ what it actually got.
   exercised across a restart either.
 - Panel row hit-testing at resolutions and window sizes other than the one used
   during development, and the tab strip and pin cell at any size.
-- The driving orbit camera, the pack car models and wheels, the steering wheel node,
-  explosion cover, the FBI bars and the firetruck cannon: built, installed, unplayed.
-  The camera's inverted vertical axis from 2026-11-09 is unplayed too.
+- The pack car models and wheels, the steering wheel node, explosion cover, the
+  FBI bars and the firetruck cannon: built, installed, unplayed. The driving
+  orbit camera is seen on cars; its inverted vertical axis from 2026-11-09 and
+  the boat hold are unplayed.
 - The cockpit view: whether the front-seat camera clears the dash and roof of
   every replaced model, whether the driver's own head intrudes at the frame edge,
   how bikes and boats read in it, and whether the camera-key exit feels right.

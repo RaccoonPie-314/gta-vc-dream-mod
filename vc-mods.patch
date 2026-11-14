@@ -7814,10 +7814,10 @@ index 0000000..100fb03
 +#endif
 diff --git a/src/extras/vcmoddrivecam.cpp b/src/extras/vcmoddrivecam.cpp
 new file mode 100644
-index 0000000..450e24d
+index 0000000..904082b
 --- /dev/null
 +++ b/src/extras/vcmoddrivecam.cpp
-@@ -0,0 +1,197 @@
+@@ -0,0 +1,260 @@
 +#include "common.h"
 +
 +#include "vcmoddrivecam.h"
@@ -7830,9 +7830,9 @@ index 0000000..450e24d
 +#include "Timer.h"
 +#include "Vehicle.h"
 +
-+// Idle time before the camera gives up the angle the player left it at, and how
-+// long the ease back to behind the car takes. The easing has to be short enough
-+// that a stop at a light does not feel like the camera is drifting on its own.
++// Idle time before the camera is eased back to directly behind the car, and how
++// long that ease takes. The easing has to be short enough that a stop at a light
++// does not feel like the camera is drifting on its own.
 +#define VCMOD_DRIVECAM_IDLE_MS		1500
 +#define VCMOD_DRIVECAM_RETURN_MS	600
 +
@@ -7847,9 +7847,18 @@ index 0000000..450e24d
 +#define VCMOD_DRIVECAM_ELEV_MIN		DEGTORAD(-20.0f)
 +#define VCMOD_DRIVECAM_ELEV_MAX		DEGTORAD(88.0f)
 +
++// The stock string camera only follows the car once it is more than PI - 160
++// degrees off it (RotCamIfInFrontCar's MaxDiffBeta). The same deadzone is
++// applied here to the car's own turn away from where the view was left: under
++// it the view does not move, past it the view follows the car again.
++#define VCMOD_DRIVECAM_FOLLOW_TURN	DEGTORAD(20.0f)
++
 +static CEntity *sTarget;
 +static int16 sMode;
-+static bool sEngaged;
++static bool sSession;           // an orbit session is in progress
++static bool sEngaged;           // the orbit owns the camera angle this frame
++static bool sHolding;           // idle hold: the view is frozen in the world
++static bool sFollowed;          // the deadzone was passed, the car is followed
 +static bool sAnchorPending;
 +static bool sReturning;
 +static uint32 sLastFrame;
@@ -7857,6 +7866,8 @@ index 0000000..450e24d
 +static uint32 sReturnStartMs;
 +static float sYaw;              // offset from directly behind the car
 +static float sPitch;            // elevation added to the mode's own camera height
++static float sHeldBeta;         // world angle the view was left at
++static float sRefHeading;       // car heading when the hold started
 +static float sAnchorYaw;
 +static float sAnchorPitch;
 +static float sReturnYaw;
@@ -7875,11 +7886,34 @@ index 0000000..450e24d
 +static void
 +Disengage(void)
 +{
++	sSession = false;
 +	sEngaged = false;
++	sHolding = false;
++	sFollowed = false;
 +	sAnchorPending = false;
 +	sReturning = false;
 +	sYaw = 0.0f;
 +	sPitch = 0.0f;
++}
++
++// the same heading CCam::Process derives for the target
++static float
++TargetHeading(CEntity *target)
++{
++	CVector fwd = target->GetForward();
++	if(fwd.x == 0.0f && fwd.y == 0.0f)
++		return 0.0f;
++	return CGeneral::GetATanOfXY(fwd.x, fwd.y);
++}
++
++static bool
++TurnPassedStockDeadzone(CEntity *target)
++{
++	if(Abs(WrapAngle(TargetHeading(target) - sRefHeading)) <= VCMOD_DRIVECAM_FOLLOW_TURN)
++		return false;
++	// the same forward-speed gate RotCamIfInFrontCar uses
++	CVehicle *veh = (CVehicle*)target;
++	return DotProduct(veh->GetForward(), veh->GetSpeed(CVector(0.0f, 0.0f, 0.0f))) > 0.02f;
 +}
 +
 +void
@@ -7939,11 +7973,13 @@ index 0000000..450e24d
 +	uint32 now = CTimer::GetTimeInMilliseconds();
 +
 +	if(yawIn != 0.0f || pitchIn != 0.0f){
-+		if(!sEngaged){
++		if(!sEngaged || sHolding){
 +			sEngaged = true;
 +			sAnchorPending = true;
 +			sAnchorYaw = 0.0f;
-+			sAnchorPitch = 0.0f;
++			// a resume during the hold keeps the pitch it was left at
++			sAnchorPitch = sHolding ? sPitch : 0.0f;
++			sHolding = false;
 +		}
 +		// the first frame has no camera position to anchor against yet, so the
 +		// input is kept and folded in once Orbit sees the stock angle
@@ -7954,19 +7990,40 @@ index 0000000..450e24d
 +			sYaw = WrapAngle(sYaw + yawIn);
 +			sPitch = Clamp(sPitch + pitchIn, VCMOD_DRIVECAM_ELEV_MIN, VCMOD_DRIVECAM_ELEV_MAX);
 +		}
++		sSession = true;
++		sFollowed = false;
 +		sReturning = false;
 +		sLastInputMs = now;
 +		return;
 +	}
 +
-+	if(!sEngaged)
++	if(!sSession)
 +		return;
 +
++	if(!sHolding && !sReturning && !sFollowed){
++		// first idle frame: freeze the view where the player left it. From here
++		// the car's own turn decides when the camera follows again.
++		sHolding = true;
++		sRefHeading = TargetHeading(target);
++	}
++
++	if(!sReturning && sHolding && TurnPassedStockDeadzone(target)){
++		// the car turned past the stock deadzone: follow its direction from
++		// here, keeping the angle the view was left at
++		sYaw = WrapAngle(sHeldBeta - TargetHeading(target));
++		sHolding = false;
++		sFollowed = true;
++	}
++
 +	if(!sReturning && (int32)(now - sLastInputMs) > VCMOD_DRIVECAM_IDLE_MS){
++		// ease from wherever the view is back to directly behind the car
 +		sReturning = true;
 +		sReturnStartMs = now;
++		sYaw = WrapAngle(sHeldBeta - TargetHeading(target));
 +		sReturnYaw = sYaw;
 +		sReturnPitch = sPitch;
++		sHolding = false;
++		return;
 +	}
 +
 +	if(sReturning){
@@ -8002,7 +8059,13 @@ index 0000000..450e24d
 +		}
 +	}
 +
-+	float beta = carHeading + sYaw;
++	float beta;
++	if(sHolding){
++		beta = sHeldBeta;
++	}else{
++		beta = carHeading + sYaw;
++		sHeldBeta = beta;
++	}
 +	source.x = target.x - Cos(beta) * radius;
 +	source.y = target.y - Sin(beta) * radius;
 +	return true;
@@ -8017,10 +8080,10 @@ index 0000000..450e24d
 +}
 diff --git a/src/extras/vcmoddrivecam.h b/src/extras/vcmoddrivecam.h
 new file mode 100644
-index 0000000..ed0addb
+index 0000000..25e00f2
 --- /dev/null
 +++ b/src/extras/vcmoddrivecam.h
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,28 @@
 +#ifndef VCMODDRIVECAM_H
 +#define VCMODDRIVECAM_H
 +
@@ -8029,9 +8092,11 @@ index 0000000..ed0addb
 +
 +// The stock car camera is a cam on a string: it trails the car and only swings
 +// back when the car is nearly facing it, so there is no way to look around while
-+// driving. This gives the mouse (and the right stick) the yaw and pitch for as
-+// long as it keeps moving, then eases back to directly behind the car, a framing
-+// the string camera takes over without a jump.
++// driving. This gives the mouse (and the right stick) the yaw and pitch while it
++// keeps moving. Once the input stops the view freezes in the world; a car turn
++// smaller than the stock deadzone rotates the car under it, a turn past the
++// deadzone makes the view follow the car again at the held angle, and after the
++// idle time the camera is eased back to directly behind the car.
 +void VCModDriveCamTick(CEntity *target, int16 mode);
 +
 +// True while the orbit owns the camera's yaw; the stock behind-the-car fix has
