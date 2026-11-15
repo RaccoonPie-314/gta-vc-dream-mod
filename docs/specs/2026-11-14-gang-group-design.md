@@ -1,8 +1,9 @@
 # BECOME NPC: gang group spawn and chatter (CALL GANG) — design
 
 Workspace `vc-mod`, reVC checkout `reVC/`, branch `vcmods`, HEAD `ff1f984`.
-Status: design approved in chat 2026-11-14; pending spec review. Continues
-`docs/specs/2026-11-14-body-type-banking-design.md` and
+Status: implemented 2026-11-14 (vcmods build 549, with the member-animation exemption);
+awaiting the in-game matrix.
+Continues `docs/specs/2026-11-14-body-type-banking-design.md` and
 `docs/specs/2026-11-11-gang-faction-membership-design.md`.
 
 ## Goal
@@ -19,9 +20,12 @@ spawn and chatter.
 - One panel row, one press = one group. No auto-spawn on engage, no hotkey.
 - The player is part of the group: leader of the formation, one ring slot in
   the circle.
-- The stock split (1/3 formation, 2/3 circle) and the stock 3–6 size roll.
-- The player's circle pair uses the stock pedestrian-meet length (10–14 s); the
-  NPC pairs keep the stock cluster's 100 s.
+- The stock 3–6 size roll. The button favours the conversation (formation on a
+  roll < 0.2, circle otherwise); world groups keep their own stock 1/3 split.
+- Every pair in the spawned circle holds its talk open-ended; the row's second
+  press (a menu input, since NPC mode ignores the pad) ends the whole ring's
+  conversation and sends the group on. The stock pedestrian-meet length and the
+  cluster's 100 s are replaced for this mod-spawned scene.
 - One active group at a time; a press while it is out refuses with a notice.
 - Existing kin circles are joinable by walking up, using the stock chat radius,
   roll and cooldown. Rival circles stay hostile-only.
@@ -106,10 +110,12 @@ spawn and chatter.
 
 - New row kind `VCMOD_ROW_GANGGROUP` in `vcmodpanelinternal.h`.
 - Row `CALL GANG` on the WORLD page, directly after `TYPE FROM BODY`.
-- Value cell: `[--]` when idle, `N men` while a group is active; row style off
-  while idle, on while active.
+- Value cell: `[--]` when idle, `N men` while a group is active, `N men talking`
+  while the circle's conversation is open; row style off while idle, on while
+  active.
 - Click dispatches to `VCModGangGroupCall()` (`vcmodpanel.cpp`, beside the
-  `CALL CREW` case). No ini key and no hotkey row.
+  `CALL CREW` case). No ini key and no hotkey row. While a circle is talking the
+  same click ends the talk (`your gang moves on`) instead of refusing.
 - `README.md` toggles table gains the row.
 
 ### Gate and notices
@@ -122,7 +128,9 @@ spawn and chatter.
   - `gang: the models cannot be loaded`
   - `gang: no room here` (fewer than two members could be placed)
   - `gang: already here` (a group from this row is still active)
-  - success: `your gang is here`
+  - success, formation: `your gang falls in behind you`
+  - success, circle: `your gang is talking`
+  - the row's second press on a talking circle: `your gang moves on`
 - Log lines use the plain `fprintf(stderr, "VCMOD gang group: ...")` style the
   street layer uses, so they are in `reVC.log` without DIAGNOSTICS.
 
@@ -155,15 +163,32 @@ One roll per press, stock values:
   loop's per-slot `angleMult` and `randomR` jitter), each ground checked and
   clear for a ped; a failed slot is skipped. Require at least two members.
 - Each member: `CPopulation::AddPed(gangType, model, pos)`, rotation toward the
-  centre, clump alpha 0. No leader link is written: `PED_CHAT` never uses it and
-  a player `bIsLeader` would be residue. (The stock code sets those fields; for
-  this spawned scene they change nothing.)
-- Pairing as stock: slot `j <-> n-1-j`, `SetChat` both ways
-  (`Population.cpp:1598-1599`). The player is slot 0 and pairs with slot n-1:
-  - the player's pair: the stock pedestrian-meet length,
-    `GetRandomNumber() % 4000 + 10000` (`Ped.cpp:1407`), so he is not locked
-    for the cluster's 100 s;
-  - every NPC pair: `100000` as stock.
+  centre, clump alpha 0. No leader link is written while the ring talks:
+  `PED_CHAT` never uses it and a player `bIsLeader` would be residue. (The stock
+  code sets those fields; for this spawned scene they change nothing while the
+  conversation runs.)
+- After the chatter: the stock chat restore hands a leaderless random ped a
+  random wander path, so each man would walk off on his own. Instead, as each
+  member's own chat ends he is adopted as the player's follower
+  (`SetLeader(player)` + `OBJECTIVE_FOLLOW_CHAR_IN_FORMATION` + his slot), and the
+  locked middle is adopted once no member is still in `PED_CHAT`. A member in a
+  reaction state waits until it settles. The talk itself is never touched.
+- Pairing crosses the ring: slot `j` pairs with the slot across
+  (`VCModGangGroupPartnerSlot`), so a four-man ring reads A-C and B-D; `SetChat`
+  both ways on each pair. The player is slot 0 and pairs with the slot across.
+- The talk is open-ended: every pair starts on the cluster's `100000` and the
+  global tick (`CGame::Process`, so the panel cannot starve it) pushes each open
+  pair's `m_chatTimer` 2 s out while the ring is talking (the player's clock too, only while his partner is a tracked
+  member), so `Chat()`'s own voice/gesture cycle keeps running. While the player
+  is in the ring's talk the GANG branch skips `EnterVacantNearbyCars` /
+  `UseNearbyAttractors` (their objectives pull him out of `PED_CHAT`) and the
+  press clears any objective he was carrying; threat reactions still run, so a
+  fight may end the talk by the stock rules. The row's second press ends every
+  open pair on the stock chat gap (`ClearChat` both sides,
+  `m_chatTimer = now + 30000`), including the player's, and the group adopts as
+  followers. A pair broken by a shove still ends by the stock partner rule and
+  the men adopt individually. A talk that ends without the menu logs the
+  player's and members' states once.
 - Odd `n`: slot `(n-1)/2` is the stock middle — heading toward the player,
   `PED_UNKNOWN`, no look target (`Population.cpp:1602-1610`).
 - Voice stays stock: a gang body speaks; `MI_PLAYER`'s turns are silent
@@ -197,11 +222,15 @@ One roll per press, stock values:
 
 ### Lifecycle and residue
 
-- On NPC mode off and on every break (car, death, arrest, controls taken) the
-  feature unlinks what it made: for each tracked formation member still valid,
-  `SetLeader(nil)`, clear the follow objective, and `SetWanderPath(random 0..7)`
-  if in control; circle members are left to the stock chat (their pair ends on
-  the stock partner/timer rules). The tracking array is cleared.
+- On NPC mode off, on every break (car, death, arrest, controls taken) and on the
+  row's menu break, the feature unlinks what it made: for each member holding our
+  leader link and still valid, `SetLeader(nil)`, clear the follow objective, and
+  `SetWanderPath(random 0..7)` if in control; a member still in the circle's chat
+  is left to the stock chat (their pair ends on the stock partner/timer rules).
+  The player's own pair is the group's: while he is in `PED_CHAT` with a tracked
+  member the release ends it (`ClearChat` plus the stock 30 s chat gap), because
+  the global hold stops with the release and the cluster's 100 s clock would
+  otherwise leave him standing at the partner. The tracking array is cleared.
 - The player's `bIsLeader` is false after every press and every unlink.
 - No save data changes: the members are random peds, not saved.
 
@@ -244,8 +273,11 @@ One roll per press, stock values:
   removed, `gang: no room here`.
 - Model streaming unavailable (interior, memory pressure): refuse, row stays
   pressable.
-- Body changed mid-mode with a group out: the group stays the old gang; a new
-  press refuses until it is gone. A later press uses the new gang.
+- Body changed mid-mode with a group out: a switch to another gang releases the
+  old group on the next mode frame (the men walk on as stock pedestrians) and the
+  next press spawns the new gang's group; a switch to a non-gang body (COP,
+  CIVILIAN) releases through the same profile gate. A switch within the same
+  gang keeps the group, and a press still refuses `already here`.
 - Player with `MI_PLAYER`: the circle includes him and the group chats; his
   turns are silent. The formation works the same.
 - Mode off / death mid-circle: the player's pair ends through the release

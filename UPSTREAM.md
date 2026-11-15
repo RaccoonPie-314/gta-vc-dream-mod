@@ -3,6 +3,7 @@
 Built against [https://github.com/mrxenginner/reVC](https://github.com/mrxenginner/reVC), branch `miami`, commit `a26fff4`.
 Mod commits on top of it:
 
+    aebb665 Ship CALL GANG, infinite ammo, saves and the army gang
     3f62c78 Ship the drive camera's stock deadzone hold
     ff1f984 Ship body-type banking for BECOME NPC
     c0477aa Ship NPC combat parity, the wander fixes and the module slices
@@ -51,9 +52,9 @@ Usage record for the build of this folder:
 
     System:   macOS arm64
     Operator: RaccoonPie-314
-    Date:     2026-11-14T12:59:10Z
+    Date:     2026-11-15T04:35:12Z
     Target:   https://github.com/mrxenginner/reVC
-    Hash:     bd7a28ac9bbafa6cc8accdeaaa2ad0766f24bbd0a2f458f3e01df0c63c0a080b
+    Hash:     4dc66213d249318026a06d236134a95aa75fc8a60f55a02a2b4d2da1df923373
 
 ## Rebuilding
 

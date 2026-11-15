@@ -96,6 +96,71 @@ offered through the panel or the debug menu, and the choice is live — no resta
   and parking on arrival. The car waits with `MISSION_STOP_FOREVER` until Tommy is
   seated. Harness.
 
+## Shipped — 2026-11-15, `aebb665`
+
+### CALL GANG
+
+- One press sends one stock-shaped group of the player's gang while BECOME NPC
+  runs the GANG profile: the stock walking formation with Tommy at its head
+  (20% roll) or the stock chatting circle with him on the ring (80%). The row
+  reads the state (`N men`, `N men talking`), and a second press ends the ring's
+  talk before the men fall in behind him. Seen.
+- Circle members pair across the ring and their talk never times out on its own;
+  the row's second press releases it on the stock 30 s gap. The ring's own people
+  never block its slot scan, so three- and four-man rings place. Seen.
+- The men keep their model's own gang animation set and their own stock AI; a
+  walk-up into a world kin circle keeps the stock pedestrian meet. Harness.
+- Release on mode-off, a car, death, arrest or a gang change hands the men back:
+  followers lose the leader link, circle pairs keep the stock chat.
+
+### The army gang
+
+- The GANGS shelf carries the army body as `Army (gang)`: the stock army model
+  with the army-gang identity (GANG9) instead of the cop profile. TYPE FROM BODY
+  derives GANG9, CALL GANG spawns army-model men with M4s, and the army gang's
+  threat rows are neutral with the base's army (the Fort Baxter repaint of the
+  street slot) both ways. Seen.
+- GANG9 damage passes the stock one-byte gang mask, whose bit 8 never fits:
+  before this, army-gang shots played the rifle animation and put no round in
+  the air. Seen.
+
+### One gang is one side
+
+- Rounds, fists, rams and every ped-attributed hit between two peds of the same
+  gang do no damage and leave no blood; the trace, impact dust and report still
+  play. Bullets already took the stock same-ped-type path; the gate closes
+  melee, rams, the army bridge, shotgun pellets and drive-bys. Seen.
+- A kin hit never provokes — neither the victim nor his kin answer it. Seen.
+- While the GANG profile runs, the player's side is his worn body's gang, and it
+  survives turning the mode off, so disbanding the group no longer hands the men
+  a stranger to shoot at. Harness.
+- A CALL GANG member never flees on his own: the flee state and the flee
+  objective are both refused while he follows, so a chased man stays with the
+  leader instead of breaking off alone. Seen.
+
+### Infinite ammo
+
+- `INFINITE AMMO` on the COMBAT page reuses the 100% save's reward below 100%:
+  the clip still empties and reloads, the total stops dropping, the detonator
+  keeps spending charges. Off is the stock path. Harness.
+- `AMMO KEY` on the KEYS page ships unbound and answers on foot and in a car;
+  RESET KEYS puts it back to unbound. Harness.
+
+### Save anywhere and autosave
+
+- The pause menu gains `SAVE GAME` after Resume: the stock slot picker, refused
+  with a notice during a mission, a cutscene, while wasted or busted, and outside
+  play. Manual saves keep the stock pre-save pass and its clock jump. Harness.
+- A passed mission arms an autosave that fires on the next saveable tick without
+  the clock jump; the last slot is the autosave slot, labelled `AutoSave`, and
+  is gone from the manual save list. Fired after missions in play.
+
+### BECOME NPC wander
+
+- The walk no longer restarts while player controls are disabled (debug menu,
+  garage, phone, cutscene): the start takes the same break the walk ends on,
+  instead of a start/end loop every frame. Harness.
+
 ## Shipped — 2026-11-14, `3f62c78`
 
 ### Drive free camera — the idle hold

@@ -200,7 +200,8 @@ turns them on again at the next launch, it does not turn them off.
 Hotkey bindings use the same section but their own rule: a binding is a setting,
 not a pinned row, so it is written the moment it changes on the KEYS page. The
 keys are `KeyPanel`, `KeyWalk`, `KeyFire`, `KeyDriver`, `KeyKick`, `KeyReload`,
-`KeySpot`, `KeyCapture`, `KeyFirstPerson`, `KeyCrew` and `KeyPassenger`; the value
+`KeySpot`, `KeyCapture`, `KeyFirstPerson`, `KeyCrew`, `KeyPassenger` and `KeyAmmo`;
+the value
 is the key code (printable keys are ASCII,
 the rest are the engine's `RsKeyCodes`). An absent or nonsense value falls back to
 the shipped default, so deleting one resets that hotkey.
@@ -230,10 +231,14 @@ the shipped default, so deleting one resets that hotkey.
 | `SKIP RIDE` row | — | One-shot travel to the **RIDE TO** destination, on foot or from a passenger seat. Never bound to the enter key |
 | `CALL DRIVER` row | — | Calls the chauffeur, or dismisses one already coming. The CALL DRIVER key (`H`) does the same |
 | `CALL CREW` row | — | Calls the three-man crew, or dismisses one already out. The CALL CREW key (`V`) does the same |
+| `CALL GANG` row | — | One press sends one stock-shaped group of the player's own gang while BECOME NPC runs the GANG profile: the stock walking formation with Tommy at its head, or the stock chatting circle with him on the ring. The circle's talk holds until the row is pressed again (it reads `N men talking`); a press while a non-talking group is out says so. One gang is one side: rounds, fists and rams between kin do no damage and leave no blood, and a chased man never breaks off to flee alone |
 | `CREW CAR` row (key `CrewCar`) | Admiral | The four-door car the crew arrives in; the list is every four-door car this install loads |
 | `bVCModNoStrafe` | off | The direction keys choose the body's heading — `A`/`D` turn instead of side-stepping. Aiming or firing hands the heading back to the camera |
 | `bVCModNpcAutoType` (row `TYPE FROM BODY`) | on | BECOME NPC derives the profile from the worn body's stock ped type: Tommy and gang bodies run GANG as the body's own gang, police bodies COP, every other body CIVILIAN. NPC TYPE shows the derived profile while it runs; cycling NPC TYPE turns this off and applies the chosen value |
 | `bVCModManualReload` | on | The RELOAD key (`R` by default) starts the reload on foot instead of waiting for the clip to empty. `R` is also the car radio key, so the tick does nothing while driving |
+| `bVCModInfiniteAmmo` (row `INFINITE AMMO`) | off | Reuses the 100% save's reward below 100%: the clip still empties and reloads, the player's total ammo stops dropping, the detonator keeps spending charges. The AMMO KEY (`AMMO KEY` on the KEYS page, unbound by default) toggles it in play |
+| `SAVE GAME` menu row | — | A pause-menu row after Resume that opens the stock slot picker from anywhere on foot. Refused with a notice during a mission, a cutscene, while wasted or busted, and outside play |
+| autosave | on | A passed mission saves itself on the next safe tick without the stock clock jump. The last slot is the autosave slot (`AutoSave`) and is no longer offered in the manual save list |
 | `bVCModVanillaFixes` (row `VANILLA FIXES`) | on | One row for the four fixes below. It reads `[ON]` only when all four are on, and switching it on restores the whole set |
 | `bVCModHudCleanup` | on | Money shows as `$42` instead of `$00000042`, and empty wanted stars are not drawn. Ini and Ctrl-M only — the row is the master above |
 | `bVCModKeepWheelAngle` | on | The front wheels keep their last steering angle when the car is abandoned instead of snapping straight. Ini and Ctrl-M only |
@@ -251,8 +256,8 @@ the shipped default, so deleting one resets that hotkey.
 
 ## Mod hotkeys
 
-Eleven keys are checked by the mod itself rather than by the controller binding
-table, because `gta_vc.set` rewrites that table on load. All eleven are rebindable
+Twelve keys are checked by the mod itself rather than by the controller binding
+table, because `gta_vc.set` rewrites that table on load. All twelve are rebindable
 on the panel's **KEYS** page; the shipped defaults are:
 
 - `G` = fire. A trackpad cannot hold the two-finger aim button and press the left
@@ -268,10 +273,12 @@ on the panel's **KEYS** page; the shipped defaults are:
 - `V` = call the crew, or dismiss it. Like `H` it is checked outside the on-foot
   block, so it also works from a seat.
 - `P` = board the nearest car as a passenger, driver or not.
+- `AMMO` = infinite ammo on and off. Ships unbound (`NONE`) — click the AMMO KEY
+  row and press a key.
 - `\` = open the panel.
 
 Clicking a KEYS row arms it and the next key press becomes the binding in the same
-moment; `Esc` cancels, and **RESET KEYS** restores all eleven. A binding is saved to
+moment; `Esc` cancels, and **RESET KEYS** restores all twelve. A binding is saved to
 `[VC Mods]` in `reVC.ini` immediately. While a capture is armed the mod's own
 hotkey handlers stand down, so the key used to bind does not also fire, reload or
 toggle. Binding a key that another action already uses is allowed — both actions
@@ -329,6 +336,11 @@ The worn model brings its own animation group, gated by the same playability
 check the animation picker uses, and the swap happens in the update pass, never
 inside the render. Tommy keeps his own ped stats through it, because respawn goes
 through `Undress`/`Dress`, which re-takes stats from whatever model is worn.
+
+The **gangs** shelf ends with `Army (gang)`: the stock army model under the
+army-gang identity (GANG9) instead of the cop profile the same body has on the
+cops shelf. TYPE FROM BODY derives GANG9 from it and CALL GANG spawns army-model
+men with M4s, while the cop shelf keeps the stock cop body.
 
 The **mission** shelf is a special case: `default.ide` declares slots
 `MI_SPECIAL01..21` as `special01`..`special21` with a generic texture dictionary,
