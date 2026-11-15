@@ -1,8 +1,9 @@
 # Handoff: BECOME NPC with player movement, slices B and C
 
 Date: 2026-11-15
-Repo: `vc-mod/reVC`, branch `vcmods`, HEAD `aebb665` (nothing committed this session)
+Repo: `vc-mod/reVC`, branch `vcmods`, HEAD `46e9f0f` (committed; not pushed — the remote is upstream)
 Installed: `vcmods build 601` in `~/Games/VC/reVC.app`
+Release: `46e9f0f` published as `d8004f7` on `gta-vc-dream-mod` main, pushed
 Harness: all green, including `utils/test_vc_playerwalk.py`
 
 The feature is complete and installed: BECOME NPC with the `WASD MOVE` row on
@@ -64,16 +65,23 @@ Do not revert or split them.
 - Does a fist fight read right with the AI choosing moves while the player walks
   between them?
 
+## Committed
+
+`46e9f0f` on `vcmods` carries the whole set: the NPC stock combat slices, the
+BECOME NPC walk, the range rows and the pool sizes, with the harnesses. The
+release folder was regenerated (`scripts/sync.sh`, `scripts/publish.sh`) and
+pushed to the `gta-vc-dream-mod` origin as `d8004f7`.
+
 ## Paste-ready prompt
 
-> Continue vc-mod, reVC checkout `reVC/`, branch `vcmods`, HEAD `aebb665`,
+> Continue vc-mod, reVC checkout `reVC/`, branch `vcmods`, HEAD `46e9f0f`,
 > installed `vcmods build 601` in `~/Games/VC/reVC.app`. Read
 > `docs/specs/2026-11-15-npc-player-walk-design.md`,
 > `docs/plans/2026-11-15-npc-player-walk.md`,
 > `docs/handoff/2026-11-15-npc-player-walk.md` and `AGENTS.md` first.
 >
-> The BECOME NPC walk feature (WASD MOVE) is complete and awaits play on
-> slices B and C: combat steering with the AI keeping aim/trigger, and the
+> The BECOME NPC walk feature (WASD MOVE) is committed and published; slices B
+> and C await play: combat steering with the AI keeping aim/trigger, and the
 > CALL GANG ring walk-away. Fix only what play reports; keep feature-off
 > stock. Run all `utils/test_vc_*.py`, `scripts/build.sh`, install only with
 > the game closed, confirm the build number, then hand off. Do not commit,
