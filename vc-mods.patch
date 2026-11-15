@@ -609,6 +609,26 @@ index 70e357a..a5b0210 100644
  
  	m_cvecTargetCoorsForFudgeInter = TargetCoors;
  	CVector OrigSource = Source;
+diff --git a/src/core/Camera.cpp b/src/core/Camera.cpp
+index 17d6a64..5885ca8 100644
+--- a/src/core/Camera.cpp
++++ b/src/core/Camera.cpp
+@@ -33,6 +33,7 @@
+ #include "Debug.h"
+ #include "GenericGameStorage.h"
+ #include "Camera.h"
++#include "vcmodrange.h"
+ 
+ enum
+ {
+@@ -630,6 +631,7 @@ CCamera::Process(void)
+ 		LODDistMultiplier = 1.0f;
+ 	GenerationDistMultiplier = LODDistMultiplier;
+ 	LODDistMultiplier *= CRenderer::ms_lodDistScale;
++	LODDistMultiplier *= VCModRenderDistScale();
+ 
+ 	CDraw::SetNearClipZ(RwCameraGetNearClipPlane(m_pRwCamera));
+ 	CDraw::SetFarClipZ(RwCameraGetFarClipPlane(m_pRwCamera));
 diff --git a/src/core/FileMgr.cpp b/src/core/FileMgr.cpp
 index 7eaeb32..f61fb77 100644
 --- a/src/core/FileMgr.cpp
@@ -1230,6 +1250,40 @@ index 01aff76..0946d33 100644
  	static CZone *GetAudioZone(uint16 i) { return &NavigationZoneArray[AudioZoneArray[i]]; }
  	static void PostZoneCreation(void);
  	static void CheckZonesForOverlap(void);
+diff --git a/src/core/config.h b/src/core/config.h
+index 7329544..f0d43ca 100644
+--- a/src/core/config.h
++++ b/src/core/config.h
+@@ -33,17 +33,18 @@ enum Config {
+ #endif
+ 	NUMOBJECTINFO = 210,
+ 
+-	// Pool sizes
+-	NUMPTRNODES = 50000,
+-	NUMENTRYINFOS = 3200,
+-	NUMPEDS = 140,
+-	NUMVEHICLES = 110,
+-	NUMBUILDINGS = 7000,
+-	NUMTREADABLES = 1,
+-	NUMOBJECTS = 460,
+-	NUMDUMMIES = 2340,
+-	NUMAUDIOSCRIPTOBJECTS = 192,
+-	NUMCOLMODELS = 4400,
++	// Pool sizes: stock VC caps crash the game (null operator new) when full;
++	// entry infos and ptr nodes are sized above the worst case the entity pools can hold.
++	NUMPTRNODES = 160000,
++	NUMENTRYINFOS = 40000,
++	NUMPEDS = 256,
++	NUMVEHICLES = 200,
++	NUMBUILDINGS = 12000,
++	NUMTREADABLES = 8,
++	NUMOBJECTS = 1200,
++	NUMDUMMIES = 6000,
++	NUMAUDIOSCRIPTOBJECTS = 400,
++	NUMCOLMODELS = 6000,
+ 	NUMCUTSCENEOBJECTS = 50,	// not a pool in VC
+ 
+ 	NUMANIMBLOCKS = 35,
 diff --git a/src/core/main.cpp b/src/core/main.cpp
 index a412a98..a641b12 100644
 --- a/src/core/main.cpp
@@ -1367,10 +1421,10 @@ index 28fa9cc..988d956 100644
  
  #ifdef NEW_RENDERER
 diff --git a/src/core/re3.cpp b/src/core/re3.cpp
-index d16088f..4b14f9f 100644
+index d16088f..93790d0 100644
 --- a/src/core/re3.cpp
 +++ b/src/core/re3.cpp
-@@ -32,6 +32,30 @@
+@@ -32,6 +32,31 @@
  #include "PlayerPed.h"
  #include "Radar.h"
  #include "debugmenu.h"
@@ -1398,10 +1452,11 @@ index d16088f..4b14f9f 100644
 +#include "vcmodfiretruck.h"
 +#include "vcmodsteering.h"
 +#include "vcmodlighttex.h"
++#include "vcmodrange.h"
  #include "Frontend.h"
  #include "WaterLevel.h"
  #include "main.h"
-@@ -355,6 +379,26 @@ void StoreIni(const char *cat, const char *key, char *val, int size)
+@@ -355,6 +380,26 @@ void StoreIni(const char *cat, const char *key, char *val, int size)
  	cfg[cat][key] = val;
  }
  
@@ -1428,7 +1483,7 @@ index d16088f..4b14f9f 100644
  const char *iniControllerActions[] = { "PED_FIREWEAPON", "PED_CYCLE_WEAPON_RIGHT", "PED_CYCLE_WEAPON_LEFT", "GO_FORWARD", "GO_BACK", "GO_LEFT", "GO_RIGHT", "PED_SNIPER_ZOOM_IN",
  	"PED_SNIPER_ZOOM_OUT", "VEHICLE_ENTER_EXIT", "CAMERA_CHANGE_VIEW_ALL_SITUATIONS", "PED_JUMPING", "PED_SPRINT", "PED_LOOKBEHIND", "PED_DUCK", "PED_ANSWER_PHONE", 
  #ifdef BIND_VEHICLE_FIREWEAPON
-@@ -622,6 +666,84 @@ bool LoadINISettings()
+@@ -622,6 +667,86 @@ bool LoadINISettings()
  	}
  #endif
  
@@ -1492,6 +1547,8 @@ index d16088f..4b14f9f 100644
 +	ReadIniIfExists("VC Mods", "SteeringWheel", &bVCModSteeringWheel);
 +	ReadIniIfExists("VC Mods", "LightTextures", &bVCModLightTextures);
 +	ReadIniIfExists("VC Mods", "TrafficAI", &bVCModTrafficAI);
++	ReadIniIfExists("VC Mods", "PedRange", &bVCModPedRange);
++	ReadIniIfExists("VC Mods", "RenderRange", &bVCModRenderRange);
 +	// hotkeys: a missing key keeps the code default, a nonsense one is replaced
 +	ReadIniIfExists("VC Mods", "KeyPanel", &aVCModKeys[VCKEY_PANEL]);
 +	ReadIniIfExists("VC Mods", "KeyWalk", &aVCModKeys[VCKEY_WALK]);
@@ -1513,7 +1570,7 @@ index d16088f..4b14f9f 100644
  	// Fetched in above block, but needs evaluation
  #ifdef PED_CAR_DENSITY_SLIDERS
  	CPopulation::MaxNumberOfPedsInUse = DEFAULT_MAX_NUMBER_OF_PEDS * CIniFile::PedNumberMultiplier;
-@@ -720,6 +842,10 @@ void SaveINISettings()
+@@ -720,6 +845,10 @@ void SaveINISettings()
  	}
  #endif
  
@@ -6320,10 +6377,10 @@ index 0000000..e68dad5
 +}
 diff --git a/src/extras/vcmodcombat.cpp b/src/extras/vcmodcombat.cpp
 new file mode 100644
-index 0000000..56e1cd7
+index 0000000..944553e
 --- /dev/null
 +++ b/src/extras/vcmodcombat.cpp
-@@ -0,0 +1,570 @@
+@@ -0,0 +1,559 @@
 +#include "common.h"
 +
 +#include <stdio.h>
@@ -6367,7 +6424,13 @@ index 0000000..56e1cd7
 +bool
 +VCModCopTwoHandPose(CPed *ped, CWeaponInfo *info)
 +{
-+	return bVCModCopPistol && ped->IsPlayer() && info->IsFlagSet(WEAPONFLAG_COP3_RD);
++	if (!ped->IsPlayer() || !info->IsFlagSet(WEAPONFLAG_COP3_RD))
++		return false;
++	if (VCModNpcFightsAsPed(ped))
++		// the worn body decides: a police body keeps the stock cop clip the
++		// COLT TWO-HAND row exists to restore, every other body keeps its own
++		return VCModNpcCopActive();
++	return bVCModCopPistol;
 +}
 +
 +AnimationId
@@ -6410,6 +6473,10 @@ index 0000000..56e1cd7
 +	};
 +
 +	if (!ped->IsPlayer() || assoc == nil || assoc->animId != ANIM_WEAPON_FIRE_3RD || assoc->nodes == nil)
++		return;
++	if (VCModNpcFightsAsPed(ped) && VCModNpcCopActive())
++		// the cop skeleton is what the clip was authored on; the pinning is
++		// for Tommy's skeleton, not the body the clip belongs to
 +		return;
 +	if (assoc->groupId < 0 || assoc->groupId >= NUM_ANIM_ASSOC_GROUPS)
 +		return;
@@ -6590,7 +6657,7 @@ index 0000000..56e1cd7
 +bool
 +VCModAimWalkWeapon(CPed *ped, CWeaponInfo *info)
 +{
-+	return bVCModAimWalk && ped->IsPlayer() && !ped->bIsDucking
++	return bVCModAimWalk && ped->IsPlayer() && !VCModNpcFightsAsPed(ped) && !ped->bIsDucking
 +		&& !VCModCopTwoHandPose(ped, info)
 +		&& !info->IsFlagSet(WEAPONFLAG_CANAIM_WITHARM);
 +}
@@ -6647,6 +6714,10 @@ index 0000000..56e1cd7
 +bool
 +VCModCombatAimTick(CPed *ped, CWeaponInfo *weaponInfo, CAnimBlendAssociation *weaponAssoc)
 +{
++	if (VCModNpcFightsAsPed(ped))
++		// the stock ped aim handling: the player's cop-pose hold, AIM WALK and
++		// recovery tails are player features, so the engine parks the clip
++		return false;
 +	if (ped->IsPlayer()) {
 +		if (VCModCopTwoHandPose(ped, weaponInfo)) {
 +			// the lowering tail is still playing; park the hold only once it lands
@@ -6777,6 +6848,17 @@ index 0000000..56e1cd7
 +	nVCModForcedFightMove = FIGHTMOVE_NULL;
 +}
 +
++int32
++VCModCombatChooseMove(CPed *ped, int32 buttonPressure, bool fightWithWeapon)
++{
++	int32 forcedMove = VCModCombatTakeFightMove();
++	if (forcedMove != FIGHTMOVE_NULL)
++		return forcedMove;
++	if (VCModNpcFightsAsPed(ped))
++		return ped->ChooseAttackAI((uint8)buttonPressure, fightWithWeapon);
++	return ped->ChooseAttackPlayer((uint8)buttonPressure, fightWithWeapon);
++}
++
 +// the spinning roundhouse the peds throw at arm's length: the same
 +// FIGHT_ROUNDHOUSE clip through the fight path, so the spin, reach, height and
 +// damage are the ped's own instead of a scripted animation
@@ -6830,76 +6912,40 @@ index 0000000..56e1cd7
 +	bool npcCombatProfile = VCModNpcGangActive() || VCModNpcCopActive() || VCModNpcCivilianActive();
 +	if (npcCombatProfile && (player->m_nPedState == PED_ATTACK || player->m_nPedState == PED_FIGHT
 +		|| player->m_nPedState == PED_AIM_GUN || (player->m_nPedState == PED_IDLE && npcCombatOwnsControl))) {
-+		bool ownsCombat = true;
++		// every combat state in NPC mode is entered by the engine's AI: the
++		// player's input attack is skipped and the objective layer calls
++		// SetAttack itself. A manual re-press or a stray cleanup here would
++		// fight that cadence, and clearing a stray would cut a bump scuffle
++		// short; the engine's own FinishedAttackCB/Fight endings own the exit.
 +		if (player->m_nPedState == PED_ATTACK) {
-+			if (!npcCombatOwnsControl) {
-+				// a bump shove or a stray attack: the one-shot animation is
-+				// all it is, and leaving its last frame up is the stuck
-+				// wind-up pose. End the state and let the stock block below
-+				// restore the walk/idle clip
-+				player->ClearAttack();
-+				ownsCombat = false;
-+			} else {
-+				// temporary probe (DIAGNOSTICS): a gunfight that never puts a
-+				// round in the air names the weapon's own state
-+				static uint32 nFireDiag = 0;
-+				uint32 now = CTimer::GetTimeInMilliseconds();
-+				if (now >= nFireDiag) {
-+					nFireDiag = now + 1000;
-+					CWeapon *wep = player->GetWeapon();
-+					VCMOD_DIAG("VCMOD combat: state=%d wep=%d clip=%d total=%d wstate=%d attacking=%d shoot=%d gun=%d look=%d obj=%d\n",
-+						player->m_nPedState, wep->m_eWeaponType, wep->m_nAmmoInClip,
-+						wep->m_nAmmoTotal, wep->m_eWeaponState, (int)player->bIsAttacking,
-+						(int32)(player->m_shootTimer - now), player->m_pPointGunAt != nil,
-+						player->m_pLookTarget != nil, player->m_objective);
-+				}
-+				// only a real kill objective starts a fight; the melee
-+				// route is the ped entry (StartFightAttack) because there
-+				// is no attack button to press. A gun is left to the base
-+				// CPed::ProcessControl, which already ran Attack() this
-+				// frame: a second call fires the shot twice
-+				CWeaponInfo *wi = CWeaponInfo::GetWeaponInfo(player->GetWeapon()->m_eWeaponType);
-+				if (player->GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED
-+					|| player->GetWeapon()->m_eWeaponType == WEAPONTYPE_BRASSKNUCKLE
-+					|| wi->IsFlagSet(WEAPONFLAG_FIGHTMODE)) {
-+					player->StartFightAttack(CGeneral::GetRandomNumber());
-+					player->SetAttackTimer(CGeneral::GetRandomNumberInRange(300, 900));
-+				}
++			// temporary probe (DIAGNOSTICS): a gunfight that never puts a round
++			// in the air names the weapon's own state
++			static uint32 nFireDiag = 0;
++			uint32 now = CTimer::GetTimeInMilliseconds();
++			if (now >= nFireDiag) {
++				nFireDiag = now + 1000;
++				CWeapon *wep = player->GetWeapon();
++				VCMOD_DIAG("VCMOD combat: state=%d wep=%d clip=%d total=%d wstate=%d attacking=%d shoot=%d gun=%d look=%d obj=%d\n",
++					player->m_nPedState, wep->m_eWeaponType, wep->m_nAmmoInClip,
++					wep->m_nAmmoTotal, wep->m_eWeaponState, (int)player->bIsAttacking,
++					(int32)(player->m_shootTimer - now), player->m_pPointGunAt != nil,
++					player->m_pLookTarget != nil, player->m_objective);
 +			}
-+		} else if (player->m_nPedState == PED_FIGHT) {
-+			if (!npcCombatOwnsControl) {
-+				// no live target: a stray fight must end, not idle in the
-+				// fight stance and swing at whoever is nearby
-+				player->EndFight(ENDFIGHT_FAST);
-+				ownsCombat = false;
-+			} else if (player->m_attackTimer < CTimer::GetTimeInMilliseconds()) {
-+				// the AI re-arms the next move through SetAttack every
-+				// beat; with no pad, NPC mode requests it on the same
-+				// timer. Fight() is the base layer's call, once per frame
-+				player->StartFightAttack(CGeneral::GetRandomNumber());
-+				player->SetAttackTimer(CGeneral::GetRandomNumberInRange(300, 900));
-+			}
-+		} else if (player->m_nPedState == PED_AIM_GUN) {
-+			// the base layer's aim block (ReactToPointGun + PointGunAt)
-+			// already ran this frame; a second pass is not needed
-+		} else {
++		} else if (player->m_nPedState == PED_IDLE) {
 +			player->m_fMoveSpeed = 0.0f;
 +			player->m_nStoredMoveState = player->m_nMoveState;
 +			player->SetRealMoveAnim();
 +		}
-+		// a stray attack/fight ends above; let the stock handling below
-+		// restore the pose instead of breaking out with the last frame held
-+		if (ownsCombat)
-+			return true;
++		return true;
 +	}
 +	return false;
 +}
 diff --git a/src/extras/vcmodcombat.h b/src/extras/vcmodcombat.h
 new file mode 100644
-index 0000000..8f7901c
+index 0000000..a2f0d3e
 --- /dev/null
 +++ b/src/extras/vcmodcombat.h
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,123 @@
 +#ifndef VCMODCOMBAT_H
 +#define VCMODCOMBAT_H
 +
@@ -7006,6 +7052,11 @@ index 0000000..8f7901c
 +void VCModCombatRequestFightMove(int32 move);
 +int32 VCModCombatTakeFightMove(void);
 +void VCModCombatClearFightMove(void);
++// the fight move chooser: the forced-move slot first (the spin kick command),
++// then the ped chooser while NPC mode owns the body, the player chooser
++// otherwise. Taking the slot here (not inside ChooseAttackPlayer) keeps the
++// one-shot request working for both choosers.
++int32 VCModCombatChooseMove(CPed *ped, int32 buttonPressure, bool fightWithWeapon);
 +
 +// NEVER WANTED: a star or a queued crime is cleared the moment it appears
 +void VCModNeverWantedClamp(CPlayerPed *player);
@@ -8937,10 +8988,10 @@ index 0000000..dba10c8
 \ No newline at end of file
 diff --git a/src/extras/vcmodganggroup.cpp b/src/extras/vcmodganggroup.cpp
 new file mode 100644
-index 0000000..18f0b14
+index 0000000..3f52087
 --- /dev/null
 +++ b/src/extras/vcmodganggroup.cpp
-@@ -0,0 +1,814 @@
+@@ -0,0 +1,822 @@
 +#include "common.h"
 +
 +#include <stdio.h>
@@ -9496,7 +9547,7 @@ index 0000000..18f0b14
 +// the row's second press on a talking ring: every open pair ends on the stock
 +// chat gap, the player's own included, so the group walks and falls in behind him
 +static void
-+VCModGangGroupStopChat(CPlayerPed *player, uint32 now)
++VCModGangGroupStopChat(CPlayerPed *player, uint32 now, const char *why)
 +{
 +	for (int32 i = 0; i < VCMOD_GANG_GROUP_MAX; i++) {
 +		CPed *member = apVCModGangGroup[i];
@@ -9512,7 +9563,15 @@ index 0000000..18f0b14
 +	nVCModGangGroupTalkingMask = 0;
 +	bVCModGangGroupPlayerWasTalking = false;
 +	VCModHudNotice("your gang moves on");
-+	fprintf(stderr, "VCMOD gang group: the talk breaks (menu)\n");
++	fprintf(stderr, "VCMOD gang group: the talk breaks (%s)\n", why);
++}
++
++void
++VCModGangGroupWalkAway(CPlayerPed *player)
++{
++	if (!VCModGangGroupPlayerTalking(player))
++		return;
++	VCModGangGroupStopChat(player, CTimer::GetTimeInMilliseconds(), "walked away");
 +}
 +
 +void
@@ -9539,7 +9598,7 @@ index 0000000..18f0b14
 +	// The men are adopted on the same press, before they can wander off on their
 +	// own, because the panel is open and the mode update is not running
 +	if (!bVCModGangGroupFormation && VCModGangGroupChatting()) {
-+		VCModGangGroupStopChat(player, CTimer::GetTimeInMilliseconds());
++		VCModGangGroupStopChat(player, CTimer::GetTimeInMilliseconds(), "menu");
 +		VCModGangGroupAdoptCircle(player);
 +		return;
 +	}
@@ -9757,10 +9816,10 @@ index 0000000..18f0b14
 +}
 diff --git a/src/extras/vcmodganggroup.h b/src/extras/vcmodganggroup.h
 new file mode 100644
-index 0000000..bf12462
+index 0000000..53e215f
 --- /dev/null
 +++ b/src/extras/vcmodganggroup.h
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,38 @@
 +#ifndef VCMODGANGGROUP_H
 +#define VCMODGANGGROUP_H
 +
@@ -9780,6 +9839,9 @@ index 0000000..bf12462
 +int32 VCModGangGroupAlive(void);
 +// true while the player is in the spawned ring's conversation
 +bool VCModGangGroupPlayerTalking(CPlayerPed *player);
++// a WASD MOVE walk away from the ring: the same break the row's second press
++// makes, with its own reason in the log
++void VCModGangGroupWalkAway(CPlayerPed *player);
 +// true for a ped this group spawned; the engine asks before handing a player-led
 +// follower Tommy's animation set, so the members keep their own stock gang set
 +bool VCModGangGroupOwnsPed(CPed *ped);
@@ -10337,10 +10399,10 @@ index 0000000..aad3d7c
 +#endif
 diff --git a/src/extras/vcmodnpc.cpp b/src/extras/vcmodnpc.cpp
 new file mode 100644
-index 0000000..c0e4826
+index 0000000..c242d00
 --- /dev/null
 +++ b/src/extras/vcmodnpc.cpp
-@@ -0,0 +1,766 @@
+@@ -0,0 +1,809 @@
 +#include "common.h"
 +
 +#include <string.h>
@@ -10567,6 +10629,47 @@ index 0000000..c0e4826
 +	return bVCModNpcMode;
 +}
 +
++bool
++VCModNpcFightsAsPed(CPed *ped)
++{
++	return ped != nil && ped->IsPlayer() && bVCModNpcMode;
++}
++
++// CCopPed's constructor gives each cop type its value; the table is that
++// mapping by model, so a cop body reads the same as the stock cop
++static const struct { int16 model; uint8 accuracy; } aVCModNpcCopAccuracy[] = {
++	{ MI_COP, 60 }, { MI_SWAT, 68 }, { MI_FBI, 76 }, { MI_ARMY, 84 },
++	{ MI_VICE1, 76 }, { MI_VICE2, 76 }, { MI_VICE3, 76 }, { MI_VICE4, 76 },
++	{ MI_VICE5, 76 }, { MI_VICE6, 76 }, { MI_VICE7, 76 }, { MI_VICE8, 76 },
++};
++
++uint8
++VCModNpcWepAccuracy(CPlayerPed *player)
++{
++	if (VCModNpcEffectiveType() != VCMOD_NPC_COP)
++		return 60;
++	for (int i = 0; i < ARRAY_SIZE(aVCModNpcCopAccuracy); i++)
++		if (player->GetModelIndex() == aVCModNpcCopAccuracy[i].model)
++			return aVCModNpcCopAccuracy[i].accuracy;
++	return 60;
++}
++
++// the NPC-mode player has no pad behind the move state, so the reaction and
++// seek states hand him the state's speed. Writing it straight in swapped the
++// walk/run clips in a single frame, because the player's blend weights are
++// driven by m_fMoveSpeed. A ped flips the same move state through
++// BlendAnimation at delta 1.0, a weight fade of about a second, so the speed
++// follows the stroll's ease (one time constant, same rate) and the weights
++// slide over that second instead of jumping
++float
++VCModNpcMoveSpeed(CPlayerPed *player, float target)
++{
++	if (!bVCModNpcMode || target <= 0.0f)
++		return target;
++	float rate = Min(1.0f, CTimer::GetTimeStep() * 0.035f);
++	return player->m_fMoveSpeed + (target - player->m_fMoveSpeed) * rate;
++}
++
 +// temporary probe (DIAGNOSTICS): the ID-check candidate gate is stock-tight - a
 +// random pedestrian in WANDER_PATH, no objective, no look target, within 5 m and
 +// in sight. This names how far the nearest pedestrians get through it, so one
@@ -10707,17 +10810,17 @@ index 0000000..c0e4826
 +
 +// the profile's identity: civilian bodies read as random pedestrians and borrow
 +// their own stat, gang bodies read as the worn gang and borrow its stat plus the
-+// kin mask, cops keep the mission setup. RANDOM_CHAR is what opens the stock
-+// scan/threat/chat gates; CanBeDeleted's IsPlayer() guard keeps him from being
-+// culled. A manual profile keeps GANG7 for any skin. The originals restore on
-+// break/off/switch
++// kin mask, cops borrow the worn body's stat and the COP threat row but keep the
++// mission setup. RANDOM_CHAR is what opens the stock scan/threat/chat gates;
++// CanBeDeleted's IsPlayer() guard keeps him from being culled. A manual profile
++// keeps GANG7 for any skin. The originals restore on break/off/switch
 +static void
-+VCModNpcBorrowIdentity(CPlayerPed *player, bool civilianWander, bool gangWander)
++VCModNpcBorrowIdentity(CPlayerPed *player, bool civilianWander, bool gangWander, bool copWander)
 +{
 +	int32 gangType = VCModNpcGangType(player);
 +	player->CharCreatedBy = (civilianWander || gangWander) ? RANDOM_CHAR : MISSION_CHAR;
 +	player->m_fearFlags = CPedType::GetThreats(civilianWander ? PEDTYPE_CIVMALE
-+		: gangWander ? gangType : player->m_nPedType);
++		: gangWander ? gangType : copWander ? PEDTYPE_COP : player->m_nPedType);
 +
 +	CPedStats *borrowedStats = nil;
 +	if (gangWander)
@@ -10727,6 +10830,10 @@ index 0000000..c0e4826
 +			? VCModNpcBodyStats(player) : CPedStats::ms_apPedStats[PEDSTAT_GANG7];
 +	else if (civilianWander)
 +		borrowedStats = VCModNpcCivilianBodyStats(player);
++	else if (copWander)
++		// the chooser the cop fight takes reads these flags: without the borrow
++		// it is STAT_PLAYER (can kick, 3x melee) instead of STAT_COP (knee only)
++		borrowedStats = VCModNpcBodyStats(player);
 +
 +	if (borrowedStats) {
 +		if (!bVCModNpcStatsBorrowed) {
@@ -10878,12 +10985,9 @@ index 0000000..c0e4826
 +		VCMOD_DIAG("VCMOD npc mode: engaged type=%d gang=%d\n",
 +			VCModNpcEffectiveType(), VCModNpcGangType(player));
 +	}
-+	// NPC mode never runs ProcessPlayerWeapon, so the accuracy froze at whatever
-+	// normal play left: the DOOM AIM row did nothing mid-mode and the stale value
-+	// decided every shot the AI fired. Keep it current every frame, as normal play
-+	// does; the aim ramp itself is off in NPC mode (VCModPlayerAimRamp), so this
-+	// value is the whole spread
-+	VCModPlayerWepAccuracy(player, CWeaponInfo::GetWeaponInfo(player->GetWeapon()->m_eWeaponType));
++	// the body's stock accuracy, not the player's 95/100: the AI fires these
++	// shots, so it fires them with the ped's spread. DOOM AIM stays a player row
++	player->m_wepAccuracy = VCModNpcWepAccuracy(player);
 +	// The armed objective leaves the aim pose up. Nothing releases it when the
 +	// fight ends here - that is ClearPointGunAt from the player's weapon code,
 +	// which NPC mode skips - so the parked fire clip kept the gun raised for the
@@ -10904,7 +11008,8 @@ index 0000000..c0e4826
 +
 +	bool bCivilianWander = VCModNpcCivilianActive() && VCModStreetWanderOwnsPlayer();
 +	bool bGangWander = VCModNpcGangActive() && VCModStreetWanderOwnsPlayer();
-+	VCModNpcBorrowIdentity(player, bCivilianWander, bGangWander);
++	bool bCopWander = VCModNpcCopActive() && VCModStreetWanderOwnsPlayer();
++	VCModNpcBorrowIdentity(player, bCivilianWander, bGangWander, bCopWander);
 +	// CALL GANG's group belongs to the mode: another profile, a car, death or
 +	// an arrest hands its followers back before this frame's AI runs
 +	VCModGangGroupUpdate(player, pad);
@@ -11109,10 +11214,10 @@ index 0000000..c0e4826
 +
 diff --git a/src/extras/vcmodnpc.h b/src/extras/vcmodnpc.h
 new file mode 100644
-index 0000000..9c47e25
+index 0000000..2addec4
 --- /dev/null
 +++ b/src/extras/vcmodnpc.h
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,67 @@
 +#ifndef VCMODNPC_H
 +#define VCMODNPC_H
 +
@@ -11154,6 +11259,15 @@ index 0000000..9c47e25
 +// NPC mode owns the attack/fight states with no pad presses: the melee checks
 +// have to take the ped path, not the player-press path
 +bool VCModNpcCombatActive(void);
++// true when this ped is the player and NPC mode owns his combat: every engine
++// branch that exists for a human trigger takes the ped path on this answer
++bool VCModNpcFightsAsPed(CPed *ped);
++// the stock accuracy of the worn body's ped: 60 for every pedestrian and gang
++// ped, the police bodies' own CCopPed values while the COP profile runs
++uint8 VCModNpcWepAccuracy(CPlayerPed *player);
++// the NPC-mode player's move speed eases toward the state's target, so the
++// walk/run clips crossfade instead of swapping in one frame
++float VCModNpcMoveSpeed(CPlayerPed *player, float target);
 +// CPed's blocked-path check: true when this frame must clear the panic counter.
 +// A stock player is blocked only from his own controls' stuck flag; an
 +// NPC-mode player has no pad, so he takes the pedestrian rule: a real impact
@@ -11169,6 +11283,112 @@ index 0000000..9c47e25
 +void VCModNpcStrollGait(CPlayerPed *ped);
 +// a fresh wander starts the stroll from a standstill
 +void VCModNpcResetStroll(void);
++
++#endif
+diff --git a/src/extras/vcmodnpcwalk.cpp b/src/extras/vcmodnpcwalk.cpp
+new file mode 100644
+index 0000000..0ec0804
+--- /dev/null
++++ b/src/extras/vcmodnpcwalk.cpp
+@@ -0,0 +1,73 @@
++#include "common.h"
++
++#include "vcmodnpcwalk.h"
++#include "vcmodnpc.h"
++#include "vcmodganggroup.h"
++
++#include "Pad.h"
++#include "Ped.h"
++#include "PlayerPed.h"
++
++bool bVCModNpcPlayerWalk = false;
++
++bool
++VCModNpcPlayerWalks(void)
++{
++	return bVCModNpcMode && bVCModNpcPlayerWalk;
++}
++
++bool
++VCModNpcWalkInput(CPad *pad)
++{
++	if (pad == nil || pad->ArePlayerControlsDisabled())
++		return false;
++	return pad->GetPedWalkLeftRight() != 0.0f || pad->GetPedWalkUpDown() != 0.0f
++		|| pad->JumpJustDown();
++}
++
++// a pose wait ends on a keypress the way a pedestrian's own movement ends it;
++// the attractor waits keep their clock and their registration, so they finish
++// on their own
++static void
++VCModNpcWalkEndPoseWait(CPlayerPed *player)
++{
++	switch (player->m_nWaitState) {
++	case WAITSTATE_FALSE:
++	case WAITSTATE_USE_ATM:
++	case WAITSTATE_PLAYANIM_CHAT:
++	case WAITSTATE_SIT_DOWN:
++	case WAITSTATE_SIT_DOWN_RVRS:
++	case WAITSTATE_SIT_UP:
++	case WAITSTATE_SIT_IDLE:
++		break;
++	default:
++		player->ClearWaitState();
++		break;
++	}
++}
++
++void
++VCModNpcWalkMove(CPlayerPed *player, CPad *pad)
++{
++	// walking out of the ring's talk ends it; the stock menu press is unchanged
++	if (player->m_nPedState == PED_CHAT && VCModGangGroupPlayerTalking(player))
++		VCModGangGroupWalkAway(player);
++	VCModNpcWalkEndPoseWait(player);
++	player->PlayerControlZelda(pad);
++}
++
++void
++VCModNpcWalkCombat(CPlayerPed *player, CPad *pad)
++{
++	VCModNpcWalkEndPoseWait(player);
++	// a fist fight moves off the attack steps, not a free walk
++	if (player->m_nPedState == PED_FIGHT) {
++		player->PlayerControlFighter(pad);
++		return;
++	}
++	player->PlayerControlZelda(pad);
++	// the AI owns the target: put the facing back on it after the walk, the
++	// same call the player's own lock-on makes
++	if (player->m_pPointGunAt)
++		player->RotatePlayerToTrackTarget();
++}
+diff --git a/src/extras/vcmodnpcwalk.h b/src/extras/vcmodnpcwalk.h
+new file mode 100644
+index 0000000..ecc3269
+--- /dev/null
++++ b/src/extras/vcmodnpcwalk.h
+@@ -0,0 +1,21 @@
++#ifndef VCMODNPCWALK_H
++#define VCMODNPCWALK_H
++
++class CPad;
++class CPlayerPed;
++
++// "WASD MOVE": while BECOME NPC runs the movement keys own locomotion and the
++// AI keeps everything else; off is BECOME NPC, byte for byte
++extern bool bVCModNpcPlayerWalk;
++
++// true when BECOME NPC runs and the row is on
++bool VCModNpcPlayerWalks(void);
++// true when a movement key is held this frame
++bool VCModNpcWalkInput(CPad *pad);
++// the keys own this frame: end a pose wait, then the stock on-foot locomotion
++void VCModNpcWalkMove(CPlayerPed *player, CPad *pad);
++// the same for a combat frame: the AI keeps the target and the trigger, the
++// keys only translate and the tracking turn keeps the facing on the target
++void VCModNpcWalkCombat(CPlayerPed *player, CPad *pad);
 +
 +#endif
 diff --git a/src/extras/vcmodpanel.cpp b/src/extras/vcmodpanel.cpp
@@ -12650,10 +12870,10 @@ index 0000000..9390a62
 +#endif
 diff --git a/src/extras/vcmodpanelregistry.cpp b/src/extras/vcmodpanelregistry.cpp
 new file mode 100644
-index 0000000..7efadb3
+index 0000000..ef1ded0
 --- /dev/null
 +++ b/src/extras/vcmodpanelregistry.cpp
-@@ -0,0 +1,588 @@
+@@ -0,0 +1,599 @@
 +#include "common.h"
 +
 +#include <stdio.h>
@@ -12688,7 +12908,9 @@ index 0000000..7efadb3
 +#include "vcmodsit.h"
 +#include "vcmodstreet.h"
 +#include "vcmodnpc.h"
++#include "vcmodnpcwalk.h"
 +#include "vcmodganggroup.h"
++#include "vcmodrange.h"
 +#include "vcmodride.h"
 +#include "vcmodplayer.h"
 +#include "vcmodkeys.h"
@@ -12880,6 +13102,8 @@ index 0000000..7efadb3
 +	  "Tommy waits chats and crosses like a ped", "takes over when left idle" },
 +	{ "BECOME NPC",      VCMOD_ROW_FLAG,    &bVCModNpcMode,        "NpcMode",        VCMOD_PAGE_WORLD, nil, -1,
 +	  "Tommy becomes a ped and ignores input", "input stays ignored until off" },
++	{ "WASD MOVE",       VCMOD_ROW_FLAG,    &bVCModNpcPlayerWalk, "NpcPlayerWalk",  VCMOD_PAGE_WORLD, nil, -1,
++	  "keys steer; the AI does the rest", "needs BECOME NPC on" },
 +	{ "NPC TYPE",        VCMOD_ROW_CYCLE,   nil,                   "NpcType",        VCMOD_PAGE_WORLD, &aVCModNpcTypeCycle, -1,
 +	  "reaction profile GANG CIVILIAN COP", nil },
 +	{ "TYPE FROM BODY",  VCMOD_ROW_FLAG,    &bVCModNpcAutoType,    "NpcAutoType",    VCMOD_PAGE_WORLD, nil, -1,
@@ -12898,6 +13122,10 @@ index 0000000..7efadb3
 +	  "walls block explosion damage", nil },
 +	{ "FBI LIGHT BARS",  VCMOD_ROW_FLAG,    &bVCModFBILights,      "FbiLights",      VCMOD_PAGE_WORLD, nil, -1,
 +	  "stock four-corona sirens on FBI cars", nil },
++	{ "PED RANGE",       VCMOD_ROW_FLAG,    &bVCModPedRange,       "PedRange",       VCMOD_PAGE_WORLD, nil, -1,
++	  "peds walk 25% further before despawning", nil },
++	{ "RENDER RANGE",    VCMOD_ROW_FLAG,    &bVCModRenderRange,    "RenderRange",    VCMOD_PAGE_WORLD, nil, -1,
++	  "25% more model and streaming distance", "costs GPU high up" },
 +
 +	{ "PANEL KEY",       VCMOD_ROW_KEY,     nil,                   nil,              VCMOD_PAGE_KEYS, nil, VCKEY_PANEL,
 +	  "open and close this panel", nil },
@@ -13118,6 +13346,7 @@ index 0000000..7efadb3
 +SETTWEAKPATH("VC Mods|World");
 +TWEAKBOOL(bVCModStreetIdle);
 +TWEAKBOOLN(bVCModNpcMode, "become npc (ignores input)");
++TWEAKBOOL(bVCModNpcPlayerWalk);
 +TWEAKINT32N(nVCModNpcType, 0, NUM_VCMOD_NPC_TYPES - 1, 1, "npc type 0 gang, 1 civilian");
 +TWEAKBOOLN(bVCModNpcAutoType, "type follows body");
 +TWEAKFUNCN(VCModGangGroupCall, "call gang");
@@ -13173,6 +13402,8 @@ index 0000000..7efadb3
 +	&bVCModFireTruckCannon,
 +	&bVCModSteeringWheel,
 +	&bVCModLightTextures,
++	&bVCModPedRange,
++	&bVCModRenderRange,
 +};
 +
 +int32
@@ -13815,6 +14046,53 @@ index 0000000..18c0214
 +
 +// Cuts the engine when the exit key is held while driving the current vehicle.
 +void VCModExitHoldTick(CPlayerInfo *info);
++
++#endif
+diff --git a/src/extras/vcmodrange.cpp b/src/extras/vcmodrange.cpp
+new file mode 100644
+index 0000000..82a313e
+--- /dev/null
++++ b/src/extras/vcmodrange.cpp
+@@ -0,0 +1,22 @@
++#include "common.h"
++
++#include "vcmodrange.h"
++
++// a quarter more reach; the draw distance slider still sets the base and the
++// timecycle far clip still caps the world, so this stays a nudge, not a rewrite
++#define VCMOD_RANGE_SCALE 1.25f
++
++bool bVCModPedRange = true;
++bool bVCModRenderRange = true;
++
++float
++VCModPedRangeScale(void)
++{
++	return bVCModPedRange ? VCMOD_RANGE_SCALE : 1.0f;
++}
++
++float
++VCModRenderDistScale(void)
++{
++	return bVCModRenderRange ? VCMOD_RANGE_SCALE : 1.0f;
++}
+diff --git a/src/extras/vcmodrange.h b/src/extras/vcmodrange.h
+new file mode 100644
+index 0000000..69ac3a6
+--- /dev/null
++++ b/src/extras/vcmodrange.h
+@@ -0,0 +1,13 @@
++#ifndef VCMODRANGE_H
++#define VCMODRANGE_H
++
++// The world keeps more of itself than stock: peds walk further before the
++// distance cull removes them, and models hold detail and stream a little
++// further out. Both ride existing engine distances, so off is stock exactly.
++extern bool bVCModPedRange;
++extern bool bVCModRenderRange;
++
++float VCModPedRangeScale(void);
++float VCModRenderDistScale(void);
 +
 +#endif
 diff --git a/src/extras/vcmodreload.cpp b/src/extras/vcmodreload.cpp
@@ -18779,7 +19057,7 @@ index 50f9337..f98bb63 100644
  	static void PedAnimDoorCloseRollingCB(CAnimBlendAssociation *assoc, void *arg);
  	static void FinishJumpCB(CAnimBlendAssociation *assoc, void *arg);
 diff --git a/src/peds/PedAI.cpp b/src/peds/PedAI.cpp
-index e204dad..b52bec9 100644
+index e204dad..6ec0277 100644
 --- a/src/peds/PedAI.cpp
 +++ b/src/peds/PedAI.cpp
 @@ -18,6 +18,12 @@
@@ -18887,7 +19165,7 @@ index e204dad..b52bec9 100644
 +	// on each other (the CALL GANG group and its leader included)
 +	if (attacker->IsPed() && VCModGangSameGang(this, (CPed*)attacker))
 +		return;
-+	if (IsPlayer() && !VCModNpcCivilianActive() && !VCModNpcGangActive() && attacker->IsPed()) {
++	if (IsPlayer() && !VCModNpcFightsAsPed(this) && attacker->IsPed()) {
  		InformMyGangOfAttack(attacker);
  		SetLookFlag(attacker, true);
  		SetLookTimer(700);
@@ -19039,7 +19317,7 @@ index a27d489..7b38d90 100644
  			case SOUND_PED_DEATH:
  			case SOUND_PED_DAMAGE:
 diff --git a/src/peds/PedFight.cpp b/src/peds/PedFight.cpp
-index 8a3b971..4c2d973 100644
+index 8a3b971..ccd7948 100644
 --- a/src/peds/PedFight.cpp
 +++ b/src/peds/PedFight.cpp
 @@ -25,6 +25,11 @@
@@ -19087,7 +19365,7 @@ index 8a3b971..4c2d973 100644
 +	AnimationId aimAnim = VCModCopAimAnim(this, weaponInfo);
 +	// the cop pose parks at the player's frame: weapon.dat's loop start is defined
 +	// for colt45_fire and lands mid-recoil on the cop animation
-+	float animLoopStart = aimAnim == ANIM_WEAPON_FIRE_3RD ? nVCModCopHoldFrame / 30.0f : weaponInfo->m_fAnimLoopStart;
++	float animLoopStart = aimAnim == ANIM_WEAPON_FIRE_3RD && !VCModNpcCopActive() ? nVCModCopHoldFrame / 30.0f : weaponInfo->m_fAnimLoopStart;
 +	CAnimBlendAssociation *weaponAssoc = RpAnimBlendClumpGetAssociation(GetClump(), aimAnim);
  	if (!weaponAssoc || weaponAssoc->blendDelta < 0.0f) {
  		if (weaponInfo->IsFlagSet(WEAPONFLAG_CROUCHFIRE)) {
@@ -19102,7 +19380,7 @@ index 8a3b971..4c2d973 100644
 +	if (VCModCombatAimTick(this, weaponInfo, weaponAssoc))
 +		return;
  
-+	bool raising = IsPlayer() && VCModAimRaising();
++	bool raising = IsPlayer() && !VCModNpcFightsAsPed(this) && VCModAimRaising();
 +	bool atHold = false;
 +	if (weaponAssoc) {
 +		if (raising) {
@@ -19164,15 +19442,78 @@ index 8a3b971..4c2d973 100644
  	if (!animAssoc || animAssoc->blendDelta < 0.0f) {
  		if (weaponInfo->IsFlagSet(WEAPONFLAG_CROUCHFIRE)) {
  			animAssoc = RpAnimBlendClumpGetAssociation(GetClump(), GetCrouchFireAnim(weaponInfo));
+@@ -267,7 +315,7 @@ CPed::SetAttack(CEntity *victim)
+ 
+ 	if (curWeapon->IsFlagSet(WEAPONFLAG_RELOAD) &&
+ 		(RpAnimBlendClumpGetAssociation(GetClump(), GetReloadAnim(curWeapon)) || RpAnimBlendClumpGetAssociation(GetClump(), GetCrouchReloadAnim(curWeapon)))) {
+-		if (!IsPlayer() || m_nPedState != PED_ATTACK || ((CPlayerPed*)this)->m_bHaveTargetSelected)
++		if (!IsPlayer() || VCModNpcFightsAsPed(this) || m_nPedState != PED_ATTACK || ((CPlayerPed*)this)->m_bHaveTargetSelected)
+ 			bIsAttacking = false;
+ 		else
+ 			bIsAttacking = true;
+@@ -276,7 +324,7 @@ CPed::SetAttack(CEntity *victim)
+ 	}
+ 
+ 	if (GetWeapon()->m_eWeaponType == WEAPONTYPE_UNARMED || curWeapon->IsFlagSet(WEAPONFLAG_FIGHTMODE) || GetWeapon()->m_eWeaponType == WEAPONTYPE_BRASSKNUCKLE) {
+-		if (IsPlayer() ||
++		if ((IsPlayer() && !VCModNpcFightsAsPed(this)) ||
+ 			(m_nPedState != PED_FIGHT && m_nMoveState != PEDMOVE_NONE && m_nMoveState != PEDMOVE_STILL
+ 				&& !(m_pedStats->m_flags & STAT_SHOPPING_BAGS) && curWeapon->IsFlagSet(WEAPONFLAG_PARTIALATTACK))) {
+ 
+@@ -298,7 +346,7 @@ CPed::SetAttack(CEntity *victim)
+ 	}
+ 
+ 	if (curWeapon->IsFlagSet(WEAPONFLAG_PARTIALATTACK) &&
+-		(IsPlayer() && ((CPlayerPed*)this)->m_fMoveSpeed >= 1.0f ||
++		(IsPlayer() && !VCModNpcFightsAsPed(this) && ((CPlayerPed*)this)->m_fMoveSpeed >= 1.0f ||
+ 		m_nMoveState == PEDMOVE_WALK || m_nMoveState == PEDMOVE_RUN)) {
+ 
+ 		if (m_nPedState != PED_ATTACK) {
+@@ -327,7 +375,7 @@ CPed::SetAttack(CEntity *victim)
+ 		if (obstacle) {
+ 			if(gaTempSphereColPoints[0].surfaceB != SURFACE_TRANSPARENT_CLOTH && gaTempSphereColPoints[0].surfaceB != SURFACE_METAL_CHAIN_FENCE &&
+ 				gaTempSphereColPoints[0].surfaceB != SURFACE_WOOD_BENCH && gaTempSphereColPoints[0].surfaceB != SURFACE_SCAFFOLD_POLE) {
+-				if (!IsPlayer()) {
++				if (!IsPlayer() || VCModNpcFightsAsPed(this)) {
+ 					bObstacleShowedUpDuringKillObjective = true;
+ 					m_shootTimer = 0;
+ 					SetAttackTimer(1500);
+@@ -350,7 +398,7 @@ CPed::SetAttack(CEntity *victim)
+ #else
+ 		} else {
+ #endif
+-			if (this == FindPlayerPed() && TheCamera.Cams[0].Using3rdPersonMouseCam()) {
++			if (this == FindPlayerPed() && !VCModNpcFightsAsPed(this) && TheCamera.Cams[0].Using3rdPersonMouseCam()) {
+ 				SetAimFlag(m_fRotationCur);
+ 				((CPlayerPed*)this)->m_fFPSMoveHeading = TheCamera.Find3rdPersonQuickAimPitch();
+ 			} else if (curWeapon->IsFlagSet(WEAPONFLAG_CANAIM_WITHARM)) {
+@@ -360,7 +408,7 @@ CPed::SetAttack(CEntity *victim)
+ 	}
+ #ifdef FIX_BUGS
+ 	// fix aiming for flamethrower and minigun while using PC controls
+-	else if (curWeapon->m_AnimToPlay == ASSOCGRP_FLAMETHROWER && TheCamera.Cams[0].Using3rdPersonMouseCam() && this == FindPlayerPed())
++	else if (curWeapon->m_AnimToPlay == ASSOCGRP_FLAMETHROWER && TheCamera.Cams[0].Using3rdPersonMouseCam() && this == FindPlayerPed() && !VCModNpcFightsAsPed(this))
+ 	{
+ 		SetAimFlag(m_fRotationCur);
+ 		((CPlayerPed*)this)->m_fFPSMoveHeading = TheCamera.Find3rdPersonQuickAimPitch();
 @@ -371,7 +419,7 @@ CPed::SetAttack(CEntity *victim)
  		return;
  	}
  
 -	if (IsPlayer() || (!victimPed || victimPed->IsPedInControl())) {
-+	if ((IsPlayer() && !VCModNpcGangActive()) || (!victimPed || victimPed->IsPedInControl())) {
++	if ((IsPlayer() && !VCModNpcFightsAsPed(this)) || (!victimPed || victimPed->IsPedInControl())) {
  		if (IsPlayer())
  			CPad::GetPad(0)->ResetAverageWeapon();
  
+@@ -385,7 +433,7 @@ CPed::SetAttack(CEntity *victim)
+ 			ClearAimFlag();
+ 
+ 			// This condition is pointless
+-			if (pointBlankStatus == POINT_BLANK_FOR_WANTED_PED || !victimPed && (IsPlayer() || !m_carInObjective))
++			if (pointBlankStatus == POINT_BLANK_FOR_WANTED_PED || !victimPed && (IsPlayer() && !VCModNpcFightsAsPed(this) || !m_carInObjective))
+ 				StartFightAttack(200);
+ 		} else {
+ 			if (!curWeapon->IsFlagSet(WEAPONFLAG_CANAIM))
 @@ -417,10 +465,10 @@ CPed::SetAttack(CEntity *victim)
  					if (pedOnGround > PED_IN_FRONT_OF_ATTACKER || pedOnGround == NO_PED && bIsStanding && m_pCurSurface && m_pCurSurface->IsVehicle()) {
  						fireAnim = GetFireAnimGround(curWeapon, false);
@@ -19195,6 +19536,15 @@ index 8a3b971..4c2d973 100644
  			}
  
  			animAssoc->SetRun();
+@@ -451,7 +501,7 @@ CPed::SetAttack(CEntity *victim)
+ void
+ CPed::ClearAttack(void)
+ {
+-	if (m_nPedState != PED_ATTACK || (bIsDucking && !IsPlayer()) || m_nWaitState == WAITSTATE_PLAYANIM_DUCK)
++	if (m_nPedState != PED_ATTACK || (bIsDucking && (!IsPlayer() || VCModNpcFightsAsPed(this))) || m_nWaitState == WAITSTATE_PLAYANIM_DUCK)
+ 		return;
+ 
+ 	if (FindPlayerPed() == this && TheCamera.Using1stPersonWeaponMode()) {
 @@ -615,6 +665,35 @@ CPed::FinishedReloadCB(CAnimBlendAssociation *reloadAssoc, void *arg)
  	}
  }
@@ -19204,7 +19554,7 @@ index 8a3b971..4c2d973 100644
 +{
 +	CWeapon *weapon = GetWeapon();
 +	CWeaponInfo *info = CWeaponInfo::GetWeaponInfo(weapon->m_eWeaponType);
-+	bool fast = IsPlayer() && CWorld::Players[CWorld::PlayerInFocus].m_bFastReload;
++	bool fast = IsPlayer() && !VCModNpcFightsAsPed(this) && CWorld::Players[CWorld::PlayerInFocus].m_bFastReload;
 +	uint32 now = CTimer::GetTimeInMilliseconds();
 +
 +	weapon->m_eWeaponState = WEAPONSTATE_RELOADING;
@@ -19243,6 +19593,33 @@ index 8a3b971..4c2d973 100644
  		if (weaponAnimAssoc) {
  			animLoopStart = 11.f/30.f;
  			animLoopEnd = 19.f/30.f;
+@@ -712,7 +792,7 @@ CPed::Attack(void)
+ 	}
+ 
+ 	if ( reloadAnimAssoc && reloadAnimAssoc->IsRunning() ) {
+-		if (!IsPlayer() || ((CPlayerPed*)this)->m_bHaveTargetSelected)
++		if (!IsPlayer() || VCModNpcFightsAsPed(this) || ((CPlayerPed*)this)->m_bHaveTargetSelected)
+ 			ClearAttack();
+ 		return;
+ 	}
+@@ -735,7 +815,7 @@ CPed::Attack(void)
+ 		if (GetMeleeStartAnim(ourWeapon)) {
+ 			weaponAnimAssoc = RpAnimBlendClumpGetAssociation(GetClump(), GetMeleeStartAnim(ourWeapon));
+ 			if ( weaponAnimAssoc ) {
+-				if ( IsPlayer() )
++				if ( IsPlayer() && !VCModNpcFightsAsPed(this) )
+ 					meleeAttackStarted = true;
+ 
+ 				switch ( ourWeapon->m_AnimToPlay ) {
+@@ -777,7 +857,7 @@ CPed::Attack(void)
+ 	if (!weaponAnimAssoc) {
+ 		if (!throwAssoc) {
+ 			if (attackShouldContinue) {
+-				if (ourWeapon->m_eWeaponFire != WEAPON_FIRE_PROJECTILE || !IsPlayer() || ((CPlayerPed*)this)->m_bHaveTargetSelected) {
++				if (ourWeapon->m_eWeaponFire != WEAPON_FIRE_PROJECTILE || !IsPlayer() || VCModNpcFightsAsPed(this) || ((CPlayerPed*)this)->m_bHaveTargetSelected) {
+ 					if (bCrouchWhenShooting && bIsDucking && GetCrouchFireAnim(ourWeapon)) {
+ 						weaponAnimAssoc = CAnimManager::BlendAnimation(GetClump(), ourWeapon->m_AnimToPlay, GetCrouchFireAnim(ourWeapon), 8.0f);
+ 
 @@ -788,7 +868,9 @@ CPed::Attack(void)
  					          !GetFireAnimGround(ourWeapon, false) || 
  						 CheckForPedsOnGroundToAttack(this, nil) < PED_ON_THE_FLOOR) {
@@ -19263,6 +19640,33 @@ index 8a3b971..4c2d973 100644
  	float animStart = animLoopStart * 0.4f;
  	weaponAnimTime = weaponAnimAssoc->currentTime;
  	if (weaponAnimTime > animStart && weaponAnimTime - weaponAnimAssoc->timeStep <= animStart) {
+@@ -865,7 +949,7 @@ CPed::Attack(void)
+ 				GetWeapon()->m_eWeaponType == WEAPONTYPE_TEARGAS) {
+ 				RemoveWeaponModel(CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->m_nModelId);
+ 			}
+-			if (GetWeapon()->m_nAmmoTotal == 0 && ourWeapon->m_eWeaponFire != WEAPON_FIRE_MELEE && FindPlayerPed() != this) {
++			if (GetWeapon()->m_nAmmoTotal == 0 && ourWeapon->m_eWeaponFire != WEAPON_FIRE_MELEE && (FindPlayerPed() != this || VCModNpcFightsAsPed(this))) {
+ 				SelectGunIfArmed();
+ 			}
+ 
+@@ -945,7 +1029,7 @@ CPed::Attack(void)
+ 		}
+ 	}
+ 
+-	if (IsPlayer()) {
++	if (IsPlayer() && !VCModNpcFightsAsPed(this)) {
+ 		if (GetWeapon()->m_eWeaponType == WEAPONTYPE_BASEBALLBAT || GetWeapon()->m_eWeaponType == WEAPONTYPE_GOLFCLUB || GetWeapon()->m_eWeaponType == WEAPONTYPE_KATANA) {
+ 			float loopEndWithDelay = animLoopEnd;
+ 			if (loopEndWithDelay >= 98.0f)
+@@ -958,7 +1042,7 @@ CPed::Attack(void)
+ 	}
+ 
+ 	// Anim breakout on running
+-	if (IsPlayer()) {
++	if (IsPlayer() && !VCModNpcFightsAsPed(this)) {
+ 		if (CPad::GetPad(0)->GetSprint()) {
+ 			if (!attackShouldContinue && weaponAnimAssoc->currentTime > ourWeapon->m_fAnimBreakout) {
+ 				weaponAnimAssoc->blendDelta = -4.0f;
 @@ -1022,9 +1106,11 @@ CPed::Attack(void)
  				weaponAnimAssoc->SetCurrentTime(animLoopStart);
  				weaponAnimAssoc->SetRun();
@@ -19307,26 +19711,153 @@ index 8a3b971..4c2d973 100644
  		fightIdleAssoc = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, ANIM_STD_FIGHT_IDLE, 1000.0f);
  	}
  	m_lastFightMove = FIGHTMOVE_IDLE;
+-	m_curFightMove = IsPlayer() ? ChooseAttackPlayer(buttonPressure, fightWithWeapon) : ChooseAttackAI(buttonPressure, fightWithWeapon);
 +	if (forceMove != FIGHTMOVE_NULL && IsPlayer())
 +		VCModCombatRequestFightMove(forceMove);
- 	m_curFightMove = IsPlayer() ? ChooseAttackPlayer(buttonPressure, fightWithWeapon) : ChooseAttackAI(buttonPressure, fightWithWeapon);
++	m_curFightMove = VCModCombatChooseMove(this, buttonPressure, fightWithWeapon);
 +	VCModCombatClearFightMove();
  
  	SetPedState(PED_FIGHT);
  	m_fightButtonPressure = 0;
-@@ -1708,6 +1801,11 @@ CPed::ChooseAttackAI(uint8 buttonPressure, bool fightWithWeapon)
- int32
- CPed::ChooseAttackPlayer(uint8 buttonPressure, bool fightWithWeapon)
- {
-+	// the request is one-shot: taking it is what empties the slot
-+	int32 forcedMove = VCModCombatTakeFightMove();
-+	if (forcedMove != FIGHTMOVE_NULL)
-+		return (PedFightMoves)forcedMove;
-+
- 	CWeaponInfo *weaponInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
- 	const float maxAttackDist = 2.7f;
- 	float weaponAttackDist = 2.0f;
-@@ -1950,6 +2048,8 @@ CPed::EndFight(uint8 endType)
+@@ -1133,7 +1226,7 @@ CPed::StartFightAttack(uint8 buttonPressure)
+ 			else
+ 				animAssoc->speed = 0.8f;
+ 		}
+-		if (IsPlayer())
++		if (IsPlayer() && !VCModNpcFightsAsPed(this))
+ 			animAssoc->SetCurrentTime(0.08f);
+ 
+ 		animAssoc->SetFinishCallback(FinishFightMoveCB, this);
+@@ -1145,7 +1238,7 @@ CPed::StartFightAttack(uint8 buttonPressure)
+ 	m_takeAStepAfterAttack = false;
+ 	bIsAttacking = true;
+ 
+-	if (IsPlayer())
++	if (IsPlayer() && !VCModNpcFightsAsPed(this))
+ 		nPlayerInComboMove = 0;
+ }
+ 
+@@ -1187,7 +1280,7 @@ CPed::StartFightDefend(uint8 direction, uint8 hitLevel, uint8 unk)
+ 			}
+ 		}
+ 	} else if (IsPedInControl()) {
+-		if ((IsPlayer() && m_nPedState != PED_FIGHT && ((CPlayerPed*)this)->m_fMoveSpeed > 1.0f)
++		if ((IsPlayer() && !VCModNpcFightsAsPed(this) && m_nPedState != PED_FIGHT && ((CPlayerPed*)this)->m_fMoveSpeed > 1.0f)
+ 			|| (!IsPlayer() && m_objective == OBJECTIVE_FLEE_CHAR_ON_FOOT_TILL_SAFE)) {
+ 
+ 			if (hitLevel != HITLEVEL_HIGH && hitLevel != HITLEVEL_LOW || (IsPlayer() || CGeneral::GetRandomNumber() & 1) && CGeneral::GetRandomNumber() & 7) {
+@@ -1270,11 +1363,11 @@ CPed::StartFightDefend(uint8 direction, uint8 hitLevel, uint8 unk)
+ 					m_curFightMove = FIGHTMOVE_HITONFLOOR;
+ 					break;
+ 				case HITLEVEL_LOW:
+-					if (direction == 2 && (!IsPlayer() || ((CGeneral::GetRandomNumber() & 1) && m_fHealth < 30.0f))) {
++					if (direction == 2 && ((!IsPlayer() || VCModNpcFightsAsPed(this)) || ((CGeneral::GetRandomNumber() & 1) && m_fHealth < 30.0f))) {
+ 						SetFall(1000, ANIM_STD_HIGHIMPACT_BACK, false);
+ 						Say(SOUND_PED_DEFEND);
+ 						return;
+-					} else if (direction != 2 && !IsPlayer() && (CGeneral::GetRandomNumber() & 1) && m_fHealth < 30.0f) {
++					} else if (direction != 2 && (!IsPlayer() || VCModNpcFightsAsPed(this)) && (CGeneral::GetRandomNumber() & 1) && m_fHealth < 30.0f) {
+ 						SetFall(1000, ANIM_STD_KO_SHOT_STOMACH, false);
+ 						Say(SOUND_PED_DEFEND);
+ 						return;
+@@ -1327,13 +1420,13 @@ CPed::StartFightDefend(uint8 direction, uint8 hitLevel, uint8 unk)
+ 				CAnimBlendAssociation *moveAssoc = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, tFightMoves[m_curFightMove].animId, 8.0f);
+ 				moveAssoc->SetCurrentTime(0.0f);
+ 				moveAssoc->SetFinishCallback(FinishFightMoveCB, this);
+-				if (IsPlayer())
++				if (IsPlayer() && !VCModNpcFightsAsPed(this))
+ 					moveAssoc->speed = 1.2f;
+ 
+ 				m_takeAStepAfterAttack = false;
+ 				m_fightButtonPressure = 0;
+ 
+-			} else if (IsPlayer() && GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED && GetWeapon()->m_eWeaponType != WEAPONTYPE_BRASSKNUCKLE &&
++			} else if (IsPlayer() && !VCModNpcFightsAsPed(this) && GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED && GetWeapon()->m_eWeaponType != WEAPONTYPE_BRASSKNUCKLE &&
+ 					!CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->IsFlagSet(WEAPONFLAG_FIGHTMODE)) {
+ 				CAnimBlendAssociation *moveAssoc = CAnimManager::BlendAnimation(GetClump(), ASSOCGRP_STD, tFightMoves[m_curFightMove].animId, 4.0f);
+ 				moveAssoc->SetCurrentTime(0.0f);
+@@ -1432,7 +1525,7 @@ CPed::Fight(void)
+ 	if (m_curFightMove == FIGHTMOVE_SHUFFLE_F && !currentAssoc)
+ 		currentAssoc = RpAnimBlendClumpGetAssociation(GetClump(), ANIM_STD_FIGHT_SHUFFLE_B);
+ 
+-	if (IsPlayer() && currentAssoc && weapon == WEAPONTYPE_KATANA) {
++	if (IsPlayer() && !VCModNpcFightsAsPed(this) && currentAssoc && weapon == WEAPONTYPE_KATANA) {
+ 		if (m_curFightMove == FIGHTMOVE_MELEE1 || m_curFightMove == FIGHTMOVE_MELEE2) {
+ 			static float streakDelay = 0.2f;
+ 
+@@ -1443,7 +1536,7 @@ CPed::Fight(void)
+ 		}
+ 	}
+ 
+-	if (!bIsAttacking && IsPlayer()) {
++	if (!bIsAttacking && IsPlayer() && !VCModNpcFightsAsPed(this)) {
+ 		if (currentAssoc) {
+ 			currentAssoc->blendDelta = -1000.0f;
+ 			currentAssoc->flags |= ASSOC_DELETEFADEDOUT;
+@@ -1460,7 +1553,7 @@ CPed::Fight(void)
+ 		if (curMove.hitLevel != HITLEVEL_NULL && animTime > curMove.startFireTime && animTime <= curMove.endFireTime && m_fightState >= FIGHTSTATE_NO_MOVE) {
+ 
+ 			if (animTime > curMove.startFireTime && animTime - currentAssoc->timeStep < curMove.startFireTime &&
+-				(IsPlayer() || weapon != WEAPONTYPE_UNARMED)) {
++				(IsPlayer() && !VCModNpcFightsAsPed(this) || weapon != WEAPONTYPE_UNARMED)) {
+ 
+ 				DMAudio.PlayOneShot(m_audioEntityId, SOUND_MELEE_ATTACK_START, weapon << 8);
+ 			}
+@@ -1504,13 +1597,13 @@ CPed::Fight(void)
+ 
+ 		if (curMove.hitLevel != HITLEVEL_NULL) {
+ 			if (animTime > curMove.endFireTime && weaponInfo->m_AnimToPlay != ASSOCGRP_KNIFE) {
+-				if (IsPlayer())
++				if (IsPlayer() && !VCModNpcFightsAsPed(this))
+ 					currentAssoc->speed = 1.0f;
+ 				else
+ 					currentAssoc->speed = 0.8f;
+ 			}
+ 
+-			if (IsPlayer() && !nPlayerInComboMove && !fightWithWeapon) {
++			if (IsPlayer() && !VCModNpcFightsAsPed(this) && !nPlayerInComboMove && !fightWithWeapon) {
+ 				if (curMove.comboFollowOnTime > 0.0f && m_fightButtonPressure != 0 && animTime > curMove.comboFollowOnTime) {
+ 
+ 					m_lastFightMove = m_curFightMove;
+@@ -1529,13 +1622,13 @@ CPed::Fight(void)
+ 		EndFight(ENDFIGHT_FAST);
+ 
+ 	} else if (m_fightButtonPressure != 0) {
+-		if (!IsPlayer())
++		if (!IsPlayer() || VCModNpcFightsAsPed(this))
+ 			Say(SOUND_PED_ATTACK);
+ 
+ 		if (m_curFightMove != FIGHTMOVE_IDLE)
+ 			m_lastFightMove = m_curFightMove;
+ 
+-		m_curFightMove = IsPlayer() ? ChooseAttackPlayer(m_fightButtonPressure, fightWithWeapon) : ChooseAttackAI(m_fightButtonPressure, fightWithWeapon);
++		m_curFightMove = VCModCombatChooseMove(this, m_fightButtonPressure, fightWithWeapon);
+ 
+ 		if (m_curFightMove != FIGHTMOVE_IDLE) {
+ 
+@@ -1569,10 +1662,10 @@ CPed::Fight(void)
+ 
+ 			if (m_fightState == FIGHTSTATE_MOVE_FINISHED && animAssoc->currentTime != 0.0f) {
+ 				animAssoc->SetRun();
+-				if (!IsPlayer())
++				if (!IsPlayer() || VCModNpcFightsAsPed(this))
+ 					animAssoc->SetCurrentTime(0.0f);
+ 			}
+-			if (IsPlayer())
++			if (IsPlayer() && !VCModNpcFightsAsPed(this))
+ 				animAssoc->SetCurrentTime(0.08f);
+ 
+ 			animAssoc->SetFinishCallback(FinishFightMoveCB, this);
+@@ -1612,7 +1705,7 @@ CPed::Fight(void)
+ 	} else {
+ 		m_lastFightMove = m_curFightMove;
+ 		m_curFightMove = FIGHTMOVE_IDLE;
+-		if (IsPlayer())
++		if (IsPlayer() && !VCModNpcFightsAsPed(this))
+ 			m_nWaitTimer = CTimer::GetTimeInMilliseconds() + 500;
+ 		else
+ 			m_nWaitTimer = CTimer::GetTimeInMilliseconds() + 2000;
+@@ -1950,6 +2043,8 @@ CPed::EndFight(uint8 endType)
  {
  	if (m_nPedState != PED_FIGHT)
  		return;
@@ -19335,7 +19866,43 @@ index 8a3b971..4c2d973 100644
  
  	m_curFightMove = FIGHTMOVE_NULL;
  	RestorePreviousState();
-@@ -2189,6 +2289,21 @@ CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)
+@@ -2071,7 +2166,7 @@ CPed::FightStrike(CVector &touchedNodePos, bool fightWithWeapon)
+ 	if (m_fightState == FIGHTSTATE_JUST_ATTACKED)
+ 		return false;
+ 
+-	if (this == FindPlayerPed() && fightWithWeapon && GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED)
++	if (this == FindPlayerPed() && !VCModNpcFightsAsPed(this) && fightWithWeapon && GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED)
+ 		CGlass::BreakGlassPhysically(touchedNodePos, radius);
+ 
+ 	for (int i = 0; i < m_numNearPeds; i++) {
+@@ -2151,7 +2246,7 @@ CPed::FightStrike(CVector &touchedNodePos, bool fightWithWeapon)
+ void
+ CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)
+ {
+-	if (victim->IsPlayer() && victim->m_nPedState == PED_GETUP)
++	if (victim->IsPlayer() && !VCModNpcFightsAsPed(victim) && victim->m_nPedState == PED_GETUP)
+ 		return;
+ 
+ 	CWeaponInfo *weaponInfo = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
+@@ -2167,11 +2262,12 @@ CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)
+ 		}
+ 	}
+ 
+-	if (IsPlayer()) {
+-		if (((CPlayerPed*)this)->m_bAdrenalineActive)
+-			damageMult = 20;
+-	} else if (!fightingWithWeapon) {
+-		damageMult *= m_pedStats->m_attackStrength;
++	if (IsPlayer() && ((CPlayerPed*)this)->m_bAdrenalineActive) {
++		// the pill is a deliberate power-up and outranks the body's strength
++		damageMult = 20;
++	} else if (!IsPlayer() || VCModNpcFightsAsPed(this)) {
++		if (!fightingWithWeapon)
++			damageMult *= m_pedStats->m_attackStrength;
+ 	}
+ 
+ 	float oldVictimHealth = victim->m_fHealth;
+@@ -2189,10 +2285,25 @@ CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)
  	}
  	victim->ReactToAttack(this);
  
@@ -19357,7 +19924,12 @@ index 8a3b971..4c2d973 100644
  	// Mostly unused. if > 5, ANIM_HIT_BIGSTEP will be run, that's it.
  	int unk2;
  	if (GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED && GetWeapon()->m_eWeaponType != WEAPONTYPE_BRASSKNUCKLE &&
-@@ -2210,7 +2325,7 @@ CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)
+-		!victim->IsPlayer() && !fightingWithWeapon)
++		(!victim->IsPlayer() || VCModNpcFightsAsPed(victim)) && !fightingWithWeapon)
+ 		unk2 = 101;
+ 	else
+ 		unk2 = damageMult;
+@@ -2210,7 +2321,7 @@ CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)
  	}
  
  	if (CGame::nastyGame && weaponInfo->m_AnimToPlay == ASSOCGRP_KNIFE && m_curFightMove >= FIGHTMOVE_MELEE1
@@ -19366,7 +19938,16 @@ index 8a3b971..4c2d973 100644
  
  		static float particleRightLen = 0.05f;
  		static float particleUpLen = 0.05f;
-@@ -2235,7 +2350,7 @@ CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)
+@@ -2227,7 +2338,7 @@ CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)
+ 		}
+ 		CParticle::AddParticle(PARTICLE_BLOOD_SPURT, bloodPos, dir, nil, 0.0f, 0, 0, 0, 0);
+ 		CParticle::AddParticle(PARTICLE_BLOOD_SPURT, bloodPos, dir, nil, 0.0f, 0, 0, 0, 0);
+-		if (IsPlayer()) {
++		if (IsPlayer() && !VCModNpcFightsAsPed(this)) {
+ 			CParticle::AddParticle(PARTICLE_BLOOD_SPURT, bloodPos, dir, nil, 0.0f, 0, 0, 0, 0);
+ 			CParticle::AddParticle(PARTICLE_BLOOD_SPURT, bloodPos, dir, nil, 0.0f, 0, 0, 0, 0);
+ 		}
+@@ -2235,7 +2346,7 @@ CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)
  			CParticle::AddParticle(PARTICLE_TEST, bloodPos, dir, nil, 0.0f, 0, 0, 0, 0);
  		}
  	} else if (CGame::nastyGame && (tFightMoves[m_curFightMove].hitLevel > HITLEVEL_MEDIUM || fightingWithWeapon)
@@ -19375,7 +19956,16 @@ index 8a3b971..4c2d973 100644
  
  		// Just for particles. We will restore it below.
  		dir /= (10.0f * dir.Magnitude());
-@@ -2658,6 +2773,49 @@ CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPi
+@@ -2250,7 +2361,7 @@ CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)
+ 			float curVictimHealth = victim->m_fHealth;
+ 			if (curVictimHealth > 0.0f
+ 				&& (curVictimHealth < 30.0f && oldVictimHealth > 30.0f
+-					|| weaponType != WEAPONTYPE_UNARMED && weaponType != WEAPONTYPE_BRASSKNUCKLE && IsPlayer()
++					|| weaponType != WEAPONTYPE_UNARMED && weaponType != WEAPONTYPE_BRASSKNUCKLE && IsPlayer() && !VCModNpcFightsAsPed(this)
+ 					|| victim->m_pedStats->m_flags & STAT_ONE_HIT_KNOCKDOWN || brassKnucklePunch)) {
+ 
+ 				victim->SetFall(0, (AnimationId)(direction + ANIM_STD_HIGHIMPACT_FRONT), 0);
+@@ -2658,6 +2769,49 @@ CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPi
  	bool willLinger = false;
  	int random;
  
@@ -19425,17 +20015,54 @@ index 8a3b971..4c2d973 100644
  	if (damagedBy == FindPlayerPed() && damagedBy != this && damage > 3.0f)
  		++CWorld::Players[CWorld::PlayerInFocus].m_nHavocLevel;
  
-@@ -3467,6 +3625,10 @@ CPed::CollideWithPed(CPed *collideWith)
- 							if (m_pedStats->m_temper <= m_pedStats->m_fear
- 								|| GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED
- 								|| weAreMissionChar
-+								// NPC mode has no attack input to end a bump shove,
-+								// so the 250-450 ms retry becomes a shove loop; he
-+								// walks around instead, as the polite branch does
-+								|| (IsPlayer() && VCModNpcCombatActive())
- 								|| collideWith->m_nPedType == PEDTYPE_CIVFEMALE
- 								|| collideWith->m_nPedType == m_nPedType
- 								|| collideWith->GetWeapon()->m_eWeaponType != WEAPONTYPE_UNARMED) {
+@@ -2665,10 +2819,12 @@ CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPi
+ 		if (!player->m_bCanBeDamaged)
+ 			return false;
+ 
+-		if (damagedBy && damagedBy->IsPed() && ((CPed*)damagedBy)->m_nPedType == PEDTYPE_GANG7)
++		if (!VCModNpcFightsAsPed(this)
++			&& damagedBy && damagedBy->IsPed() && ((CPed*)damagedBy)->m_nPedType == PEDTYPE_GANG7)
+ 			return false;
+ 
+-		if ((method == WEAPONTYPE_FLAMETHROWER || method == WEAPONTYPE_MOLOTOV) && CWorld::Players[CWorld::PlayerInFocus].m_bFireproof)
++		if ((method == WEAPONTYPE_FLAMETHROWER || method == WEAPONTYPE_MOLOTOV) && CWorld::Players[CWorld::PlayerInFocus].m_bFireproof
++			&& !VCModNpcFightsAsPed(this))
+ 			return false;
+ 
+ 		player->AnnoyPlayerPed(false);
+@@ -2688,12 +2844,12 @@ CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPi
+ 		return false;
+ 
+ 	float healthImpact;
+-	if (IsPlayer())
++	if (IsPlayer() && !VCModNpcFightsAsPed(this))
+ 		healthImpact = damage * 0.33f;
+ 	else
+ 		healthImpact = damage * m_pedStats->m_defendWeakness;
+ 
+-	if (!IsPlayer() &&
++	if ((!IsPlayer() || VCModNpcFightsAsPed(this)) &&
+ 		(method == WEAPONTYPE_SCREWDRIVER || method == WEAPONTYPE_KNIFE || (method >= WEAPONTYPE_CLEAVER && method <= WEAPONTYPE_CHAINSAW)))
+ 		m_bleedCounter = 200;
+ 
+@@ -2845,7 +3001,7 @@ CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPi
+ 					return false;
+ 
+ 				bool dontRemoveLimb;
+-				if (IsPlayer() || bNoCriticalHits)
++				if ((IsPlayer() && !VCModNpcFightsAsPed(this)) || bNoCriticalHits)
+ 					dontRemoveLimb = true;
+ 				else if (method != WEAPONTYPE_M4 && method != WEAPONTYPE_RUGER && method != WEAPONTYPE_SNIPERRIFLE &&
+ 						method != WEAPONTYPE_LASERSCOPE) {
+@@ -2925,7 +3081,7 @@ CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, float damage, ePedPi
+ 				if (bExplosionProof)
+ 					return false;
+ 
+-				if (CGame::nastyGame && !IsPlayer() && !bInVehicle &&
++				if (CGame::nastyGame && (!IsPlayer() || VCModNpcFightsAsPed(this)) && !bInVehicle &&
+ 					1.0f + healthImpact > m_fArmour + m_fHealth) {
+ 
+ 					random = CGeneral::GetRandomNumber();
 diff --git a/src/peds/PedIK.cpp b/src/peds/PedIK.cpp
 index ea3cf1a..90507d6 100644
 --- a/src/peds/PedIK.cpp
@@ -19473,7 +20100,7 @@ index ea3cf1a..90507d6 100644
  
  	return result;
 diff --git a/src/peds/PlayerPed.cpp b/src/peds/PlayerPed.cpp
-index cd8da42..4f0f0b0 100644
+index cd8da42..53c6311 100644
 --- a/src/peds/PlayerPed.cpp
 +++ b/src/peds/PlayerPed.cpp
 @@ -1,5 +1,7 @@
@@ -19497,7 +20124,7 @@ index cd8da42..4f0f0b0 100644
  #include "General.h"
  #include "Pools.h"
  #include "Darkel.h"
-@@ -21,12 +26,42 @@
+@@ -21,12 +26,43 @@
  #include "Population.h"
  #include "Script.h"
  #include "Replay.h"
@@ -19521,6 +20148,7 @@ index cd8da42..4f0f0b0 100644
 +#include "vcmodsit.h"
 +#include "vcmodstreet.h"
 +#include "vcmodnpc.h"
++#include "vcmodnpcwalk.h"
 +#include "vcmodride.h"
 +#include "vcmodammo.h"
 +#include "vcmodplayer.h"
@@ -19540,7 +20168,7 @@ index cd8da42..4f0f0b0 100644
  bool CPlayerPed::bDontAllowWeaponChange;
  #ifndef MASTER
  bool CPlayerPed::bDebugPlayerInfo;
-@@ -49,6 +84,8 @@ GetPadFromPlayer(CPlayerPed*)
+@@ -49,6 +85,8 @@ GetPadFromPlayer(CPlayerPed*)
  
  CPlayerPed::~CPlayerPed()
  {
@@ -19549,7 +20177,7 @@ index cd8da42..4f0f0b0 100644
  	delete m_pWanted;
  }
  
-@@ -150,15 +187,6 @@ CPlayerPed::AnnoyPlayerPed(bool annoyedByPassingEntity)
+@@ -150,15 +188,6 @@ CPlayerPed::AnnoyPlayerPed(bool annoyedByPassingEntity)
  	}
  }
  
@@ -19565,7 +20193,7 @@ index cd8da42..4f0f0b0 100644
  CPlayerInfo *
  CPlayerPed::GetPlayerInfoForThisPlayerPed()
  {
-@@ -255,10 +283,19 @@ CPlayerPed::ReApplyMoveAnims(void)
+@@ -255,10 +284,19 @@ CPlayerPed::ReApplyMoveAnims(void)
  	for(int i = 0; i < ARRAY_SIZE(moveAnims); i++) {
  		CAnimBlendAssociation *curMoveAssoc = RpAnimBlendClumpGetAssociation(GetClump(), moveAnims[i]);
  		if (curMoveAssoc) {
@@ -19586,7 +20214,7 @@ index cd8da42..4f0f0b0 100644
  				curMoveAssoc->blendDelta = -1000.0f;
  				curMoveAssoc->flags |= ASSOC_DELETEFADEDOUT;
  			}
-@@ -269,6 +306,8 @@ CPlayerPed::ReApplyMoveAnims(void)
+@@ -269,6 +307,8 @@ CPlayerPed::ReApplyMoveAnims(void)
  void
  CPlayerPed::SetInitialState(void)
  {
@@ -19595,7 +20223,7 @@ index cd8da42..4f0f0b0 100644
  	m_nDrunkenness = 0;
  	m_nFadeDrunkenness = 0;
  	CMBlur::ClearDrunkBlur();
-@@ -379,39 +418,68 @@ CPlayerPed::SetRealMoveAnim(void)
+@@ -379,39 +419,68 @@ CPlayerPed::SetRealMoveAnim(void)
  				m_nWaitTimer = CTimer::GetTimeInMilliseconds() + CGeneral::GetRandomNumberInRange(2500, 4000);
  			}
  
@@ -19687,7 +20315,7 @@ index cd8da42..4f0f0b0 100644
  				delete curSprintAssoc;
  
  				curSprintAssoc = nil;
-@@ -499,33 +567,50 @@ CPlayerPed::SetRealMoveAnim(void)
+@@ -499,33 +568,50 @@ CPlayerPed::SetRealMoveAnim(void)
  						curRunAssoc->blendDelta = -2.0f;
  					}
  				} else {
@@ -19751,7 +20379,7 @@ index cd8da42..4f0f0b0 100644
  			m_bAdrenalineActive = false;
  			CTimer::SetTimeScale(1.0f);
  			if (curWalkStartAssoc)
-@@ -537,15 +622,19 @@ CPlayerPed::SetRealMoveAnim(void)
+@@ -537,15 +623,19 @@ CPlayerPed::SetRealMoveAnim(void)
  			if (curSprintAssoc)
  				curSprintAssoc->speed = 1.0f;
  		} else {
@@ -19776,7 +20404,7 @@ index cd8da42..4f0f0b0 100644
  		}
  	} else if (curSprintAssoc) {
  		if (TheCamera.Cams[TheCamera.ActiveCam].Mode == CCam::MODE_FIXED) {
-@@ -553,6 +642,8 @@ CPlayerPed::SetRealMoveAnim(void)
+@@ -553,6 +643,8 @@ CPlayerPed::SetRealMoveAnim(void)
  		} else
  			curSprintAssoc->speed = 1.0f;
  	}
@@ -19785,7 +20413,7 @@ index cd8da42..4f0f0b0 100644
  }
  
  void
-@@ -879,8 +970,22 @@ CPlayerPed::PlayerControl1stPersonRunAround(CPad *padUsed)
+@@ -879,8 +971,22 @@ CPlayerPed::PlayerControl1stPersonRunAround(CPad *padUsed)
  	float upDown = padUsed->GetPedWalkUpDown();
  	float padMove = CVector2D(leftRight, upDown).Magnitude();
  	float padMoveInGameUnit = padMove / PAD_MOVE_TO_GAME_WORLD_MOVE;
@@ -19809,7 +20437,7 @@ index cd8da42..4f0f0b0 100644
  		m_fMoveSpeed = Min(padMoveInGameUnit, 0.07f * CTimer::GetTimeStep() + m_fMoveSpeed);
  	} else {
  		m_fMoveSpeed = 0.0f;
-@@ -908,6 +1013,8 @@ CPlayerPed::PlayerControl1stPersonRunAround(CPad *padUsed)
+@@ -908,6 +1014,8 @@ CPlayerPed::PlayerControl1stPersonRunAround(CPad *padUsed)
  	if (!CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->IsFlagSet(WEAPONFLAG_HEAVY) && padUsed->GetSprint()) {
  		m_nMoveState = PEDMOVE_SPRINT;
  	}
@@ -19818,7 +20446,7 @@ index cd8da42..4f0f0b0 100644
  	if (m_nPedState != PED_FIGHT)
  		SetRealMoveAnim();
  
-@@ -1043,7 +1150,46 @@ CPlayerPed::CanIKReachThisTarget(CVector target, CWeapon* weapon, bool zRotImpor
+@@ -1043,7 +1151,46 @@ CPlayerPed::CanIKReachThisTarget(CVector target, CWeapon* weapon, bool zRotImpor
  void
  CPlayerPed::RotatePlayerToTrackTarget(void)
  {
@@ -19866,7 +20494,7 @@ index cd8da42..4f0f0b0 100644
  		return;
  
  	float angleToFace = CGeneral::GetRadianAngleBetweenPoints(
-@@ -1094,6 +1240,8 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
+@@ -1094,6 +1241,8 @@ CPlayerPed::FindNextWeaponLockOnTarget(CEntity *previousTarget, bool lookToLeft)
  		if (obj && !obj->bHasBeenDamaged && CanIKReachThisTarget(obj->GetPosition(), GetWeapon(), true))
  			EvaluateNeighbouringTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, lookToLeft, true);
  	}
@@ -19875,7 +20503,7 @@ index cd8da42..4f0f0b0 100644
  	if (!nextTarget)
  		return false;
  
-@@ -1144,12 +1292,14 @@ CPlayerPed::FindWeaponLockOnTarget(void)
+@@ -1144,12 +1293,14 @@ CPlayerPed::FindWeaponLockOnTarget(void)
  		if (obj && !obj->bHasBeenDamaged && CanIKReachThisTarget(obj->GetPosition(), GetWeapon(), true))
  			EvaluateTarget(obj, &nextTarget, &lastCloseness, weaponRange, referenceBeta, true);
  	}
@@ -19890,7 +20518,7 @@ index cd8da42..4f0f0b0 100644
  	Say(SOUND_PED_AIMING);
  	return true;
  }
-@@ -1158,10 +1308,29 @@ void
+@@ -1158,10 +1309,29 @@ void
  CPlayerPed::ProcessAnimGroups(void)
  {
  	AssocGroupId groupToSet;
@@ -19921,7 +20549,7 @@ index cd8da42..4f0f0b0 100644
  
  		if (m_fWalkAngle >= -DEGTORAD(130.0f) && m_fWalkAngle <= DEGTORAD(130.0f)) {
  			if (m_fWalkAngle > 0.0f) {
-@@ -1259,19 +1428,18 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1259,19 +1429,18 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  		bCrouchWhenShooting = false;
  	}
  
@@ -19945,7 +20573,7 @@ index cd8da42..4f0f0b0 100644
  #ifdef FREE_CAM
  				if (CCamera::bFreeCam && TheCamera.Cams[0].Using3rdPersonMouseCam()) {
  					m_fRotationCur = CGeneral::LimitRadianAngle(-TheCamera.Orientation);
-@@ -1292,7 +1460,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1292,7 +1461,7 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				SetPedState(PED_SNIPER_MODE);
  				return;
  			}
@@ -19954,7 +20582,7 @@ index cd8da42..4f0f0b0 100644
  				if (weapon == WEAPONTYPE_ROCKETLAUNCHER || weapon == WEAPONTYPE_SNIPERRIFLE || weapon == WEAPONTYPE_LASERSCOPE || weapon == WEAPONTYPE_CAMERA)
  					return;
  		}
-@@ -1306,7 +1474,9 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1306,7 +1475,9 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				} else {
  					m_fAttackButtonCounter = 0.0f;
  				}
@@ -19965,7 +20593,7 @@ index cd8da42..4f0f0b0 100644
  			} else {
  				if (m_nPedState == PED_ATTACK) {
  					if (padUsed->WeaponJustDown()) {
-@@ -1416,14 +1586,14 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1416,14 +1587,14 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  	}
  #endif
  
@@ -19983,7 +20611,7 @@ index cd8da42..4f0f0b0 100644
  #endif		
  			) {
  				ClearWeaponTarget();
-@@ -1438,14 +1608,45 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1438,14 +1609,45 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				ClearWeaponTarget();
  				return;
  			}
@@ -20032,7 +20660,7 @@ index cd8da42..4f0f0b0 100644
  			}
  
  			if (m_pPointGunAt) {
-@@ -1454,10 +1655,13 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1454,10 +1656,13 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  				if (padUsed->ShiftTargetRightJustDown())
  					FindNextWeaponLockOnTarget(m_pPointGunAt, false);
  			}
@@ -20048,12 +20676,16 @@ index cd8da42..4f0f0b0 100644
  			if (padUsed->TargetJustDown() || TheCamera.m_bJustJumpedOutOf1stPersonBecauseOfTarget)
  				FindWeaponLockOnTarget();
  		}
-@@ -1484,7 +1688,15 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
+@@ -1484,7 +1689,19 @@ CPlayerPed::ProcessPlayerWeapon(CPad *padUsed)
  bool
  CPlayerPed::MovementDisabledBecauseOfTargeting(void)
  {
 -	return m_pPointGunAt && !CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType)->IsFlagSet(WEAPONFLAG_CANAIM_WITHARM);
 +	CWeaponInfo *info = CWeaponInfo::GetWeaponInfo(GetWeapon()->m_eWeaponType);
++	// WASD MOVE: the AI owns the trigger and the target, so its aim must not
++	// plant the player's own keys
++	if (VCModNpcPlayerWalks())
++		return false;
 +	if (VCModCopTwoHandFiring(this, info))
 +		return true;
 +	// AIM WALK: the shot plants the player, and so does the recovery tail that
@@ -20065,7 +20697,7 @@ index cd8da42..4f0f0b0 100644
  }
  
  void
-@@ -1556,6 +1768,9 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
+@@ -1556,6 +1773,9 @@ CPlayerPed::PlayerControlZelda(CPad *padUsed)
  			m_nMoveState = PEDMOVE_SPRINT;
  	}
  
@@ -20075,7 +20707,7 @@ index cd8da42..4f0f0b0 100644
  	if (m_nPedState != PED_FIGHT)
  		SetRealMoveAnim();
  
-@@ -1663,6 +1878,10 @@ CPlayerPed::FindNewAttackPoints(void)
+@@ -1663,6 +1883,10 @@ CPlayerPed::FindNewAttackPoints(void)
  void
  CPlayerPed::ProcessControl(void)
  {
@@ -20086,7 +20718,7 @@ index cd8da42..4f0f0b0 100644
  	// Mobile has some debug/abandoned cheat thing in here: "gbFrankenTommy"
  
  	if (m_nEvadeAmount != 0)
-@@ -1704,8 +1923,47 @@ CPlayerPed::ProcessControl(void)
+@@ -1704,8 +1928,47 @@ CPlayerPed::ProcessControl(void)
  	if (bWasPostponed)
  		return;
  
@@ -20134,7 +20766,7 @@ index cd8da42..4f0f0b0 100644
  	PruneReferences();
  
  	if (GetWeapon()->m_eWeaponType == WEAPONTYPE_MINIGUN) {
-@@ -1778,12 +2036,14 @@ CPlayerPed::ProcessControl(void)
+@@ -1778,12 +2041,14 @@ CPlayerPed::ProcessControl(void)
  		}
  		return;
  	}
@@ -20151,7 +20783,7 @@ index cd8da42..4f0f0b0 100644
  		// ...Really?
  		eWeaponType playerWeapon = FindPlayerPed()->GetWeapon()->m_eWeaponType;
  		if (playerWeapon == WEAPONTYPE_SNIPERRIFLE || playerWeapon == WEAPONTYPE_LASERSCOPE) {
-@@ -1793,15 +2053,53 @@ CPlayerPed::ProcessControl(void)
+@@ -1793,15 +2058,66 @@ CPlayerPed::ProcessControl(void)
  		}
  	}
  
@@ -20176,15 +20808,19 @@ index cd8da42..4f0f0b0 100644
 +			// Flee/InvestigateEvent set it), not player input; without this he
 +			// stands still in them, the same freeze the wander case fixed
 +			if (bVCModNpcMode) {
++				if (VCModNpcPlayerWalks() && VCModNpcWalkInput(padUsed)) {
++					VCModNpcWalkMove(this, padUsed);
++					break;
++				}
 +				switch (m_nMoveState) {
 +					case PEDMOVE_WALK:
-+						m_fMoveSpeed = 1.0f;
++						m_fMoveSpeed = VCModNpcMoveSpeed(this, 1.0f);
 +						break;
 +					case PEDMOVE_RUN:
-+						m_fMoveSpeed = 1.8f;
++						m_fMoveSpeed = VCModNpcMoveSpeed(this, 1.8f);
 +						break;
 +					case PEDMOVE_SPRINT:
-+						m_fMoveSpeed = 2.5f;
++						m_fMoveSpeed = VCModNpcMoveSpeed(this, 2.5f);
 +						break;
 +					default:
 +						m_fMoveSpeed = 0.0f;
@@ -20201,13 +20837,22 @@ index cd8da42..4f0f0b0 100644
  		case PED_FIGHT:
  		case PED_AIM_GUN:
  		case PED_ANSWER_MOBILE:
++			// the keys steer a fight too: the AI keeps the target and the
++			// trigger, only the translation is the player's
++			if (VCModNpcPlayerWalks() && VCModNpcWalkInput(padUsed)
++				&& (m_nPedState == PED_ATTACK || m_nPedState == PED_FIGHT
++					|| m_nPedState == PED_AIM_GUN
++					|| (m_nPedState == PED_IDLE && npcCombatOwnsControl))) {
++				VCModNpcWalkCombat(this, padUsed);
++				break;
++			}
 +			// Combat IDLE is an NPC attack pause, not a handover to player input.
 +			if (VCModNpcCombatControl(this, npcCombatOwnsControl))
 +				break;
  			if (!RpAnimBlendClumpGetFirstAssociation(GetClump(), ASSOC_BLOCK) && !m_attachedTo) {
  				if (TheCamera.Using1stPersonWeaponMode()) {
  					if (padUsed)
-@@ -1823,10 +2121,35 @@ CPlayerPed::ProcessControl(void)
+@@ -1823,32 +2139,80 @@ CPlayerPed::ProcessControl(void)
  					PlayerControlZelda(padUsed);
  				}
  			}
@@ -20218,12 +20863,20 @@ index cd8da42..4f0f0b0 100644
  				ProcessPlayerWeapon(padUsed);
  			break;
 +		case PED_WANDER_PATH:
++			if (VCModNpcPlayerWalks() && VCModNpcWalkInput(padUsed)) {
++				VCModNpcWalkMove(this, padUsed);
++				break;
++			}
 +			// the engine's wander (base WanderPath) owns the heading and the seek;
 +			// the player ped still needs its own speed and move clip, the same way
 +			// PED_SEEK_POS drives them, or he stands frozen with no walk animation
 +			VCModNpcStrollGait(this);
 +			break;
 +		case PED_CHAT:
++			if (VCModNpcPlayerWalks() && VCModNpcWalkInput(padUsed)) {
++				VCModNpcWalkMove(this, padUsed);
++				break;
++			}
 +			// a passer-by opened a chat (SetChat on both). Base Chat() runs the
 +			// lines and the gesture, but this override owns the speed, and it kept
 +			// the last walk value, so he strolled away mid-conversation and the
@@ -20244,7 +20897,25 @@ index cd8da42..4f0f0b0 100644
  			m_vecSeekPos = m_pSeekTarget->GetPosition();
  
  			// fall through
-@@ -1845,10 +2168,21 @@ CPlayerPed::ProcessControl(void)
+ 		case PED_SEEK_POS:
++			if (VCModNpcPlayerWalks() && VCModNpcWalkInput(padUsed)) {
++				VCModNpcWalkMove(this, padUsed);
++				break;
++			}
+ 			switch (m_nMoveState) {
+ 				case PEDMOVE_WALK:
+-					m_fMoveSpeed = 1.0f;
++					m_fMoveSpeed = VCModNpcMoveSpeed(this, 1.0f);
+ 					break;
+ 				case PEDMOVE_RUN:
+-					m_fMoveSpeed = 1.8f;
++					m_fMoveSpeed = VCModNpcMoveSpeed(this, 1.8f);
+ 					break;
+ 				case PEDMOVE_SPRINT:
+-					m_fMoveSpeed = 2.5f;
++					m_fMoveSpeed = VCModNpcMoveSpeed(this, 2.5f);
+ 					break;
+ 				default:
  					m_fMoveSpeed = 0.0f;
  					break;
  			}
@@ -20268,7 +20939,7 @@ index cd8da42..4f0f0b0 100644
  			}
  			break;
  		case PED_SNIPER_MODE:
-@@ -1913,7 +2247,7 @@ CPlayerPed::ProcessControl(void)
+@@ -1913,7 +2277,7 @@ CPlayerPed::ProcessControl(void)
  		GetWeapon()->Update(m_audioEntityId, this);
  	}
  	ProcessAnimGroups();
@@ -20277,7 +20948,7 @@ index cd8da42..4f0f0b0 100644
  		if (TheCamera.Cams[TheCamera.ActiveCam].Mode == CCam::MODE_FOLLOWPED
  			&& TheCamera.Cams[TheCamera.ActiveCam].DirectionWasLooking == LOOKING_BEHIND) {
  
-@@ -1940,10 +2274,27 @@ CPlayerPed::ProcessControl(void)
+@@ -1940,10 +2304,27 @@ CPlayerPed::ProcessControl(void)
  			}
  		}
  	}
@@ -20306,6 +20977,36 @@ index cd8da42..4f0f0b0 100644
  
  	if (m_vecMoveSpeed.Magnitude2D() < 0.1f) {
  		if (m_nSpeedTimer) {
+diff --git a/src/peds/Population.cpp b/src/peds/Population.cpp
+index 495cad1..a6895ba 100644
+--- a/src/peds/Population.cpp
++++ b/src/peds/Population.cpp
+@@ -28,6 +28,7 @@
+ #include "Streaming.h"
+ #include "Clock.h"
+ #include "WaterLevel.h"
++#include "vcmodrange.h"
+ 
+ #define MIN_CREATION_DIST		40.0f // not for start of the game (look at the GeneratePedsAtStartOfGame)
+ #define CREATION_RANGE			10.0f // added over the MIN_CREATION_DIST.
+@@ -1097,14 +1098,15 @@ CPopulation::ManagePopulation(void)
+ 			float dist = (ped->GetPosition() - playerPos).Magnitude2D();
+ 
+ 			bool pedIsFarAway = false;
++			float rangeScale = VCModPedRangeScale();
+ 
+ 			if (ped->IsGangMember())
+ 				dist -= 30.0f;
+ 			else if (ped->bDeadPedInFrontOfCar && ped->m_vehicleInAccident)
+ 				dist = 0.0f;
+ 
+-			if (PedCreationDistMultiplier() * (PED_REMOVE_DIST_SPECIAL * TheCamera.GenerationDistMultiplier) < dist ||
+-				(!ped->bCullExtraFarAway && PedCreationDistMultiplier() * PED_REMOVE_DIST * TheCamera.GenerationDistMultiplier < dist)) {
++			if (PedCreationDistMultiplier() * (PED_REMOVE_DIST_SPECIAL * rangeScale * TheCamera.GenerationDistMultiplier) < dist ||
++				(!ped->bCullExtraFarAway && PedCreationDistMultiplier() * PED_REMOVE_DIST * rangeScale * TheCamera.GenerationDistMultiplier < dist)) {
+ 				pedIsFarAway = true;
+ 			}
+ #ifndef EXTENDED_OFFSCREEN_DESPAWN_RANGE
 diff --git a/src/renderer/Hud.cpp b/src/renderer/Hud.cpp
 index d7d8050..6341171 100644
 --- a/src/renderer/Hud.cpp
@@ -21283,10 +21984,10 @@ index cada168..e5a8a4e 100644
  						{
 diff --git a/utils/test_vc_adrenaline.py b/utils/test_vc_adrenaline.py
 new file mode 100644
-index 0000000..af84af4
+index 0000000..bad19a1
 --- /dev/null
 +++ b/utils/test_vc_adrenaline.py
-@@ -0,0 +1,633 @@
+@@ -0,0 +1,636 @@
 +#!/usr/bin/env python3
 +import re
 +import subprocess
@@ -21608,13 +22309,16 @@ index 0000000..af84af4
 +        definitions = "\n".join(re.findall(r"^(?:bool|int32) [bn]VCMod[^;\n]*;", panel, re.M))
 +        # the character flags moved to their own module; the panel still reads them
 +        definitions += "\n" + "\n".join(re.findall(r"^(?:bool|int32) [bn]VCMod[^;\n]*;", character, re.M))
-+        definitions += "\nint32 nVCModAdrenalineMode;\nbool bVCModStreetIdle = true;\nbool bVCModNpcMode = false;\nbool bVCModNpcAutoType = false;\nint32 nVCModNpcType = 0;\nbool bVCModCopQuickChecks = false;\nint32 nVCModRideZone;\nint32 nVCModRideStyle;\nint32 VCModNpcEffectiveType(void) { return nVCModNpcType; }"
++        definitions += "\nint32 nVCModAdrenalineMode;\nbool bVCModStreetIdle = true;\nbool bVCModNpcMode = false;\nbool bVCModNpcPlayerWalk = false;\nbool bVCModNpcAutoType = false;\nint32 nVCModNpcType = 0;\nbool bVCModCopQuickChecks = false;\nint32 nVCModRideZone;\nint32 nVCModRideStyle;\nint32 VCModNpcEffectiveType(void) { return nVCModNpcType; }"
 +        player = (ROOT / "src/extras/vcmodplayer.cpp").read_text()
 +        # the player switches live in their own module; the panel still reads them
 +        definitions += "\n" + "\n".join(re.findall(r"^bool bVCMod[^;\n]*;", player, re.M))
 +        combat = (ROOT / "src/extras/vcmodcombat.cpp").read_text()
 +        # the combat switches live in their own module; the panel still reads them
 +        definitions += "\n" + "\n".join(re.findall(r"^(?:bool|int32) [bn]VCMod[^;\n]*;", combat, re.M))
++        # the world-reach switches live in vcmodrange.cpp; the panel reads them
++        range_src = (ROOT / "src/extras/vcmodrange.cpp").read_text()
++        definitions += "\n" + "\n".join(re.findall(r"^(?:bool|int32) [bn]VCMod[^;\n]*;", range_src, re.M))
 +        defines = "\n".join(re.findall(r"^#define VCMOD_[A-Z_]+\s+\d+", panel, re.M))
 +        declarations = braced(character, "static const char *aVCModAnimGroupNames[]") + ";\n"
 +        declarations += braced(character, "const char *\nVCModAnimSetName(int32 entry)") + "\n"
@@ -21922,10 +22626,10 @@ index 0000000..af84af4
 +    unittest.main()
 diff --git a/utils/test_vc_aimwalk.py b/utils/test_vc_aimwalk.py
 new file mode 100644
-index 0000000..351ed68
+index 0000000..00d2905
 --- /dev/null
 +++ b/utils/test_vc_aimwalk.py
-@@ -0,0 +1,238 @@
+@@ -0,0 +1,240 @@
 +#!/usr/bin/env python3
 +"""AIM WALK: a locked-on target no longer roots the player for every gun the arm
 +cannot aim with. The predicates decide which weapon and which moment gets the
@@ -21956,6 +22660,7 @@ index 0000000..351ed68
 +
 +bool bVCModAimWalk = true;
 +bool copPose = false;
++bool bVCModNpcMode = false;
 +
 +struct CWeaponInfo { bool armAim; bool IsFlagSet(int) const { return armAim; } };
 +struct CPed {
@@ -21968,6 +22673,7 @@ index 0000000..351ed68
 +    float m_fMoveSpeed;
 +};
 +bool VCModCopTwoHandPose(CPed *, CWeaponInfo *) { return copPose; }
++bool VCModNpcFightsAsPed(CPed *ped) { return ped->IsPlayer() && bVCModNpcMode; }
 +
 +static int failed = 0;
 +#define CHECK(c, m) do { if (!(c)) { printf("FAIL: %s\n", m); failed++; } } while (0)
@@ -22360,10 +23066,10 @@ index 0000000..087b3a0
 +    unittest.main()
 diff --git a/utils/test_vc_character.py b/utils/test_vc_character.py
 new file mode 100644
-index 0000000..0e207b5
+index 0000000..e6735ed
 --- /dev/null
 +++ b/utils/test_vc_character.py
-@@ -0,0 +1,1121 @@
+@@ -0,0 +1,1124 @@
 +#!/usr/bin/env python3
 +import re
 +import subprocess
@@ -22998,12 +23704,15 @@ index 0000000..0e207b5
 +        for line in re.findall(r"^(?:bool|int32) [bn]VCMod[^;\n]*;", CHAR, re.M):
 +            if line not in definitions.splitlines():
 +                definitions += "\n" + line
-+        definitions += "\nint32 nVCModAdrenalineMode;\nbool bVCModStreetIdle = true;\nbool bVCModNpcMode = false;\nbool bVCModNpcAutoType = false;\nint32 nVCModNpcType = 0;\nbool bVCModCopQuickChecks = false;\nint32 nVCModRideZone;\nint32 nVCModRideStyle;\nint32 VCModNpcEffectiveType(void) { return nVCModNpcType; }"
++        definitions += "\nint32 nVCModAdrenalineMode;\nbool bVCModStreetIdle = true;\nbool bVCModNpcMode = false;\nbool bVCModNpcPlayerWalk = false;\nbool bVCModNpcAutoType = false;\nint32 nVCModNpcType = 0;\nbool bVCModCopQuickChecks = false;\nint32 nVCModRideZone;\nint32 nVCModRideStyle;\nint32 VCModNpcEffectiveType(void) { return nVCModNpcType; }"
 +        # the player switches live in vcmodplayer.cpp; the panel still reads them
 +        definitions += "\n" + "\n".join(re.findall(r"^bool bVCMod[^;\n]*;", PLAYERMOD, re.M))
 +        # the combat switches live in vcmodcombat.cpp; the panel still reads them
 +        COMBAT = (ROOT / "src/extras/vcmodcombat.cpp").read_text()
 +        definitions += "\n" + "\n".join(re.findall(r"^(?:bool|int32) [bn]VCMod[^;\n]*;", COMBAT, re.M))
++        # the world-reach switches live in vcmodrange.cpp; the panel reads them
++        RANGEMOD = (ROOT / "src/extras/vcmodrange.cpp").read_text()
++        definitions += "\n" + "\n".join(re.findall(r"^(?:bool|int32) [bn]VCMod[^;\n]*;", RANGEMOD, re.M))
 +        defines = "\n".join(re.findall(r"^#define VCMOD_[A-Z_]+\s+\d+", PANEL, re.M))
 +        categoryEnum = re.search(r"enum eVCModPedCategory\s*\{.*?\}", CHAR_HEAD, re.S).group(0) + ";"
 +        animSetCount = re.search(r"enum \{ NUM_VCMOD_ANIM_SETS = \d+ \}", CHAR_HEAD).group(0) + ";"
@@ -23858,10 +24567,10 @@ index 0000000..d460e68
 \ No newline at end of file
 diff --git a/utils/test_vc_combat.py b/utils/test_vc_combat.py
 new file mode 100644
-index 0000000..9bb861c
+index 0000000..ba4c36e
 --- /dev/null
 +++ b/utils/test_vc_combat.py
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,254 @@
 +#!/usr/bin/env python3
 +"""vcmodcombat owns the aim/recovery state, the two-hand colt's hold, the spin
 +kick command, the forced fight move, the never-wanted clamp and the NPC combat
@@ -24069,7 +24778,7 @@ index 0000000..9bb861c
 +        fight = PEDFIGHT.read_text()
 +        self.assertIn("VCModCombatRequestFightMove(forceMove);", fight)
 +        self.assertIn("VCModCombatClearFightMove();", fight)
-+        self.assertIn("VCModCombatTakeFightMove()", fight)
++        self.assertIn("VCModCombatChooseMove(this,", fight)
 +        self.assertIn("VCModCombatAimTick(this, weaponInfo, weaponAssoc)", fight)
 +        self.assertIn("VCModCombatArmRecovery(this, ourWeapon, weaponAnimAssoc, animLoopEnd)", fight)
 +        self.assertIn("VCModCombatNewBurst(this, ourWeapon, weaponAnimAssoc, attackShouldContinue, animLoopStart, animLoopEnd)", fight)
@@ -24094,6 +24803,16 @@ index 0000000..9bb861c
 +            self.assertNotIn(f"int32 {flag};", panel)
 +            self.assertNotIn(flag, header)
 +
++    def test_the_chooser_seam_replaces_the_player_branch(self):
++        fight = PEDFIGHT.read_text()
++        self.assertEqual(fight.count("VCModCombatChooseMove(this,"), 2)
++        self.assertNotIn("IsPlayer() ? ChooseAttackPlayer(", fight)
++        # the body carries both faces of an #ifdef, so brace matching cannot cut
++        # it; the slice to the next definition is enough to see the take is gone
++        start = fight.index("CPed::ChooseAttackPlayer(uint8 buttonPressure, bool fightWithWeapon)")
++        player = fight[start:fight.index("CPed::EndFight(uint8 endType)", start)]
++        self.assertNotIn("VCModCombatTakeFightMove", player)
++
 +    def test_engine_includes_the_module_header(self):
 +        for path in (PLAYERPED, PEDFIGHT,
 +                     ROOT / "src/peds/Ped.cpp", ROOT / "src/peds/PedIK.cpp",
@@ -24108,10 +24827,10 @@ index 0000000..9bb861c
 +    unittest.main()
 diff --git a/utils/test_vc_cop_chase.py b/utils/test_vc_cop_chase.py
 new file mode 100644
-index 0000000..481ed9c
+index 0000000..16319e4
 --- /dev/null
 +++ b/utils/test_vc_cop_chase.py
-@@ -0,0 +1,179 @@
+@@ -0,0 +1,187 @@
 +#!/usr/bin/env python3
 +"""The player copy of PED_SEEK_ENTITY: a seek must survive its target pointer
 +going away, and it must drive speed and restore the state the way the native
@@ -24152,6 +24871,13 @@ index 0000000..481ed9c
 +    CVector pos;
 +    CVector GetPosition(void) { return pos; }
 +};
++struct SPed;
++struct CPad;
++bool VCModNpcPlayerWalks(void) { return false; }
++bool VCModNpcWalkInput(CPad *) { return false; }
++void VCModNpcWalkMove(SPed *, CPad *) {}
++// with the mode off the easing hands the state's speed straight back
++float VCModNpcMoveSpeed(SPed *, float target) { return target; }
 +'''
 +
 +WRAP = r'''
@@ -24181,6 +24907,7 @@ index 0000000..481ed9c
 +    bool IsUseAttractorObjective(int obj) { return obj == OBJECTIVE_GOTO_SEAT_ON_FOOT; }
 +
 +    void Run(void) {
++        CPad *padUsed = nil;
 +        switch (m_nPedState) {
 +        @CASE@
 +        default: break;
@@ -24581,10 +25308,10 @@ index 0000000..d69f7e9
 \ No newline at end of file
 diff --git a/utils/test_vc_cop_pistol.py b/utils/test_vc_cop_pistol.py
 new file mode 100644
-index 0000000..f68faaa
+index 0000000..4e8c794
 --- /dev/null
 +++ b/utils/test_vc_cop_pistol.py
-@@ -0,0 +1,420 @@
+@@ -0,0 +1,438 @@
 +#!/usr/bin/env python3
 +"""Two-hand colt: the pose selection on its own, plus static checks that the
 +fire loop looks up the clip SetAttack blended."""
@@ -24616,6 +25343,8 @@ index 0000000..f68faaa
 +enum { PED_IDLE, PED_ATTACK, PED_AIM_GUN };
 +bool bVCModCopPistol = true;
 +bool bVCModCopRecovering = false;
++bool bVCModNpcMode = false;
++bool npcCopActive = false;
 +
 +struct CWeaponInfo {
 +    uint32 m_Flags;
@@ -24636,6 +25365,9 @@ index 0000000..f68faaa
 +        return weapon->IsFlagSet(WEAPONFLAG_COP3_RD) ? ANIM_WEAPON_FIRE_3RD : (AnimationId)0;
 +    }
 +};
++
++bool VCModNpcFightsAsPed(CPed *ped) { return ped->IsPlayer() && bVCModNpcMode; }
++bool VCModNpcCopActive(void) { return npcCopActive; }
 +
 +static int failed = 0;
 +#define CHECK(c, m) do { if (!(c)) { printf("FAIL: %s\n", m); failed++; } } while (0)
@@ -24661,6 +25393,17 @@ index 0000000..f68faaa
 +          "the player keeps the stock clip when the row is off");
 +    CHECK(VCModCopAimAnim(&player, &colt) == ANIM_WEAPON_FIRE,
 +          "the player holds the stock clip when the row is off");
++
++    // NPC mode: the worn body decides the cop clip, the row has no say
++    bVCModNpcMode = true;
++    npcCopActive = true;
++    CHECK(VCModCopTwoHandPose(&player, &colt), "an npc cop body keeps the cop clip with the row off");
++    CHECK(VCModCopFireAnim(&player, &colt) == ANIM_WEAPON_FIRE_3RD,
++          "the npc cop body fires its own clip");
++    npcCopActive = false;
++    CHECK(!VCModCopTwoHandPose(&player, &colt), "a civilian body ignores the row in npc mode");
++    bVCModNpcMode = false;
++
 +    CHECK(VCModCopFireAnim(&cop, &colt) == ANIM_WEAPON_FIRE_3RD,
 +          "cops keep the cop clip");
 +    CHECK(VCModCopFireAnim(&cop, &uzi) == ANIM_WEAPON_FIRE,
@@ -24808,6 +25551,8 @@ index 0000000..f68faaa
 +    CWeapon *GetWeapon() { return &weapon; }
 +};
 +bool VCModCopTwoHandFiring(CPed *ped, CWeaponInfo *info) { return gShot; }
++bool VCModNpcFightsAsPed(CPed *ped) { return false; }
++bool VCModNpcCopActive(void) { return false; }
 +bool bVCModCopRecovering;
 +struct CAnimBlendAssociation {
 +    CAnimBlendNode *nodes;
@@ -27356,7 +28101,7 @@ index 0000000..015c44c
 +    unittest.main()
 diff --git a/utils/test_vc_gangfaction.py b/utils/test_vc_gangfaction.py
 new file mode 100644
-index 0000000..64ff7df
+index 0000000..e91ad2e
 --- /dev/null
 +++ b/utils/test_vc_gangfaction.py
 @@ -0,0 +1,969 @@
@@ -27482,7 +28227,7 @@ index 0000000..64ff7df
 +BODYSTATS = "static CPedStats *\nVCModNpcBodyStats(CPlayerPed *player)"
 +CIVSTATS = "static CPedStats *\nVCModNpcCivilianBodyStats(CPlayerPed *player)"
 +RESTORE = "static void\nVCModNpcRestoreStatBorrow(CPlayerPed *player)"
-+BORROW = "static void\nVCModNpcBorrowIdentity(CPlayerPed *player, bool civilianWander, bool gangWander)"
++BORROW = "static void\nVCModNpcBorrowIdentity(CPlayerPed *player, bool civilianWander, bool gangWander, bool copWander)"
 +GATE = "bool\nVCModNpcGangActive(void)"
 +EFF = "int32\nVCModGangEffectiveType(CPed *ped)"
 +ISGANG = "bool\nCPed::IsGangMember(void) const"
@@ -27580,7 +28325,7 @@ index 0000000..64ff7df
 +    ResetPedStats();
 +    CPed tommy; tommy.m_isPlayer = true; tommy.m_modelIndex = MI_CUBAN;
 +    bVCModNpcMode = true; bVCModNpcAutoType = true;
-+    VCModNpcBorrowIdentity(&tommy, false, true);
++    VCModNpcBorrowIdentity(&tommy, false, true, false);
 +    if (tommy.m_pedStats != CPedStats::ms_apPedStats[PEDSTAT_GANG1]) return 1;
 +    if (tommy.m_headingRate != 7.0f) return 2;
 +    if (tommy.m_fearFlags != CPedType::GetThreats(PEDTYPE_GANG1)) return 3;
@@ -27596,7 +28341,7 @@ index 0000000..64ff7df
 +    ResetPedStats();
 +    CPed tommy; tommy.m_isPlayer = true; tommy.m_modelIndex = MI_CUBAN;
 +    bVCModNpcMode = true; bVCModNpcAutoType = false;
-+    VCModNpcBorrowIdentity(&tommy, false, true);
++    VCModNpcBorrowIdentity(&tommy, false, true, false);
 +    if (tommy.m_pedStats != CPedStats::ms_apPedStats[PEDSTAT_GANG7]) return 1;
 +    if (tommy.m_fearFlags != CPedType::GetThreats(PEDTYPE_GANG7)) return 2;
 +    if (tommy.m_gangFlags != (uint8)~(1 << (PEDTYPE_GANG7 - PEDTYPE_GANG1))) return 3;
@@ -27612,9 +28357,9 @@ index 0000000..64ff7df
 +    CPedStats *own = tommy.m_pedStats;
 +    uint8 ownFlags = tommy.m_gangFlags;
 +    bVCModNpcMode = true; bVCModNpcAutoType = true;
-+    VCModNpcBorrowIdentity(&tommy, false, true);
++    VCModNpcBorrowIdentity(&tommy, false, true, false);
 +    if (tommy.m_pedStats == own) return 1;
-+    VCModNpcBorrowIdentity(&tommy, false, false);
++    VCModNpcBorrowIdentity(&tommy, false, false, false);
 +    if (tommy.m_pedStats != own) return 2;
 +    if (tommy.m_gangFlags != ownFlags) return 3;
 +    if (tommy.m_headingRate != 15.0f) return 4;
@@ -28332,10 +29077,10 @@ index 0000000..64ff7df
 \ No newline at end of file
 diff --git a/utils/test_vc_ganggaze.py b/utils/test_vc_ganggaze.py
 new file mode 100644
-index 0000000..7dc7523
+index 0000000..666c33b
 --- /dev/null
 +++ b/utils/test_vc_ganggaze.py
-@@ -0,0 +1,466 @@
+@@ -0,0 +1,473 @@
 +#!/usr/bin/env python3
 +import re
 +import unittest
@@ -28428,6 +29173,11 @@ index 0000000..7dc7523
 +bool CCamera::bFreeCam = false;
 +struct CWeaponEffects { static void ClearCrossHair() {} };
 +struct CPad { bool GetTarget() { return false; } void ResetAverageWeapon() {} static CPad* GetPad(int) { static CPad p; return &p; } };
++struct CPlayerPed;
++bool VCModNpcPlayerWalks(void) { return false; }
++bool VCModNpcWalkInput(CPad *) { return false; }
++void VCModNpcWalkMove(CPlayerPed *, CPad *) {}
++void VCModNpcWalkCombat(CPlayerPed *, CPad *) {}
 +struct CGeneral { static float LimitRadianAngle(float a) { return a; } static int GetRandomNumber() { return 0; } static int GetRandomNumberInRange(int a, int) { return a; } };
 +float Abs(float a) { return a < 0 ? -a : a; }
 +uint32 now = 1000;
@@ -28497,6 +29247,7 @@ index 0000000..7dc7523
 +    void ClearAttack() { ++attacksCleared; m_nPedState = PED_IDLE; }
 +    void EndFight(int) { ++fightsEnded; m_nPedState = PED_IDLE; }
 +};
++bool VCModNpcFightsAsPed(CPed *ped) { return ped->IsPlayer() && bVCModNpcMode; }
 +struct CPlayerPed : CPed {
 +    CPlayerPed() { player = true; }
 +    void SetWeaponLockOnTarget(CEntity* t) { m_pPointGunAt = t; }
@@ -28651,9 +29402,9 @@ index 0000000..7dc7523
 +        tommy.m_attackTimer = 0;
 +        int starts = tommy.fightStarts;
 +        tommy.Control();
-+        CHECK(tommy.fightStarts == starts + 1);
++        CHECK(tommy.fightStarts == starts);   // the module never presses the fight button
 +    }
-+    CHECK(playerControls == 0);
++    CHECK(playerControls == 0);               // the state is owned; the input path stays out
 +    target.m_nPedState = PED_FALL;
 +    tommy.SetAttackTail(&target); CHECK(tommy.m_nPedState == PED_ATTACK);
 +    // a plain player keeps the input-driven states
@@ -28666,13 +29417,10 @@ index 0000000..7dc7523
 +    CHECK(playerControls == 1);
 +''')
 +
-+    def test_melee_attack_takes_the_ped_path_in_npc_mode(self):
-+        # the player-start branch only begins an animation; the ped entry
-+        # (StartFightAttack) is what reaches FightStrike, and NPC mode has no
-+        # attack button to press
++    def test_the_module_keeps_no_fight_driver(self):
 +        control = braced(COMBAT, "VCModNpcCombatControl(CPlayerPed *player, bool npcCombatOwnsControl)")
-+        self.assertIn('StartFightAttack(CGeneral::GetRandomNumber());', control)
-+        self.assertIn('wi->IsFlagSet(WEAPONFLAG_FIGHTMODE)', control)
++        for call in ("StartFightAttack", "SetAttackTimer", "ClearAttack", "EndFight"):
++            self.assertNotIn(call, control)
 +
 +    def test_npc_combat_leaves_the_engine_drivers_to_the_base_layer(self):
 +        # the base CPed::ProcessControl runs Attack()/Fight()/PointGunAt() for
@@ -28686,7 +29434,7 @@ index 0000000..7dc7523
 +        for call in ('Attack', 'Fight', 'PointGunAt', 'ReactToPointGun'):
 +            self.assertIsNone(re.search(r'\b' + call + r'\(', body), call)
 +
-+    def test_melee_attack_state_starts_the_fight(self):
++    def test_an_attack_state_is_owned_not_pressed(self):
 +        self.check(r'''
 +    nVCModNpcType = VCMOD_NPC_CIVILIAN;
 +    tommy.m_nPedState = PED_ATTACK;
@@ -28695,53 +29443,53 @@ index 0000000..7dc7523
 +    tommy.m_pedInObjective = &target;
 +    int before = attacks, starts = tommy.fightStarts;
 +    tommy.Control();
-+    CHECK(tommy.fightStarts == starts + 1);
-+    CHECK(attacks == before);        // weapon-animation driver did not run
++    CHECK(tommy.fightStarts == starts);   // the objective layer calls SetAttack
++    CHECK(attacks == before);             // the module never runs the engine driver
++    CHECK(playerControls == 0);           // owned: the input path is out
 +''')
 +
-+    def test_attack_state_without_a_target_keeps_the_stock_animation(self):
-+        # bump shoves and stray input land in PED_ATTACK too; with no kill
-+        # objective they must end, and the stock pose handling must run below or
-+        # the shove's last frame stays up as a held wind-up
++    def test_a_stray_attack_is_left_to_the_engine_endings(self):
++        # melee bump shoves now enter PED_FIGHT through the ped chooser; a gun
++        # PED_ATTACK ends in FinishedAttackCB -> ClearAttack. The module owning
++        # the state is what keeps the stock ending in charge.
 +        self.check(r'''
-+    TheCamera.Cams[0].DirectionWasLooking = 0;
 +    nVCModNpcType = VCMOD_NPC_CIVILIAN;
-+    target.m_nPedState = PED_GETUP;      // not a live fight target
++    target.m_nPedState = PED_GETUP;
 +    tommy.m_nPedState = PED_ATTACK;
 +    tommy.m_attackTimer = 0;
 +    tommy.m_pedInObjective = &target;
 +    tommy.m_objective = OBJECTIVE_NONE;
 +    int starts = tommy.fightStarts;
 +    tommy.Control();
-+    CHECK(tommy.attacksCleared == 1);    // the shove state ends
-+    CHECK(tommy.fightStarts == starts);  // no fight started
-+    CHECK(playerControls == 1);          // stock pose handling ran (not skipped)
++    CHECK(tommy.attacksCleared == 0);   // the module does not cut it
++    CHECK(tommy.fightsEnded == 0);
++    CHECK(tommy.fightStarts == starts);
++    CHECK(playerControls == 0);         // owned; FinishedAttackCB clears on the animation end
 +''')
 +
-+    def test_melee_fight_rearms_the_next_move(self):
++    def test_a_fight_state_is_owned_not_rearmed(self):
 +        self.check(r'''
-+    // the AI re-arms each move through SetAttack; with no pad, NPC mode must
-+    // request it or the fight idles after the first punch and no hit lands
++    // the AI re-arms each move through SetAttack on its own beat; the module
++    // must not press it or write the timer, or two drivers race
 +    nVCModNpcType = VCMOD_NPC_CIVILIAN;
 +    tommy.m_nPedState = PED_FIGHT;
 +    tommy.m_objective = OBJECTIVE_KILL_CHAR_ON_FOOT;
 +    tommy.m_pedInObjective = &target;
 +    tommy.m_attackTimer = 0;
 +    now = 1000;
-+    int before = attacks;
++    int before = attacks, starts = tommy.fightStarts;
 +    tommy.Control();
-+    CHECK(tommy.fightStarts == 1);
++    CHECK(tommy.fightStarts == starts);
 +    CHECK(attacks == before);           // the base layer drives Fight(), not this switch
-+    CHECK(tommy.m_attackTimer > now);   // the next beat is set, as the AI does
-+    tommy.Control();                     // still inside the beat
-+    CHECK(tommy.fightStarts == 1);
++    CHECK(tommy.m_attackTimer == 0);    // no timer written from here
++    CHECK(playerControls == 0);
 +''')
 +
-+    def test_fight_without_a_target_is_not_rearmed(self):
++    def test_a_fight_without_a_target_is_left_to_the_engine(self):
 +        self.check(r'''
 +    TheCamera.Cams[0].DirectionWasLooking = 0;
-+    // a fight started by a bump or leftover state must not idle in the stance:
-+    // it ends, and the stock pose handling runs below
++    // a fight started by a bump or leftover state ends through the engine's own
++    // Fight()/EndFight path; cutting it here would cut a real scuffle short
 +    nVCModNpcType = VCMOD_NPC_CIVILIAN;
 +    tommy.m_nPedState = PED_FIGHT;
 +    tommy.m_attackTimer = 0;
@@ -28751,9 +29499,13 @@ index 0000000..7dc7523
 +    now = 1000;
 +    tommy.Control();
 +    CHECK(tommy.fightStarts == 0);
-+    CHECK(tommy.fightsEnded == 1);
-+    CHECK(playerControls == 1);
++    CHECK(tommy.fightsEnded == 0);
++    CHECK(playerControls == 0);
 +''')
++
++    def test_finished_attack_still_ends_a_stray(self):
++        cb = braced(FIGHT, "CPed::FinishedAttackCB(CAnimBlendAssociation *attackAssoc, void *arg)")
++        self.assertIn("ped->ClearAttack();", cb)
 +
 +    def test_a_started_chat_stops_him(self):
 +        self.check(r'''
@@ -28805,7 +29557,7 @@ index 0000000..7dc7523
 \ No newline at end of file
 diff --git a/utils/test_vc_ganggroup.py b/utils/test_vc_ganggroup.py
 new file mode 100644
-index 0000000..816b618
+index 0000000..40aafae
 --- /dev/null
 +++ b/utils/test_vc_ganggroup.py
 @@ -0,0 +1,1181 @@
@@ -29760,7 +30512,7 @@ index 0000000..816b618
 +    b.m_nPedState = PED_IDLE; b.m_chatTimer = 7;
 +    c.m_nPedState = PED_CHAT;
 +    tommy.m_nPedState = PED_CHAT;
-+    VCModGangGroupStopChat(&tommy, 5000);
++    VCModGangGroupStopChat(&tommy, 5000, "menu");
 +    if (a.cleared != 1 || c.cleared != 1) return 1;
 +    if (a.m_chatTimer != 35000 || c.m_chatTimer != 35000) return 2;
 +    if (b.cleared != 0 || b.m_chatTimer != 7) return 3;   // standing man untouched
@@ -30905,12 +31657,286 @@ index 0000000..8315d8d
 +
 +if __name__ == '__main__':
 +    unittest.main()
+diff --git a/utils/test_vc_npccombat.py b/utils/test_vc_npccombat.py
+new file mode 100644
+index 0000000..2d9f810
+--- /dev/null
++++ b/utils/test_vc_npccombat.py
+@@ -0,0 +1,268 @@
++#!/usr/bin/env python3
++"""NPC-mode combat takes the worn ped's path: predicate, move chooser, stock
++accuracy, cop pistol clip, and the receiving side (damage taken, hit reactions,
++attack reaction). Decision functions are compiled against stubs; the engine
++side is pinned by wiring checks."""
++import pathlib
++import unittest
++
++from vcmod_test_support import braced, run_cpp
++
++ROOT = pathlib.Path(__file__).resolve().parents[1]
++NPC = (ROOT / "src/extras/vcmodnpc.cpp").read_text()
++COMBAT = (ROOT / "src/extras/vcmodcombat.cpp").read_text()
++PEDFIGHT = (ROOT / "src/peds/PedFight.cpp").read_text()
++PEDAI = (ROOT / "src/peds/PedAI.cpp").read_text()
++COPPED = (ROOT / "src/peds/CopPed.cpp").read_text()
++
++STUBS = r'''
++#include <cstdio>
++#include <cstdint>
++#define nil NULL
++#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
++typedef int8_t int8; typedef uint8_t uint8; typedef int16_t int16;
++typedef uint16_t uint16; typedef int32_t int32; typedef uint32_t uint32;
++
++enum { MI_COP = 1, MI_SWAT, MI_FBI, MI_ARMY, MI_VICE1, MI_VICE2, MI_VICE3,
++       MI_VICE4, MI_VICE5, MI_VICE6, MI_VICE7, MI_VICE8, MI_MALE01 };
++enum { VCMOD_NPC_GANG, VCMOD_NPC_CIVILIAN, VCMOD_NPC_COP };
++enum { WEAPONFLAG_COP3_RD = 1 << 18 };
++enum { FIGHTMOVE_NULL = 0, FIGHTMOVE_ROUNDHOUSE = 9 };
++
++bool bVCModNpcMode;
++bool bVCModCopPistol;
++int32 nVCModNpcType;
++bool bVCModNpcAutoType;
++int32 nVCModNpcTypeStub;
++
++struct CWeaponInfo {
++    int flags;
++    CWeaponInfo() : flags(0) {}
++    bool IsFlagSet(int f) { return (flags & f) != 0; }
++};
++struct CPed {
++    bool player;
++    int16 model;
++    int aiCalls, playerCalls;
++    bool IsPlayer() { return player; }
++    int16 GetModelIndex() { return model; }
++    int32 ChooseAttackAI(uint8, bool) { ++aiCalls; return 1; }
++    int32 ChooseAttackPlayer(uint8, bool) { ++playerCalls; return 2; }
++};
++struct CPlayerPed : CPed {};
++int32 VCModNpcEffectiveType(void) { return nVCModNpcTypeStub; }
++bool VCModNpcCopActive(void) { return bVCModNpcMode && VCModNpcEffectiveType() == VCMOD_NPC_COP; }
++static int32 nVCModForcedFightMove = FIGHTMOVE_NULL;
++
++static int failed = 0;
++#define CHECK(c, m) do { if (!(c)) { printf("FAIL: %s\n", m); failed++; } } while (0)
++'''
++
++MAIN = r'''
++int main() {
++    CPlayerPed p; p.player = true; p.model = MI_MALE01;
++    bVCModNpcMode = false;
++    CHECK(!VCModNpcFightsAsPed(&p), "mode off keeps the player");
++    bVCModNpcMode = true;
++    CHECK(VCModNpcFightsAsPed(&p), "mode on fights as the ped");
++    CPed q; q.player = false;
++    CHECK(!VCModNpcFightsAsPed(&q), "a native ped is not the player");
++    CHECK(!VCModNpcFightsAsPed(nil), "nil is not the player");
++
++    nVCModForcedFightMove = FIGHTMOVE_NULL;
++    p.aiCalls = p.playerCalls = 0;
++    bVCModNpcMode = false;
++    CHECK(VCModCombatChooseMove(&p, 200, false) == 2 && p.playerCalls == 1 && p.aiCalls == 0,
++          "mode off asks the player chooser");
++    bVCModNpcMode = true;
++    CHECK(VCModCombatChooseMove(&p, 200, false) == 1 && p.aiCalls == 1,
++          "mode on asks the ped chooser");
++    VCModCombatRequestFightMove(FIGHTMOVE_ROUNDHOUSE);
++    CHECK(VCModCombatChooseMove(&p, 200, false) == FIGHTMOVE_ROUNDHOUSE, "the forced move outranks the chooser");
++    CHECK(VCModCombatTakeFightMove() == FIGHTMOVE_NULL, "choosing consumed it");
++
++    // accuracy: everyone 60, police bodies their CCopPed value
++    nVCModNpcTypeStub = VCMOD_NPC_CIVILIAN; p.model = MI_COP;
++    CHECK(VCModNpcWepAccuracy(&p) == 60, "a civilian body is 60");
++    nVCModNpcTypeStub = VCMOD_NPC_COP;
++    p.model = MI_COP;   CHECK(VCModNpcWepAccuracy(&p) == 60, "street cop 60");
++    p.model = MI_SWAT;  CHECK(VCModNpcWepAccuracy(&p) == 68, "swat 68");
++    p.model = MI_FBI;   CHECK(VCModNpcWepAccuracy(&p) == 76, "fbi 76");
++    p.model = MI_ARMY;  CHECK(VCModNpcWepAccuracy(&p) == 84, "army 84");
++    p.model = MI_VICE4; CHECK(VCModNpcWepAccuracy(&p) == 76, "vice 76");
++    p.model = MI_MALE01; CHECK(VCModNpcWepAccuracy(&p) == 60, "a non-cop body in the cop profile is 60");
++
++    // the cop pistol clip is the body's, not the row's
++    CWeaponInfo cop; cop.flags = WEAPONFLAG_COP3_RD;
++    bVCModCopPistol = false;
++    bVCModNpcMode = true; nVCModNpcTypeStub = VCMOD_NPC_COP;
++    CHECK(VCModCopTwoHandPose(&p, &cop), "an npc cop body keeps the cop clip with the row off");
++    nVCModNpcTypeStub = VCMOD_NPC_CIVILIAN;
++    CHECK(!VCModCopTwoHandPose(&p, &cop), "a civilian body ignores the row in npc mode");
++    bVCModNpcMode = false;
++    CHECK(!VCModCopTwoHandPose(&p, &cop), "normal play keeps the row off");
++    bVCModCopPistol = true;
++    CHECK(VCModCopTwoHandPose(&p, &cop), "normal play keeps the row on");
++    return failed != 0;
++}
++'''
++
++
++def cop_accuracy_table():
++    start = NPC.index("static const struct { int16 model; uint8 accuracy; } aVCModNpcCopAccuracy[]")
++    end = NPC.index("};", start) + 2
++    return NPC[start:end]
++
++
++def source(functions):
++    table = cop_accuracy_table() + "\n" if any("VCModNpcWepAccuracy" in f for f in functions) else ""
++    return STUBS + table + "\n".join(braced(NPC + "\n" + COMBAT, f) for f in functions) + MAIN
++
++
++DECISIONS = [
++    "bool\nVCModNpcFightsAsPed(CPed *ped)",
++    "void\nVCModCombatRequestFightMove(int32 move)",
++    "int32\nVCModCombatTakeFightMove(void)",
++    "void\nVCModCombatClearFightMove(void)",
++    "int32\nVCModCombatChooseMove(CPed *ped, int32 buttonPressure, bool fightWithWeapon)",
++    "uint8\nVCModNpcWepAccuracy(CPlayerPed *player)",
++    "bool\nVCModCopTwoHandPose(CPed *ped, CWeaponInfo *info)",
++]
++
++
++class PredicateTests(unittest.TestCase):
++    def test_fights_as_ped(self):
++        run_cpp(source(DECISIONS))
++
++
++class ChooserTests(unittest.TestCase):
++    def test_chooser_priority(self):
++        run_cpp(source(DECISIONS))
++
++
++class AccuracyTests(unittest.TestCase):
++    def test_stock_accuracy_table(self):
++        run_cpp(source(DECISIONS))
++
++    def test_accuracy_table_matches_cop_constructor(self):
++        for value in ("m_wepAccuracy = 60;", "m_wepAccuracy = 68;",
++                      "m_wepAccuracy = 76;", "m_wepAccuracy = 84;"):
++            self.assertIn(value, COPPED)
++
++
++def up_to(source, marker, following):
++    """The marker's text up to the next definition. A body that carries both
++    faces of an #ifdef has more opening braces than the text can close, so a
++    brace matcher cannot cut it."""
++    start = source.index(marker)
++    return source[start:source.index(following, start)]
++
++
++class SliceAWiring(unittest.TestCase):
++    def test_setattack_takes_the_ped_melee_path(self):
++        setattack = up_to(PEDFIGHT, "CPed::SetAttack(CEntity *victim)", "CPed::ClearAttack(void)")
++        self.assertGreaterEqual(setattack.count("VCModNpcFightsAsPed(this)"), 7)
++        self.assertNotIn("IsPlayer() && !VCModNpcGangActive()", setattack)
++
++    def test_clearattack_takes_the_ped_duck_gate(self):
++        clearattack = braced(PEDFIGHT, "CPed::ClearAttack(void)")
++        self.assertIn("VCModNpcFightsAsPed(this)", clearattack)
++
++    def test_fight_keeps_the_ped_state_in_npc_mode(self):
++        fight = up_to(PEDFIGHT, "CPed::Fight(void)",
++                      "CPed::ChooseAttackAI(uint8 buttonPressure, bool fightWithWeapon)")
++        self.assertGreaterEqual(fight.count("VCModNpcFightsAsPed(this)"), 9)
++        self.assertNotIn("if (!bIsAttacking && IsPlayer()) {", fight)
++
++    def test_startfightattack_skips_the_player_timing(self):
++        start = braced(PEDFIGHT, "CPed::StartFightAttack(uint8 buttonPressure, PedFightMoves forceMove)")
++        self.assertIn("if (IsPlayer() && !VCModNpcFightsAsPed(this))", start)
++        self.assertIn("VCModCombatChooseMove(this,", start)
++
++    def test_melee_damage_uses_the_ped_strength(self):
++        hit = braced(PEDFIGHT, "CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)")
++        self.assertIn("VCModNpcFightsAsPed(this)", hit)
++        self.assertIn("m_pedStats->m_attackStrength", hit)
++        self.assertNotIn("if (IsPlayer()) {\n\t\tif (((CPlayerPed*)this)->m_bAdrenalineActive)", hit)
++
++    def test_player_only_melee_vfx_is_off_in_npc_mode(self):
++        hit = braced(PEDFIGHT, "CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)")
++        self.assertIn("IsPlayer() && !VCModNpcFightsAsPed(this)", hit)
++        strike = braced(PEDFIGHT, "CPed::FightStrike(CVector &touchedNodePos, bool fightWithWeapon)")
++        self.assertIn("VCModNpcFightsAsPed(this)", strike)
++
++
++class SliceBWiring(unittest.TestCase):
++    def test_gun_attack_takes_the_ped_path_in_npc_mode(self):
++        attack = braced(PEDFIGHT, "CPed::Attack(void)")
++        self.assertIn("VCModNpcFightsAsPed(this)", attack)
++        self.assertGreaterEqual(attack.count("VCModNpcFightsAsPed(this)"), 5)
++        self.assertIn("SelectGunIfArmed", attack)
++        reload = braced(PEDFIGHT, "CPed::StartReloadNow(void)")
++        self.assertIn("VCModNpcFightsAsPed(this)", reload)
++
++    def test_aim_features_stand_down_in_npc_mode(self):
++        walk = COMBAT[COMBAT.index("VCModAimWalkWeapon(CPed *ped, CWeaponInfo *info)"):]
++        walk = walk[:walk.index("\n}")]
++        self.assertIn("VCModNpcFightsAsPed(ped)", walk)
++        tick = braced(COMBAT, "VCModCombatAimTick(CPed *ped, CWeaponInfo *weaponInfo, CAnimBlendAssociation *weaponAssoc)")
++        self.assertIn("VCModNpcFightsAsPed(ped)", tick)
++        point = braced(PEDFIGHT, "CPed::PointGunAt(void)")
++        self.assertIn("VCModNpcFightsAsPed(this)", point)
++        self.assertIn("!VCModNpcCopActive()", point)
++
++
++class SliceCWiring(unittest.TestCase):
++    def test_damage_taken_uses_the_ped_rules(self):
++        dmg = braced(PEDFIGHT, "CPed::InflictDamage(CEntity *damagedBy, eWeaponType method, "
++                               "float damage, ePedPieceTypes pedPiece, uint8 direction)")
++        # the body's defence, not the player's third
++        self.assertIn("if (IsPlayer() && !VCModNpcFightsAsPed(this))\n\t\thealthImpact = damage * 0.33f;", dmg)
++        self.assertIn("healthImpact = damage * m_pedStats->m_defendWeakness;", dmg)
++        self.assertNotIn("if (IsPlayer())\n\t\thealthImpact = damage * 0.33f;", dmg)
++        # bleed, limbs and explosion dismemberment are the ped's
++        self.assertIn("if ((!IsPlayer() || VCModNpcFightsAsPed(this)) &&\n\t\t(method == WEAPONTYPE_SCREWDRIVER", dmg)
++        self.assertIn("if ((IsPlayer() && !VCModNpcFightsAsPed(this)) || bNoCriticalHits)", dmg)
++        self.assertIn("dontRemoveLimb = true", dmg)
++        self.assertIn("CGame::nastyGame && (!IsPlayer() || VCModNpcFightsAsPed(this)) && !bInVehicle", dmg)
++        # the player-only immunities do not cover the worn body
++        self.assertIn("if (!VCModNpcFightsAsPed(this)\n\t\t\t&& damagedBy && damagedBy->IsPed() && "
++                      "((CPed*)damagedBy)->m_nPedType == PEDTYPE_GANG7)", dmg)
++        self.assertIn("m_bFireproof\n\t\t\t&& !VCModNpcFightsAsPed(this))", dmg)
++        # camera and arrest feedback stay the player's
++        self.assertIn("m_bCanBeDamaged", dmg)
++        self.assertIn("AnnoyPlayerPed(false)", dmg)
++
++    def test_hit_reactions_take_the_ped_path(self):
++        defend = braced(PEDFIGHT, "CPed::StartFightDefend(uint8 direction, uint8 hitLevel, uint8 unk)")
++        # no running-player HITBYGUN one-shot: the ped reacts to the hit itself
++        self.assertIn("if ((IsPlayer() && !VCModNpcFightsAsPed(this) && m_nPedState != PED_FIGHT "
++                      "&& ((CPlayerPed*)this)->m_fMoveSpeed > 1.0f)", defend)
++        # the ped knockdown coin flips cover the worn body
++        self.assertIn("if (direction == 2 && ((!IsPlayer() || VCModNpcFightsAsPed(this)) ||", defend)
++        self.assertIn("direction != 2 && (!IsPlayer() || VCModNpcFightsAsPed(this))", defend)
++        # ped fight speed and the ped gun reaction
++        self.assertIn("if (IsPlayer() && !VCModNpcFightsAsPed(this))", defend)
++        self.assertIn("} else if (IsPlayer() && !VCModNpcFightsAsPed(this) && GetWeapon()->m_eWeaponType "
++                      "!= WEAPONTYPE_UNARMED", defend)
++        self.assertGreaterEqual(defend.count("VCModNpcFightsAsPed(this)"), 5)
++
++    def test_victim_side_melee_rules_name_the_npc_player(self):
++        hit = braced(PEDFIGHT, "CPed::FightHitPed(CPed *victim, CVector &touchPoint, CVector &dir, int16 piece)")
++        # no get-up immunity for the worn body
++        self.assertIn("if (victim->IsPlayer() && !VCModNpcFightsAsPed(victim) && "
++                      "victim->m_nPedState == PED_GETUP)", hit)
++        # the ped hit-step value reaches him
++        self.assertIn("(!victim->IsPlayer() || VCModNpcFightsAsPed(victim)) && !fightingWithWeapon", hit)
++        self.assertGreaterEqual(hit.count("VCModNpcFightsAsPed(victim)"), 2)
++
++    def test_react_to_attack_takes_the_ped_path_for_every_profile(self):
++        react = braced(PEDAI, "CPed::ReactToAttack(CEntity *attacker)")
++        self.assertIn("if (IsPlayer() && !VCModNpcFightsAsPed(this) && attacker->IsPed())", react)
++        self.assertNotIn("!VCModNpcCivilianActive() && !VCModNpcGangActive()", react)
++        # the kin gate stays ahead of the reaction for every profile
++        self.assertIn("VCModGangSameGang(this, (CPed*)attacker)", react)
++
++
++if __name__ == "__main__":
++    unittest.main()
 diff --git a/utils/test_vc_npcmode.py b/utils/test_vc_npcmode.py
 new file mode 100644
-index 0000000..9443f6f
+index 0000000..7e9ce7f
 --- /dev/null
 +++ b/utils/test_vc_npcmode.py
-@@ -0,0 +1,1413 @@
+@@ -0,0 +1,1502 @@
 +#!/usr/bin/env python3
 +"""Manual BECOME NPC command: input ignored until toggle-off, terminal-only
 +break/resume, and the GANG/CIVILIAN/COP profile dispatch.
@@ -30930,6 +31956,7 @@ index 0000000..9443f6f
 +PLAYER = (ROOT / "src/peds/PlayerPed.cpp").read_text()
 +STREET = (ROOT / "src/extras/vcmodstreet.cpp").read_text()
 +NPC = (ROOT / "src/extras/vcmodnpc.cpp").read_text()
++PLAYERPED = (ROOT / "src/peds/PlayerPed.cpp").read_text()
 +PANEL = (ROOT / "src/extras/vcmodpanelregistry.cpp").read_text()
 +HEAD = (ROOT / "src/peds/Ped.h").read_text()
 +
@@ -31015,6 +32042,8 @@ index 0000000..9443f6f
 +        }
 +        if (type == PEDTYPE_CIVMALE || type == PEDTYPE_CIVFEMALE || type == PEDTYPE_CRIMINAL
 +            || type == PEDTYPE_PROSTITUTE || type == PEDTYPE_SPECIAL)
++            return PED_FLAG_GUN | PED_FLAG_EXPLOSION | PED_FLAG_DEADPEDS;
++        if (type == PEDTYPE_COP)
 +            return PED_FLAG_GUN | PED_FLAG_EXPLOSION | PED_FLAG_DEADPEDS;
 +        return 0;
 +    }
@@ -31124,8 +32153,9 @@ index 0000000..9443f6f
 +    CPed *m_pedInObjective;
 +    void *m_pPointGunAt;
 +    int16 m_modelIndex;
++    uint8 m_wepAccuracy;
 +    int objectivesCleared, waitsCleared, chatsCleared;
-+    CPlayerPed() : m_pWanted(&g_wanted), m_pedInObjective(nil), m_pPointGunAt(nil), m_modelIndex(MI_PLAYER), m_nPedState(PED_IDLE), m_objective(0), m_numNearPeds(0),
++    CPlayerPed() : m_pWanted(&g_wanted), m_pedInObjective(nil), m_pPointGunAt(nil), m_modelIndex(MI_PLAYER), m_wepAccuracy(100), m_nPedState(PED_IDLE), m_objective(0), m_numNearPeds(0),
 +                   m_chatTimer(0), CharCreatedBy(MISSION_CHAR),
 +                   m_nPedType(PEDTYPE_PLAYER1), m_fearFlags(0),
 +                   m_pedStats(CPedStats::ms_apPedStats[PEDSTAT_PLAYER]), m_gangFlags(0xFF),
@@ -31222,7 +32252,7 @@ index 0000000..9443f6f
 +static void VCModStreetFadeScratch(CPlayerPed *) { events.push_back("fadeScratch"); }
 +static void VCModStreetFadeCrossLook(CPlayerPed *) { events.push_back("fadeCrossLook"); }
 +struct CWeaponInfo { static CWeaponInfo *GetWeaponInfo(int) { return nil; } };
-+void VCModPlayerWepAccuracy(CPlayerPed *, CWeaponInfo *) {}
++uint8 VCModNpcWepAccuracy(CPlayerPed *) { return 60; }
 +// CALL GANG hooks the mode calls: counted, not evented, so frame-gap tests
 +// that assert on the event stream stay untouched
 +static int nGangGroupUpdates, nGangGroupReleases, nGangJoinTries;
@@ -31240,7 +32270,7 @@ index 0000000..9443f6f
 +    "static CPedStats *\nVCModNpcBodyStats(CPlayerPed *player)",
 +    "static CPedStats *\nVCModNpcCivilianBodyStats(CPlayerPed *player)",
 +    "static void\nVCModNpcRestoreStatBorrow(CPlayerPed *player)",
-+    "static void\nVCModNpcBorrowIdentity(CPlayerPed *player, bool civilianWander, bool gangWander)",
++    "static void\nVCModNpcBorrowIdentity(CPlayerPed *player, bool civilianWander, bool gangWander, bool copWander)",
 +    "bool\nVCModStreetWanderOwnsPlayer(void)",
 +    "bool\nVCModNpcCivilianActive(void)",
 +    "bool\nVCModNpcGangActive(void)",
@@ -31526,6 +32556,58 @@ index 0000000..9443f6f
 +}
 +''')
 +
++    def test_the_chase_speed_eases_the_walk_run_blend(self):
++        # the player's walk/run clip weights are driven by m_fMoveSpeed, so a
++        # state flip that writes the run speed straight in swaps the weights in
++        # one frame. A ped's own walk -> run is a BlendAnimation at delta 1.0, a
++        # one-second weight fade; the stroll's ease is the module's fit to it.
++        ease = braced(NPC, "float\nVCModNpcMoveSpeed(CPlayerPed *player, float target)")
++        run_cpp(r'''
++#include <cstdio>
++#include <cstdint>
++#define nil NULL
++typedef int8_t int8; typedef uint8_t uint8; typedef int16_t int16; typedef uint16_t uint16;
++typedef int32_t int32; typedef uint32_t uint32;
++template<class T> T Min(T a, T b) { return a < b ? a : b; }
++template<class T> T Max(T a, T b) { return a > b ? a : b; }
++struct CTimer { static float GetTimeStep(void) { return 1.0f; } };
++bool bVCModNpcMode = false;
++struct CPlayerPed { float m_fMoveSpeed; };
++''' + ease + r'''
++int main(void) {
++    CPlayerPed p; p.m_fMoveSpeed = 1.0f;
++    bVCModNpcMode = true;
++    float first = VCModNpcMoveSpeed(&p, 1.8f);
++    if (first <= 1.0f || first >= 1.8f) return 1;       // eased, not a jump
++    if (first > 1.1f) return 2;                         // and no kick at the start
++    p.m_fMoveSpeed = first;
++    float prev = p.m_fMoveSpeed;
++    for (int i = 1; i <= 90; i++) {
++        p.m_fMoveSpeed = VCModNpcMoveSpeed(&p, 1.8f);
++        if (p.m_fMoveSpeed > 1.8f) return 3;
++        if (p.m_fMoveSpeed < prev) return 4;            // monotonic climb
++        if (i == 30 && (p.m_fMoveSpeed < 1.35f || p.m_fMoveSpeed > 1.65f)) return 5;
++        prev = p.m_fMoveSpeed;
++    }
++    // 30 frames = the second the ped's own delta-1.0 fade takes, so the ramp
++    // has to be about two thirds across there, not already parked on the target
++    if (p.m_fMoveSpeed < 1.75f) return 6;               // converged by 3 s
++    p.m_fMoveSpeed = 1.8f;
++    float down = VCModNpcMoveSpeed(&p, 1.0f);
++    if (down >= 1.8f || down <= 1.0f) return 7;         // the way back eases too
++    if (VCModNpcMoveSpeed(&p, 0.0f) != 0.0f) return 8;  // a stop stays a stop
++    bVCModNpcMode = false;
++    p.m_fMoveSpeed = 1.0f;
++    if (VCModNpcMoveSpeed(&p, 1.8f) != 1.8f) return 9;  // normal play is stock
++    return 0;
++}
++''')
++
++    def test_the_npc_move_states_ease_into_the_blend(self):
++        self.assertEqual(PLAYERPED.count("VCModNpcMoveSpeed(this,"), 6)
++        for bare in ("m_fMoveSpeed = 1.0f;", "m_fMoveSpeed = 1.8f;", "m_fMoveSpeed = 2.5f;"):
++            self.assertNotIn(bare, PLAYERPED)
++
 +    def test_toggle_off_restores_the_street_idle_setting(self):
 +        run_cpp(npc_source() + r'''
 +int main(void) {
@@ -31630,6 +32712,39 @@ index 0000000..9443f6f
 +    if (p.m_pedStats != own) return 4;
 +    if (bVCModNpcStatsBorrowed) return 5;
 +    if (p.m_headingRate != 15.0f) return 6;           // the player's own rate
++    return 0;
++}
++''')
++
++    def test_cop_wander_borrows_the_body_personality(self):
++        run_cpp(npc_source() + r'''
++int main(void) {
++''' + setup(profile="VCMOD_NPC_COP", state="PED_WANDER_PATH") + r'''
++    bVCModStreetWander = true;
++    p.m_modelIndex = MI_COP;
++    CPedStats *own = p.m_pedStats;
++    uint32 ownThreats = p.m_fearFlags;
++    VCModUpdateNpcMode(&p, &pad);
++    if (p.m_pedStats != CPedStats::ms_apPedStats[PEDSTAT_COP]) return 1;  // the cop body's stat
++    if (p.m_fearFlags != CPedType::GetThreats(PEDTYPE_COP)) return 2;     // the cop threat row
++    if (p.m_headingRate != 5.0f) return 3;                                // the body's turn rate
++    bVCModNpcMode = false; bVCModNpcModeWasOn = true;
++    VCModUpdateNpcMode(&p, &pad);
++    if (p.m_pedStats != own) return 4;
++    if (p.m_fearFlags != ownThreats) return 5;
++    if (p.m_headingRate != 15.0f) return 6;
++    return 0;
++}
++''')
++
++    def test_npc_mode_writes_the_body_accuracy(self):
++        run_cpp(npc_source() + r'''
++int main(void) {
++''' + setup(state="PED_WANDER_PATH") + r'''
++    p.m_wepAccuracy = 95;                       // normal play's aimable value
++    p.m_modelIndex = MI_MALE01;
++    VCModUpdateNpcMode(&p, &pad);
++    if (p.m_wepAccuracy != 60) return 1;        // the ped's stock accuracy
 +    return 0;
 +}
 +''')
@@ -32921,7 +34036,7 @@ index 0000000..7c33815
 +    unittest.main()
 diff --git a/utils/test_vc_passenger.py b/utils/test_vc_passenger.py
 new file mode 100644
-index 0000000..05dc055
+index 0000000..427aa56
 --- /dev/null
 +++ b/utils/test_vc_passenger.py
 @@ -0,0 +1,1300 @@
@@ -34172,8 +35287,8 @@ index 0000000..05dc055
 +        self.assertNotIn("bVCModPassengerMode", switched)
 +        self.assertEqual(names.count('"'), 4, "one label per ride style")
 +        # one row per table entry: thirteen combat, six player, thirteen
-+        # driving, eleven world, thirteen keys and the five debug rows
-+        self.assertEqual(len(re.findall(r'\{ "', rows)), 61)
++        # driving, thirteen world, thirteen keys and the five debug rows
++        self.assertEqual(len(re.findall(r'\{ "', rows)), 64)
 +        self.assertIn("nVCModListAnchor = row;", click)
 +        self.assertEqual(len(re.findall(r"VCMOD_RIDE_", braced(RIDE_H, "enum eVCModRidePhase"))), 5)
 +
@@ -34627,6 +35742,234 @@ index 0000000..c61bec1
 +
 +if __name__ == "__main__":
 +    unittest.main()
+diff --git a/utils/test_vc_playerwalk.py b/utils/test_vc_playerwalk.py
+new file mode 100644
+index 0000000..ec85d5e
+--- /dev/null
++++ b/utils/test_vc_playerwalk.py
+@@ -0,0 +1,222 @@
++#!/usr/bin/env python3
++"""WASD MOVE: BECOME NPC runs the profile AI, the movement keys own locomotion.
++The predicates and the wait rule are compiled against stubs; the engine wiring
++is pinned from the sources."""
++import pathlib
++import unittest
++
++from vcmod_test_support import braced, run_cpp
++
++ROOT = pathlib.Path(__file__).resolve().parents[1]
++WALK = ROOT / "src/extras/vcmodnpcwalk.cpp"
++PANEL = (ROOT / "src/extras/vcmodpanelregistry.cpp").read_text()
++PLAYER = ROOT / "src/peds/PlayerPed.cpp"
++
++STUBS = r'''
++#include <cstdio>
++#include <cstdint>
++#define nil NULL
++typedef int32_t int32;
++
++bool bVCModNpcMode;
++bool bVCModNpcPlayerWalk;
++
++enum ePedState { PED_IDLE, PED_ATTACK, PED_AIM_GUN, PED_FIGHT, PED_CHAT };
++enum eWaitState {
++    WAITSTATE_FALSE,
++    WAITSTATE_USE_ATM,
++    WAITSTATE_PLAYANIM_CHAT,
++    WAITSTATE_SIT_DOWN,
++    WAITSTATE_SIT_DOWN_RVRS,
++    WAITSTATE_SIT_UP,
++    WAITSTATE_SIT_IDLE,
++    WAITSTATE_STUCK,
++};
++
++struct CPad {
++    float leftRight, upDown;
++    bool jump, disabled;
++    CPad() : leftRight(0), upDown(0), jump(false), disabled(false) {}
++    float GetPedWalkLeftRight(void) { return leftRight; }
++    float GetPedWalkUpDown(void) { return upDown; }
++    bool JumpJustDown(void) { return jump; }
++    bool ArePlayerControlsDisabled(void) { return disabled; }
++};
++struct CPlayerPed {
++    int m_nWaitState;
++    int m_nPedState;
++    void *m_pPointGunAt;
++    int clears, zelda, fighter, rotate;
++    CPlayerPed() : m_nWaitState(WAITSTATE_FALSE), m_nPedState(PED_IDLE),
++                   m_pPointGunAt(nil), clears(0), zelda(0), fighter(0), rotate(0) {}
++    void ClearWaitState(void) { ++clears; m_nWaitState = WAITSTATE_FALSE; }
++    void PlayerControlZelda(CPad *) { ++zelda; }
++    void PlayerControlFighter(CPad *) { ++fighter; }
++    void RotatePlayerToTrackTarget(void) { ++rotate; }
++};
++
++int gangTalking, gangWalkAway;
++bool VCModGangGroupPlayerTalking(CPlayerPed *) { return gangTalking != 0; }
++void VCModGangGroupWalkAway(CPlayerPed *) { ++gangWalkAway; }
++
++static int failed = 0;
++#define CHECK(c, m) do { if (!(c)) { printf("FAIL: %s\n", m); failed++; } } while (0)
++'''
++
++SIGS = (
++    "bool\nVCModNpcPlayerWalks(void)",
++    "bool\nVCModNpcWalkInput(CPad *pad)",
++    "static void\nVCModNpcWalkEndPoseWait(CPlayerPed *player)",
++    "void\nVCModNpcWalkMove(CPlayerPed *player, CPad *pad)",
++    "void\nVCModNpcWalkCombat(CPlayerPed *player, CPad *pad)",
++)
++
++MAIN = r'''
++int main(void) {
++    CPlayerPed p;
++    CPad pad;
++    bVCModNpcMode = false; bVCModNpcPlayerWalk = true;
++    CHECK(!VCModNpcPlayerWalks(), "mode off: the row is inert");
++    bVCModNpcMode = true; bVCModNpcPlayerWalk = false;
++    CHECK(!VCModNpcPlayerWalks(), "row off: BECOME NPC untouched");
++    bVCModNpcPlayerWalk = true;
++    CHECK(VCModNpcPlayerWalks(), "both on: the keys steer");
++
++    pad.leftRight = -1;
++    CHECK(VCModNpcWalkInput(&pad), "a walk axis is input");
++    pad.leftRight = 0; pad.upDown = 1;
++    CHECK(VCModNpcWalkInput(&pad), "forward is input");
++    pad.upDown = 0; pad.jump = true;
++    CHECK(VCModNpcWalkInput(&pad), "a jump press is input");
++    pad.jump = false;
++    CHECK(!VCModNpcWalkInput(&pad), "a still pad is no input");
++    CHECK(!VCModNpcWalkInput(nil), "nil is no input");
++    pad.disabled = true; pad.upDown = 1;
++    CHECK(!VCModNpcWalkInput(&pad), "disabled controls are no input");
++    pad.disabled = false; pad.upDown = 0;
++
++    p.m_nWaitState = WAITSTATE_STUCK;
++    VCModNpcWalkMove(&p, &pad);
++    CHECK(p.clears == 1 && p.m_nWaitState == WAITSTATE_FALSE, "a pose wait ends on the keys");
++    CHECK(p.zelda == 1, "the stock walk runs");
++    p.m_nWaitState = WAITSTATE_USE_ATM;
++    VCModNpcWalkMove(&p, &pad);
++    CHECK(p.clears == 1 && p.m_nWaitState == WAITSTATE_USE_ATM, "an ATM wait keeps its clock");
++    CHECK(p.zelda == 2, "the keys still move him");
++
++    p.m_nPedState = PED_FIGHT;
++    VCModNpcWalkCombat(&p, &pad);
++    CHECK(p.fighter == 1 && p.zelda == 2, "a fist fight takes the stock fighter step");
++    CHECK(p.rotate == 0, "no gun lock, no tracking turn");
++    p.m_nPedState = PED_ATTACK; p.m_pPointGunAt = &pad;
++    VCModNpcWalkCombat(&p, &pad);
++    CHECK(p.zelda == 3 && p.rotate == 1, "the walk runs and the aim stays on the target");
++    p.m_pPointGunAt = nil;
++    VCModNpcWalkCombat(&p, &pad);
++    CHECK(p.zelda == 4 && p.rotate == 1, "no target, no turn");
++
++    p.m_nPedState = PED_CHAT;
++    gangTalking = 1; gangWalkAway = 0;
++    VCModNpcWalkMove(&p, &pad);
++    CHECK(gangWalkAway == 1, "a walk away from the ring ends its talk");
++    gangTalking = 0;
++    VCModNpcWalkMove(&p, &pad);
++    CHECK(gangWalkAway == 1, "no ring, no break");
++
++    printf(failed ? "FAILED\n" : "ok\n");
++    return failed != 0;
++}
++'''
++
++
++def fixture():
++    return STUBS + "\n" + "\n".join(braced(WALK.read_text(), sig) for sig in SIGS) + MAIN
++
++
++class Predicates(unittest.TestCase):
++    def test_module_decisions(self):
++        run_cpp(fixture())
++
++
++class PanelRow(unittest.TestCase):
++    ROW = ('\t{ "WASD MOVE",       VCMOD_ROW_FLAG,    &bVCModNpcPlayerWalk, "NpcPlayerWalk",  VCMOD_PAGE_WORLD, nil, -1,\n'
++           '\t  "keys steer; the AI does the rest", "needs BECOME NPC on" },')
++
++    def test_the_row_sits_under_become_npc(self):
++        self.assertIn(self.ROW, PANEL)
++        self.assertGreater(PANEL.index('"WASD MOVE"'), PANEL.index('"BECOME NPC"'))
++        self.assertLess(PANEL.index('"WASD MOVE"'), PANEL.index('"NPC TYPE"'))
++        self.assertIn("TWEAKBOOL(bVCModNpcPlayerWalk);", PANEL)
++
++
++def block(source, start, end):
++    a = source.index(start)
++    return source[a:source.index(end, a)]
++
++
++GATE = "VCModNpcPlayerWalks() && VCModNpcWalkInput(padUsed)"
++
++
++class SliceAWiring(unittest.TestCase):
++    def test_free_walk_cases_take_the_keys(self):
++        text = PLAYER.read_text()
++
++        flee = block(text, "case PED_FLEE_POS:", "case PED_NONE:")
++        self.assertIn(GATE, flee)
++        self.assertIn("VCModNpcWalkMove(this, padUsed)", flee)
++        self.assertLess(flee.index(GATE), flee.index("VCModNpcMoveSpeed(this, 1.0f)"))
++
++        wander = block(text, "case PED_WANDER_PATH:", "case PED_CHAT:")
++        self.assertIn(GATE, wander)
++        self.assertLess(wander.index(GATE), wander.index("VCModNpcStrollGait(this)"))
++
++        chat = block(text, "case PED_CHAT:", "case PED_SEEK_ENTITY:")
++        self.assertIn(GATE, chat)
++        self.assertLess(chat.index(GATE), chat.index("m_fMoveSpeed = 0.0f"))
++
++        seek = block(text, "case PED_SEEK_POS:", "case PED_JUMP:")
++        self.assertIn(GATE, seek)
++        self.assertLess(seek.index(GATE), seek.index("switch (m_nMoveState)"))
++
++        self.assertEqual(text.count("VCModNpcWalkMove(this, padUsed)"), 4)
++
++    def test_the_fight_steers_and_the_aim_stays(self):
++        combat = block(PLAYER.read_text(), "case PED_ANSWER_MOBILE:", "case PED_WANDER_PATH:")
++        self.assertIn(GATE, combat)
++        self.assertIn("VCModNpcWalkCombat(this, padUsed)", combat)
++        self.assertLess(combat.index(GATE), combat.index("VCModNpcCombatControl(this, npcCombatOwnsControl)"))
++        self.assertIn("m_nPedState == PED_IDLE && npcCombatOwnsControl", combat)
++
++    def test_the_ai_aim_never_plants_the_keys(self):
++        gate = braced(PLAYER.read_text(), "CPlayerPed::MovementDisabledBecauseOfTargeting")
++        self.assertIn("if (VCModNpcPlayerWalks())\n\t\treturn false;", gate)
++        self.assertLess(gate.index("VCModNpcPlayerWalks"), gate.index("VCModCopTwoHandFiring(this, info)"))
++
++
++class SliceCInventory(unittest.TestCase):
++    def test_the_ring_talk_breaks_on_a_walk(self):
++        walk = WALK.read_text()
++        self.assertIn("VCModGangGroupWalkAway(player)", walk)
++        gangs = (ROOT / "src/extras/vcmodganggroup.cpp").read_text()
++        self.assertIn('"walked away"', gangs)
++        header = (ROOT / "src/extras/vcmodganggroup.h").read_text()
++        self.assertIn("void VCModGangGroupWalkAway(CPlayerPed *player);", header)
++
++    def test_the_stock_edges_stay_stock(self):
++        text = PLAYER.read_text()
++        # a seat owns the pose before any input path
++        self.assertLess(text.index("if (VCModSitting())\n\t\treturn;"), text.index("switch (m_nPedState)"))
++        # car entry cancels on a keypress exactly as it always has
++        car = block(text, "case PED_SEEK_CAR:", "case PED_JUMP:")
++        self.assertIn("RestorePreviousObjective();", car)
++        self.assertIn("GetLeftStickXJustDown()", car)
++        # a jump runs the player's own control, no gate needed
++        jump = block(text, "case PED_JUMP:", "case PED_FALL:")
++        self.assertIn("PlayerControlZelda(padUsed)", jump)
++        # a plain idle already walks under the player's own control
++        combat = block(text, "case PED_ANSWER_MOBILE:", "case PED_WANDER_PATH:")
++        self.assertIn("PlayerControlZelda(padUsed)", combat)
++
++
++if __name__ == "__main__":
++    unittest.main()
 diff --git a/utils/test_vc_qol.py b/utils/test_vc_qol.py
 new file mode 100644
 index 0000000..4a603ce
@@ -34837,6 +36180,80 @@ index 0000000..4a603ce
 +        self.assertIn("VCModRefreshParticleLifetimes();", render)
 +        self.assertLess(render.index("VCModRefreshParticleLifetimes();"),
 +                        render.index("DebugMenuIsActive()"))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/utils/test_vc_range.py b/utils/test_vc_range.py
+new file mode 100644
+index 0000000..496c83b
+--- /dev/null
++++ b/utils/test_vc_range.py
+@@ -0,0 +1,68 @@
++#!/usr/bin/env python3
++"""World reach: peds stay longer before the distance cull and models hold
++detail a quarter further out, without touching spawn distances or the slider."""
++import pathlib
++import unittest
++
++ROOT = pathlib.Path(__file__).resolve().parents[1]
++MOD = ROOT / "src/extras/vcmodrange.cpp"
++MOD_H = ROOT / "src/extras/vcmodrange.h"
++POPULATION = ROOT / "src/peds/Population.cpp"
++CAMERA = ROOT / "src/core/Camera.cpp"
++PANEL = (ROOT / "src/extras/vcmodpanelregistry.cpp").read_text()
++
++
++def between(source, start_marker, end_marker):
++    start = source.index(start_marker)
++    return source[start:source.index(end_marker, start)]
++
++
++class RangeTests(unittest.TestCase):
++    def test_flags_default_on_and_off_is_unity(self):
++        mod = MOD.read_text()
++        self.assertIn("bool bVCModPedRange = true;", mod)
++        self.assertIn("bool bVCModRenderRange = true;", mod)
++        self.assertIn("#define VCMOD_RANGE_SCALE 1.25f", mod)
++        ped = between(mod, "VCModPedRangeScale(void)", "VCModRenderDistScale(void)")
++        self.assertIn("? VCMOD_RANGE_SCALE : 1.0f", ped)
++        render = mod[mod.index("VCModRenderDistScale(void)"):]
++        self.assertIn("? VCMOD_RANGE_SCALE : 1.0f", render)
++
++    def test_ped_cull_scales_both_stock_distances(self):
++        src = POPULATION.read_text()
++        self.assertIn('#include "vcmodrange.h"', src)
++        manage = between(src, "CPopulation::ManagePopulation(void)",
++                         "CPopulation::AddDeadPedInFrontOfCar")
++        self.assertIn("float rangeScale = VCModPedRangeScale();", manage)
++        # stock constants stay in the engine; the feature only scales them
++        self.assertIn("PED_REMOVE_DIST_SPECIAL * rangeScale *", manage)
++        self.assertIn("PED_REMOVE_DIST * rangeScale *", manage)
++        self.assertNotIn("rangeScale * PED_REMOVE_DIST_SPECIAL", manage)
++
++    def test_render_scale_rides_after_slider_not_spawn(self):
++        src = CAMERA.read_text()
++        self.assertIn('#include "vcmodrange.h"', src)
++        ordered = (
++            "\tGenerationDistMultiplier = LODDistMultiplier;\n"
++            "\tLODDistMultiplier *= CRenderer::ms_lodDistScale;\n"
++            "\tLODDistMultiplier *= VCModRenderDistScale();"
++        )
++        self.assertIn(ordered, src)
++        self.assertEqual(src.count("VCModRenderDistScale()"), 1)
++
++    def test_panel_rows(self):
++        self.assertIn('#include "vcmodrange.h"', PANEL)
++        self.assertIn('{ "PED RANGE",       VCMOD_ROW_FLAG,    &bVCModPedRange,       "PedRange",       VCMOD_PAGE_WORLD', PANEL)
++        self.assertIn('{ "RENDER RANGE",    VCMOD_ROW_FLAG,    &bVCModRenderRange,    "RenderRange",    VCMOD_PAGE_WORLD', PANEL)
++        self.assertIn("\t&bVCModPedRange,\n", PANEL)
++        self.assertIn("\t&bVCModRenderRange,\n", PANEL)
++
++    def test_startup_reads_both_keys(self):
++        src = (ROOT / "src/core/re3.cpp").read_text()
++        self.assertIn('#include "vcmodrange.h"', src)
++        self.assertIn('ReadIniIfExists("VC Mods", "PedRange", &bVCModPedRange);', src)
++        self.assertIn('ReadIniIfExists("VC Mods", "RenderRange", &bVCModRenderRange);', src)
 +
 +
 +if __name__ == "__main__":
@@ -36661,7 +38078,7 @@ index 0000000..93d7513
 +    unittest.main()
 diff --git a/utils/test_vc_windup.py b/utils/test_vc_windup.py
 new file mode 100644
-index 0000000..66d4e5e
+index 0000000..0abf83b
 --- /dev/null
 +++ b/utils/test_vc_windup.py
 @@ -0,0 +1,142 @@
@@ -36765,7 +38182,7 @@ index 0000000..66d4e5e
 +        # a cold clip runs its own raise frames; the stock snap only runs when no
 +        # raise owns the clip
 +        point = braced(PEDFIGHT.read_text(), "CPed::PointGunAt(void)")
-+        self.assertIn("bool raising = IsPlayer() && VCModAimRaising();", point)
++        self.assertIn("bool raising = IsPlayer() && !VCModNpcFightsAsPed(this) && VCModAimRaising();", point)
 +        self.assertIn("weaponAssoc->speed = -1.0f;", point)
 +        self.assertIn("VCModAimRaiseHoldLanded();", point)
 +        # the hold park is what the trigger waits for

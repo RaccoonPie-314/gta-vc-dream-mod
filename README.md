@@ -235,6 +235,7 @@ the shipped default, so deleting one resets that hotkey.
 | `CREW CAR` row (key `CrewCar`) | Admiral | The four-door car the crew arrives in; the list is every four-door car this install loads |
 | `bVCModNoStrafe` | off | The direction keys choose the body's heading — `A`/`D` turn instead of side-stepping. Aiming or firing hands the heading back to the camera |
 | `bVCModNpcAutoType` (row `TYPE FROM BODY`) | on | BECOME NPC derives the profile from the worn body's stock ped type: Tommy and gang bodies run GANG as the body's own gang, police bodies COP, every other body CIVILIAN. NPC TYPE shows the derived profile while it runs; cycling NPC TYPE turns this off and applies the chosen value |
+| `bVCModNpcPlayerWalk` (row `WASD MOVE`) | off | With BECOME NPC on, the movement keys own locomotion in the AI's wander, seeks, flee and chat, and in fights; the AI keeps everything else and resumes moving when the keys are released. Pose waits end on a key; seat, ATM and chat-gesture waits finish on their own |
 | `bVCModManualReload` | on | The RELOAD key (`R` by default) starts the reload on foot instead of waiting for the clip to empty. `R` is also the car radio key, so the tick does nothing while driving |
 | `bVCModInfiniteAmmo` (row `INFINITE AMMO`) | off | Reuses the 100% save's reward below 100%: the clip still empties and reloads, the player's total ammo stops dropping, the detonator keeps spending charges. The AMMO KEY (`AMMO KEY` on the KEYS page, unbound by default) toggles it in play |
 | `SAVE GAME` menu row | — | A pause-menu row after Resume that opens the stock slot picker from anywhere on foot. Refused with a notice during a mission, a cutscene, while wasted or busted, and outside play |
@@ -253,6 +254,8 @@ the shipped default, so deleting one resets that hotkey.
 | `bVCModFireTruckCannon` | on | The water jet starts at the tower mount whether the player or the AI drives, and the arrow keys aim it |
 | `bVCModSteeringWheel` | on | The pack car models' steering wheel node turns with the front wheels |
 | `bVCModTrafficAI` | on | The traffic layer: right-lane driving, horn on a blocked road, and the path fixes from `mods/` |
+| `bVCModPedRange` (row `PED RANGE`) | off | Peds walk 25% further before despawning |
+| `bVCModRenderRange` (row `RENDER RANGE`) | off | 25% more model and streaming distance; costs GPU high up |
 
 ## Mod hotkeys
 

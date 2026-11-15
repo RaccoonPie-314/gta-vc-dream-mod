@@ -266,6 +266,7 @@ claim that the code is already there.
 | Street idle, chat, wander | `vcmodstreet` | `CPlayerPed`, `PedChat` |
 | Sit and seat attractors | `vcmodsit` | `CPlayerPed`, `Ped` |
 | NPC profiles, gang, cop | `vcmodnpc`, `vcmodgang` | `PedAI`, `Ped`, `PedChat`, `AudioLogic` |
+| BECOME NPC walk | `vcmodnpcwalk` | `CPlayerPed` |
 | Chase mission | `vcmodchase` + `vcmodchasesquad` + `vcmodchaseair` | `Game`, `Wanted` |
 | Traffic | `vcmodtraffic` | `Automobile`, `Bike`, `CarCtrl`, `CarAI` |
 | Vehicle bits | one module per bit | `Automobile`, `VehicleModelInfo` |
@@ -276,9 +277,9 @@ claim that the code is already there.
 - `src/peds/PlayerPed.cpp` — player-control glue. The feature state lives in the
   `vcmod*` modules; only hook calls belong here. Do not add blocks.
 - `src/extras/vcmodpanel.h` — god header. Do not add unrelated declarations.
-- `src/extras/vcmodpanel.cpp` (771) — fonts, input and render. The row table,
-  pins and master switch live in `vcmodpanelregistry.cpp` (571), the zone, ped
-  and crew lookups in `vcmodpanelcatalog.cpp` (446), and the shared types,
+- `src/extras/vcmodpanel.cpp` (783) — fonts, input and render. The row table,
+  pins and master switch live in `vcmodpanelregistry.cpp` (599), the zone, ped
+  and crew lookups in `vcmodpanelcatalog.cpp` (512), and the shared types,
   state and cross-file prototypes in `vcmodpanelinternal.h` (113). Grow each
   in its own file. The chase module is split the same way: `vcmodchase.cpp`
   1,552 (state machine), `vcmodchasesquad.cpp` 948, `vcmodchaseair.cpp` 1,019,
@@ -331,17 +332,22 @@ Before calling a feature done, answer all of these:
 
 ## Current debt (shrink when touched)
 
-As of 2026-11-13:
+As of 2026-11-15:
 
-- `PlayerPed.cpp` 2,605 lines, 74 mod references — every feature module is
+- `PlayerPed.cpp` 2,648 lines, 96 mod references — every feature module is
   extracted; what remains is hook calls and gated branches, plus the aim-control
-  block in `ProcessPlayerWeapon`, which reads `vcmodcombat` predicates.
-- `PedFight.cpp` 31 mod lines — hook calls only. `vcmodcombat` owns the
-  aim/recovery state, the two-hand hold, the forced fight move, the spin kick,
-  the never-wanted clamp and the NPC combat profile block
-  (`src/extras/vcmodcombat.cpp`, 477 lines).
-- `vcmodpanel.cpp` 771, `vcmodpanelregistry.cpp` 571,
-  `vcmodpanelcatalog.cpp` 446 — the panel is split by concern (drawing /
+  block in `ProcessPlayerWeapon`, which reads `vcmodcombat` predicates. The
+  BECOME NPC walk row, its input predicate and the wait rule live in
+  `vcmodnpcwalk` (73 lines); the state switch keeps four free-state hooks, the
+  combat hook and the targeting-lock bypass.
+- `PedFight.cpp` 79 mod lines, `PedAI.cpp` 20 — hook calls and one-line
+  predicate branches only. `vcmodcombat` owns the aim/recovery state, the
+  two-hand hold, the forced fight move, the spin kick, the never-wanted clamp
+  and the NPC combat profile block (`src/extras/vcmodcombat.cpp`, 559 lines);
+  `vcmodnpc` owns the NPC profiles, the stock-accuracy table and the combat
+  predicate (`src/extras/vcmodnpc.cpp`, 809 lines).
+- `vcmodpanel.cpp` 783, `vcmodpanelregistry.cpp` 599,
+  `vcmodpanelcatalog.cpp` 512 — the panel is split by concern (drawing /
   registry / catalogs); the row table is the only part that grows a line per
   switch. The chase module is split the same way: the state machine in
   `vcmodchase.cpp`, the ground team in `vcmodchasesquad.cpp`, the air insertion

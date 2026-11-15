@@ -161,6 +161,39 @@ offered through the panel or the debug menu, and the choice is live — no resta
   garage, phone, cutscene): the start takes the same break the walk ends on,
   instead of a start/end loop every frame. Harness.
 
+## Shipped — 2026-11-15, `46e9f0f`
+
+### NPC mode stock combat
+
+- While BECOME NPC runs, the player ped fights, shoots and takes damage as a
+  ped of the worn body: the ped move chooser and fight timing, stock accuracy
+  by body, the ped reload/burst/empty-gun rules, no player fast reload or
+  sprint breakout, the ped's damage multiplier, limb/bleed rules and hit
+  reactions. Seen: he fights on his own; the full matrix is harnessed.
+- Every flip sits behind one predicate, so mode off is the stock player path.
+
+### BECOME NPC with WASD MOVE
+
+- New `WASD MOVE` row under BECOME NPC: the movement keys own locomotion while
+  the profile AI keeps the state machine. Wander, seeks (cop chase, chat
+  approach), flee/investigate and chat are steered; releasing the keys hands
+  the walk back to the AI. Seen.
+- Combat steering: the keys move him during a fight while the AI keeps the
+  target, the aim, the trigger and the melee choice; the stock tracking turn
+  re-faces the target after each step, and the AI's own aim no longer plants
+  the player's keys. Harness; the play pass is pending.
+- Pose waits end on a key; seat, ATM and chat-gesture waits finish on their
+  own. Car entry keeps the stock keypress cancel.
+- CALL GANG: walking out of the ring's talk ends it with `walked away` in the
+  log instead of holding until the row is pressed again. Harness.
+
+### Range and pools
+
+- `PED RANGE` and `RENDER RANGE` rows: peds walk 25% further before despawning
+  and the model/streaming distance rises 25%.
+- Pool sizes raised above the stock caps; a full entry-info or pointer-node
+  pool no longer takes the game down with a null operator new.
+
 ## Shipped — 2026-11-14, `3f62c78`
 
 ### Drive free camera — the idle hold

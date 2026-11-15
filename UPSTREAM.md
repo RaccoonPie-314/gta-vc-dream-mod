@@ -3,6 +3,7 @@
 Built against [https://github.com/mrxenginner/reVC](https://github.com/mrxenginner/reVC), branch `miami`, commit `a26fff4`.
 Mod commits on top of it:
 
+    46e9f0f Ship NPC stock combat, the BECOME NPC walk, ped range and bigger pools
     aebb665 Ship CALL GANG, infinite ammo, saves and the army gang
     3f62c78 Ship the drive camera's stock deadzone hold
     ff1f984 Ship body-type banking for BECOME NPC
@@ -52,9 +53,9 @@ Usage record for the build of this folder:
 
     System:   macOS arm64
     Operator: RaccoonPie-314
-    Date:     2026-11-15T04:35:12Z
+    Date:     2026-11-15T09:07:23Z
     Target:   https://github.com/mrxenginner/reVC
-    Hash:     4dc66213d249318026a06d236134a95aa75fc8a60f55a02a2b4d2da1df923373
+    Hash:     42210dd3468f188ffa3049367308df256ea15bae727da294d442b1ca87a08da9
 
 ## Rebuilding
 
