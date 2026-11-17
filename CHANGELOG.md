@@ -5,6 +5,203 @@ All the work sits on branch `vcmods` in the reVC checkout, ahead of the upstream
 generated from `git diff miami..vcmods` by `scripts/sync.sh`. Don't hand-edit the
 patch; regenerate it.
 
+## Shipped — 2026-11-17, `de225b9c`
+
+### NPC spawner
+
+- `SPAWN NPC` on the DEBUG page lists every `MITYPE_PED` model in the install,
+  sorted by IDE name, and names the picked body in its cell. Picking only sets
+  the key's model; the key is the one spawn path. Gang bodies read as the plain
+  group name (Cuban gang, Haitian gang, …) instead of the roster label; the
+  PLAYER page's character shelf keeps the roster names.
+- `SPAWN NPC KEY` (keyboard and pad channels, ships unbound) puts one ped two
+  metres ahead on ground, facing the player, through the population system's own
+  `AddPed` with the model's IDE type: civilians walk, gangs carry their stock
+  weapons, cop models arrive as their officer type, and mission or player bodies
+  spawn in a civilian container. Spawned peds are ordinary ambient peds — the
+  game owns them from then on, nothing is saved, nothing is restored. Cap 8 live
+  spawned peds; a freed slot returns on its own.
+- One synthetic `Army gang` entry sits after `army`: no stock model carries
+  GANG9, so it spawns the stock army body as a GANG9 gang ped armed with the M4,
+  the identity `CALL GANG` gives the army.
+- Refusals are a notice plus a log line, never a silent no-op: in a vehicle, a
+  model that is not a ped, the cap, a model that did not load, no ground ahead.
+  Harness (`test_vc_npcspawn.py`).
+
+### MISSION TARGET
+
+- New WORLD row, off by default. While BECOME NPC runs, the AI hunts the ped the
+  current mission wants dead: mission-created, not on the player's side, not the
+  player, not a follower, not protected from being targeted, alive.
+- The hunt starts only from a free ped (no objective, pose wait, attractor or
+  car), picks the nearest eligible enemy by 2D distance on a one-second scan,
+  and holds it while it lives. The order is the stock on-foot kill, which also
+  attacks a target in his car; it is re-issued only when nothing else owns the
+  body and dropped when the mission ends or the target stops qualifying. Off is
+  BECOME NPC byte for byte. Harness (`test_vc_npctarget.py`).
+
+### BECOME NPC puts down what fights it
+
+- The mode's on-edge takes the switches and commands that want the same body
+  before the mode touches anything: STREET IDLE and NPC DOOM AIM forced off with
+  the player's own values saved, an out crew dismissed, a summoned chauffeur
+  dismissed, a chase aborted. The panel and a pin keep showing the player's
+  value while the mode holds a switch.
+- On the off-edge they come back one at a time from a table whose order is data
+  (`src/extras/vcmodnpcsuspend.cpp`): the switches at once (NPC DOOM AIM half a
+  second later), the crew and then the chauffeur called again a second apart
+  through their own entry points, the chase never restarted. The take runs from
+  the mode's on-edge, which fixes the old snapshot that could read STREET IDLE
+  after the mode had already forced it off. Harness (`test_vc_npcsuspend.py`).
+
+### PED WOUNDS
+
+- New WORLD row, on by default, a modifier of BECOME NPC that acts only while
+  the mode runs. On is the shipped taking-damage side: the worn body's own
+  multiplier, so a handgun round kills and a lethal shot can take a limb off.
+- Off keeps the player's receiving rules — damage × 0.33, no limb removal, no
+  explosion dismemberment, the GANG7 immunity and the fireproof exemption back.
+  Outgoing combat, hit reactions and the fight animations are untouched. Harness
+  (`test_vc_npccombat.py`).
+
+### Gang rivalry
+
+- A save written right after a mission can carry a shortened gang threat row
+  (`CUB_4` cleared the Cuban↔Haitian pairs and the save kept it), which left the
+  live gang table with no rival and an NPC-mode gang body never starting a
+  fight. `CPedType::Load` restores the missing gang↔gang pairs from `ped.dat`,
+  leaves every other saved change alone, keeps the army alias pair neutral, and
+  re-reads the live gang peds.
+- A gang-profile body that sees a rival now takes the stock on-foot kill where
+  the stock rival branch would stand down unarmed against an armed rival. Cops,
+  civilians, kin, corpses and the mode-off path keep their stock branches.
+  Harness (`test_vc_gangfaction.py`).
+
+### After-kill pose
+
+- The hands-behind-back pose is stock again: a completed kill only re-issues the
+  wander. The frequent source is the fight's leftover seek radius (13 m for an
+  M4, 30 for the rifle): a pedestrian re-picks nodes from it and poses where he
+  stands.
+- The wander keeps that radius, saves it when a pose ends and restores it at the
+  next wander start, so one double back lands per wander start and the walk that
+  follows is a walk instead of the same pick repeating in place. A node wait owns
+  the body until its stock timer releases it.
+- The civilian and gang body takes the pedestrian blocked-path branch; the cop
+  keeps the player's. `docs/handoff/2026-11-17-after-kill-pose.md` has the
+  triage.
+
+### Aim after a kill
+
+- A completed BECOME NPC kill no longer leaves the gun up. The aim guard also
+  ends the pose when the ped being aimed at is down, whatever the ped state; a
+  live kill order, a live target or a vehicle target keeps its aim. Harness
+  (`test_vc_npcaim.py`).
+
+### Panel housekeeping
+
+- The per-tab ALL ON: a `[TAB ON]` cell at the right end of the header row, on
+  every page. It switches the tab's own rows together and reads `[TAB OFF]` /
+  `[TAB MIX]` / `[TAB --]` the same way the title-bar master does on its rows.
+  It is the master's set restricted to the `VCMOD_ROW_FLAG` rows the page
+  shows, so the exclusions hold per tab too: NPC DOOM AIM, CREW AGGRESSIVE,
+  SPEED LIMIT, WALK MODE and the mode and cycle rows (ADRENALINE, VANILLA
+  FIXES) keep their values, commands and diagnostics are never swept, and the
+  four VANILLA FIXES flags have no rows to sweep. `KEYS` and `DEBUG` have
+  nothing to switch, so the cell renders `[TAB --]` there and a press says so
+  instead of doing nothing. A switch BECOME NPC holds keeps the player's own
+  value and refuses to flip. Clickable, and reachable from the pad: pressing
+  Up from the first row lands on the header cells, Left/Right walks them and
+  Cross acts. Harness (`test_vc_panelhouse.py`).
+- `RESET STATE`, on the DEBUG page after SPAWN VEHICLE: puts down everything the
+  mod is running right now — the crew, the chauffeur, the gang group, a chase,
+  AUTO DRIVE and the cockpit view — each through that feature's own entry point.
+  Switches, pins and BECOME NPC are untouched, deliberately: ending the mode
+  hands the crew and the chauffeur back a second later. The crew men step off
+  the street before the cars leave it, a crew already on its way home is not
+  "running", and a press with nothing up says so. The row only queues; the
+  world work happens from the update pass, the same rule SPAWN VEHICLE
+  follows. Harness.
+- KEYS page search: a `FIND` box at the right end of the header row of the one
+  page longer than the window. Type letters and the page scrolls to and lights
+  the first row whose name holds the query, case folded; Backspace deletes,
+  Esc clears and leaves it, Enter leaves it standing. The found row draws
+  banded and the footer names it, and an empty result is reported in the
+  footer instead of a notice per keystroke. While the box holds the keyboard,
+  a panel-owned player-control bit (512) is set and the mod's hotkeys stand
+  down, so typed letters never walk, fire, drive or reach a capture — the
+  panel key still answers, so the panel can be closed from the find box.
+  The query is cleared on a tab switch and on close.
+- Panel pad navigation grew a header step: pressing Up from the first row lands
+  on the header cells, and a fresh Down lands on the first visible row instead
+  of skipping it.
+
+### Keys and controller binds
+
+- Every KEYS row now holds a keyboard chord and a pad chord side by side, so the
+  same layout works on keyboard and on a controller without rebinding. The pad
+  buttons offered are the face buttons, L1/L2/R1/R2, the D-pad and Start/Select;
+  no slot ships bound to a button, because a stock button keeps its own action.
+  Harness.
+- A capture binds one channel: click the keyboard cell or the pad cell and the
+  next input on that side lands. Holding the first input and pressing a second
+  upgrades it to a two-input chord; two inputs in the same frame bind as a chord
+  too. `Esc` still cancels on either channel. Harness.
+- Each row ends in `[X]`, which clears that row's keyboard and pad binds at once.
+  PANEL KEY has no clear cell, since it is the only way into the panel. RESET
+  KEYS restores keyboard and pad defaults. Harness.
+- Storage stays one ini int per channel (`KeyWalk`, `PadWalk`, …): the keyboard
+  value packs two 16-bit key codes, the pad value two button ids in each byte,
+  and a plain code written by an older build still unpacks as a single key.
+  Harness.
+- Every consumer now reads through `VCModKeyJustDown`, `VCModKeyDown` (for the
+  held fire slot) or `VCModKeyPressed` (the ungated panel and chase paths), so a
+  slot answers to both channels with the same gates. Harness.
+- **Fix:** a pad capture used to bind the mouse. The stock controller setup
+  synthesises pad buttons from the keyboard and mouse, so the click that armed a
+  pad cell read as a Circle press and bound itself. Pad binds now follow the
+  controller's own buttons: `CapturePad` records the raw gamepad state as a mask
+  (`GetPhysicalPadMask`), `CPad::Update` does the same on XInput, and the mouse is
+  never in it. This also stops a mouse shot from firing a Circle-bound mod action,
+  and a press shows its own button after the stock setup is rearranged. Harness.
+- The panel navigates with the controller: D-pad walks rows and a row's targets
+  (pin, bind cells, `[X]`), L1/R1 switch tabs, Cross acts, Circle backs out of a
+  list and then the panel; lists walk and pick the same way. The last device used
+  owns the highlight, and hovering anywhere on a row lights the whole row instead
+  of only the clear cell. Navigation stands down during a capture and while the
+  stock pause menu is up. Harness.
+
+### Bundled text
+
+- The five `gamefiles/TEXT/*.gxt` regain the cutscene lines upstream's copies
+  dropped (`CUB2_V`–`CUB4_AA`, `HAM3_Z`), because the bundle's text shadows the
+  player's own and a missing key draws `<KEY> missing` on screen. Every other
+  byte is left alone; `utils/gxt_merge_keys.py` does the merge and
+  `test_vc_gxt.py` keeps the root array sorted. French has no `CUB2_V` in the
+  stock file, so that one key stays out of the French bundle only.
+
+The whole harness suite is green and build 683 is installed; the checks still
+open at the keyboard are the ones in `docs/verification.md`.
+
+## Shipped — 2026-11-16, `bfc0d4d0`
+
+### Auto drive, speed limit and per-feature key slots
+
+- `AUTO DRIVE` — from the driver seat the car or bike drives itself with one of
+  the engine's own NPC styles: `[SAFE]` stops for cars, peds and red lights,
+  `[AGGRESSIVE]` runs reds and weaves around traffic, both at the traffic pace.
+  A pause-map marker routes it; no marker cruises the road graph. Any driving
+  input or the key hands the wheel back, arrival brakes to a stop and turns the
+  mode off.
+- `SPEED LIMIT` caps manual driving at the traffic pace with the throttle alone;
+  no brake trim, so the tail lamps stay off at the cap, and a real overshoot
+  still brakes. The ALL ON sweep leaves it alone on purpose.
+- A hotkey slot for every gameplay row — BECOME NPC, STREET IDLE, NEVER WANTED,
+  ADRENALINE, CALL GANG, SKIP RIDE, FREEAIM+LOCKON, NPC DOOM AIM, LOCKON LATCH,
+  LOCKON CARS, AUTO DRIVE, SPEED LIMIT, WHEEL LOSS, CREW AGGRESSIVE — all of
+  them unbound by default, so the stock key keeps its own action. The panel key
+  is the one shipped binding (`\`).
+
 ## Shipped — 2026-11-06, `bd9cbc5`
 
 "Seen" means somebody turned it on at the keyboard on this machine and the game
@@ -668,36 +865,32 @@ what it actually got.
 
 ## Not verified
 
-- ini seeding end to end: set `NpcAnims = true` in the ini, launch, and check the
-  panel shows it on without touching a toggle. The pinned-row writer has not been
-  exercised across a restart either.
-- Panel row hit-testing at resolutions and window sizes other than the one used
-  during development, and the tab strip and pin cell at any size.
-- The pack car models and wheels, the steering wheel node, explosion cover, the
-  FBI bars and the firetruck cannon: built, installed, unplayed. The driving
-  orbit camera is seen on cars; its inverted vertical axis from 2026-11-09 and
-  the boat hold are unplayed.
-- The cockpit view: whether the front-seat camera clears the dash and roof of
-  every replaced model, whether the driver's own head intrudes at the frame edge,
-  how bikes and boats read in it, and whether the camera-key exit feels right.
-- The KEYS page in play: arming a row, binding, Esc cancel, RESET KEYS, and whether
-  a rebind survives a restart. Harness only.
-- `NO STRAFE` and the kerbside look in play; both have harnesses only.
-- Passenger riding end to end, including whether a bike pillion seat behaves with
-  an NPC rider.
-- The story characters on the mission shelf: the resolution path is tested, but
-  nobody has worn them in play yet.
-- Zone routing: the destination is a zone centre, so a district whose centre lands
-  off-road depends on the game's own pathfinding snapping it to a road node.
-- The chauffeur end to end: spawn, the drive over, boarding, dismissal, and whether
-  the Stretch's rear door reads correctly.
-- `SKIP RIDE` travel in play: scene streaming and the landing height at the road node.
-- Changing `RIDE STYLE` mid-approach and mid-ride from the panel.
-- The `K` spin kick: whether the dropped-in `FIGHT_ROUNDHOUSE` reads right on
-  Tommy and whether a ped at arm's length takes the hit.
-- The seat camera lock on a bench.
-- Sitting on the Miami apartment bench after an NPC was killed on it, and after a
-  corpse was left there.
+The live checklist is `docs/verification.md`: one line per thing that is built,
+harness-green and installed but not yet confirmed at the keyboard. Items move
+there instead of being repeated here.
+
+## Declined — 2026-11-17
+
+A survey of the NPC and QOL surface turned these down. They are recorded so the
+same list is not rebuilt from scratch next time.
+
+- An NPC inspector on the DEBUG page. Cars spawn and the ped spawner is a key,
+  but reading a live ped's state and stats stayed out.
+- BECOME NPC in a vehicle: ped driving, ride-along and passenger seats while the
+  mode runs. A seat keeps pausing the walk, as it does today.
+- COP profile arrest and pursuit driving. The profile is player behaviour, so it
+  stays a foot patrol.
+- The ped driving brain is abandoned. The plan that described it (route queue,
+  lane discipline, stuck recovery, pursuit driving) is deleted; no code was ever
+  written for it and nothing references it.
+- Prostitute-in-car block and a gang weapons loadout.
+- Time of day, weather and traffic-density controls.
+- Weapon-set / loadout switching.
+- On-foot first person. The cockpit view is the only first-person camera that
+  ships.
+- Chase leftovers. The run stays as it is: the boat finale never finds a dock,
+  a wrecked lead car still falls into the stall timer instead of continuing on
+  foot, and the player has no gunner seat.
 
 ## Ideas not started
 
@@ -708,7 +901,12 @@ Nothing is committed to these. They're here so the list survives a context loss.
 - Windows build of the same patch. The patch is portable C++; the panel and
   charset drawing should follow, but the ini path and `FindGameRoot` behave
   differently there.
-- Weapon-set switching via the cheat page froze the game once. Fixed as a side
-  effect of the anim-group work; worth re-testing before assuming it's gone.
 - A fifth animation slot or two, if the groups turn out not to cover something
   (carrying-heavy-weapon one-hand is the known gap).
+- `CALL GANG` needs a dismiss: a press while a group is out should disband it,
+  with the same cleanup the mode-off edge already does; today only ending the
+  mode clears the group.
+- `MISSION TARGET` in a car: the hunt follows its target into a vehicle instead of
+  attacking on foot and letting the car go.
+- Newspapers after missions: the unique `newspapers.txd` swap needs an asset
+  override path first (the same blocker the wheels and lamp textures hit).

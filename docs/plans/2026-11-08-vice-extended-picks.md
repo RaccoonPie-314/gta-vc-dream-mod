@@ -1,8 +1,9 @@
 # Vice Extended — selected features
 
 Status: batches 1–4 shipped; the car light textures are built in build 178 and unplayed.
-Remaining: cast-light split (needs a decision), newspapers (asset + mission hook), first person,
-autosave.
+Save anywhere and autosave shipped 2026-11-15. Declined 2026-11-17: first person (the cockpit
+view is the only first-person camera), cast-light split (rejected in play). Still open:
+newspapers (needs an asset override path).
 Date: 2026-11-08
 Source: external Vice Extended 2510 pack (`~/Downloads/vice-extended-october-2025-update_1788102643_908113`).
 Not vendored: its `GameFiles` are content and its `ViceEx.exe` is a Windows reVC fork with no source.

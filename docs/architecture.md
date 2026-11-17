@@ -267,6 +267,7 @@ claim that the code is already there.
 | Sit and seat attractors | `vcmodsit` | `CPlayerPed`, `Ped` |
 | NPC profiles, gang, cop | `vcmodnpc`, `vcmodgang` | `PedAI`, `Ped`, `PedChat`, `AudioLogic` |
 | BECOME NPC walk | `vcmodnpcwalk` | `CPlayerPed` |
+| BECOME NPC suspend set | `vcmodnpcsuspend` + `vcmodnpcinternal.h` | `Game` (one tick) |
 | Chase mission | `vcmodchase` + `vcmodchasesquad` + `vcmodchaseair` | `Game`, `Wanted` |
 | Traffic | `vcmodtraffic` | `Automobile`, `Bike`, `CarCtrl`, `CarAI` |
 | Vehicle bits | one module per bit | `Automobile`, `VehicleModelInfo` |

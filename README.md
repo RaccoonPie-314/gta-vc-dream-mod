@@ -117,12 +117,25 @@ all live there, so `PlayerPed.cpp` keeps only the behaviour hooks.
   be two rows, which is two clicks and two states to reconcile.
 - Six tabs — **COMBAT**, **PLAYER**, **DRIVING**, **WORLD**, **KEYS**, **DEBUG** —
   split the rows so the panel stays one screen high; DEBUG holds the two read-only
-  path probes. KEYS holds the mod's own hotkeys: click a row and the next key press
-  becomes the binding (Esc cancels), and **RESET KEYS** restores the shipped letters.
-  Clicking a tab switches page and closes any open list, and the last tab is
+  path probes. KEYS holds the mod's own hotkeys. Each row has a keyboard cell and
+  a pad cell: click one and the next input on that side becomes the binding (Esc
+  cancels). Hold the first input and press a second on the same side to make a
+  two-input chord (`L1+CROSS`, `LCTRL+A`). The `[X]` at the end of a row clears
+  both binds; point at it first and the row lights up, so the row about to lose
+  its binds is clear. **PANEL KEY** has no `[X]`, since it is the only way back
+  in, and **RESET KEYS** restores every default. Pad binds follow the
+  controller's own buttons, not the game actions the stock controller setup maps
+  them to, so a mouse click (the stock fire button) never binds or fires as a
+  pad press. Clicking a tab switches page and closes
+  any open list, and the last tab is
   kept for the session. The master switch sits at the right end of the title bar as
   `[ALL ON]` / `[MIXED]` / `[ALL OFF]`, and still leaves WALK MODE and NO STRAFE
   alone.
+- A connected controller drives the panel too: D-pad up/down walks rows, left/right
+  walks a row's targets (the pin cell, the bind cells and `[X]`), L1/R1 switch
+  tabs, **Cross** acts, **Circle** backs out of a list and then closes the panel;
+  open lists walk the same way. The last device used owns the highlight, and any
+  row under the pointer or the pad's focus is lit as one band.
 - `PERMA` column: the first three columns of a row are a pin cell, `[ ]` or `[x]`.
   Clicking it pins the row, which writes the current value into `[VC Mods]` at once
   and rewrites it on every later change; clicking it again deletes the key. The rest
@@ -198,13 +211,18 @@ written too, so the file remembers what you left the row at. An absent key means
 turns them on again at the next launch, it does not turn them off.
 
 Hotkey bindings use the same section but their own rule: a binding is a setting,
-not a pinned row, so it is written the moment it changes on the KEYS page. The
-keys are `KeyPanel`, `KeyWalk`, `KeyFire`, `KeyDriver`, `KeyKick`, `KeyReload`,
-`KeySpot`, `KeyCapture`, `KeyFirstPerson`, `KeyCrew`, `KeyPassenger` and `KeyAmmo`;
-the value
-is the key code (printable keys are ASCII,
-the rest are the engine's `RsKeyCodes`). An absent or nonsense value falls back to
-the shipped default, so deleting one resets that hotkey.
+not a pinned row, so it is written the moment it changes on the KEYS page. Each
+slot has two entries: the keyboard chord under `KeyPanel`, `KeyWalk`, `KeyFire`,
+`KeyDriver`, `KeyKick`, `KeyReload`, `KeySpot`, `KeyCapture`, `KeyFirstPerson`,
+`KeyCrew`, `KeyPassenger`, `KeyAmmo`, …, and the pad chord beside it under
+`PadPanel`, `PadWalk`, and so on. A keyboard value packs the first key code in the
+low 16 bits and an optional second key in the high 16 (printable keys are ASCII,
+the rest are the engine's `RsKeyCodes`); a pad value packs one or two button ids
+in the low and high byte (`0` none, then `1` cross, `2` square, `3` triangle,
+`4` circle, `5`–`8` L1/L2/R1/R2, `9`–`12` the D-pad, `13` start, `14` select).
+An older file that holds a plain key code still reads as a single key. An absent
+or nonsense value falls back to the shipped default, so deleting one resets that
+hotkey; no slot ships bound to a pad button.
 
 ## Toggles
 
@@ -217,7 +235,7 @@ the shipped default, so deleting one resets that hotkey.
 | `bVCModAimAllWeapons` | off | Bypasses the `WEAPONFLAG_CANAIM` requirement, so `weapon.dat` needs no editing |
 | `bVCModPlayerDoomAim` | off | Tommy aims like a ped: `m_wepAccuracy` drops to the ped default 60 and the shot goes through the ped deviation branch instead of the player's ramped one |
 | `bVCModNoScopedAim` | off | Sniper / M4 / RPG aim with lock-on instead of taking the 1st-person scope camera |
-| `bVCModWalkMode` | off | Caps movement to walk speed (0.9) and the walk anim; the WALK MODE key (KEYS page, `B` by default) flips it in play |
+| `bVCModWalkMode` | off | Caps movement to walk speed (0.9) and the walk anim; the WALK MODE key (KEYS page, unbound by default) flips it in play |
 | `bVCModLockOnVehicles` | off | Lock-on also considers driven vehicles — cars, bikes, boats, helis |
 | `bVCModLockOnLatch` | off | Aim button latches: one two-finger press locks on and stays, the next releases |
 | `bVCModNeverWanted` | off | Wanted level is forced back to 0 every frame |
@@ -236,7 +254,9 @@ the shipped default, so deleting one resets that hotkey.
 | `bVCModNoStrafe` | off | The direction keys choose the body's heading — `A`/`D` turn instead of side-stepping. Aiming or firing hands the heading back to the camera |
 | `bVCModNpcAutoType` (row `TYPE FROM BODY`) | on | BECOME NPC derives the profile from the worn body's stock ped type: Tommy and gang bodies run GANG as the body's own gang, police bodies COP, every other body CIVILIAN. NPC TYPE shows the derived profile while it runs; cycling NPC TYPE turns this off and applies the chosen value |
 | `bVCModNpcPlayerWalk` (row `WASD MOVE`) | off | With BECOME NPC on, the movement keys own locomotion in the AI's wander, seeks, flee and chat, and in fights; the AI keeps everything else and resumes moving when the keys are released. Pose waits end on a key; seat, ATM and chat-gesture waits finish on their own |
-| `bVCModManualReload` | on | The RELOAD key (`R` by default) starts the reload on foot instead of waiting for the clip to empty. `R` is also the car radio key, so the tick does nothing while driving |
+| `bVCModNpcMissionTarget` (row `MISSION TARGET`) | off | With BECOME NPC on and a mission running, the AI hunts the mission's own enemy: the nearest mission-created ped that is not on Tommy's side, leaving out followers and the protected. It uses the stock on-foot kill order, so a target in his car is attacked on foot instead of sending the hunter for a car; it holds one target until it dies, then takes the next |
+| `bVCModNpcPedWounds` (row `PED WOUNDS`) | on | A modifier of BECOME NPC, acted on only while the mode runs. On keeps the worn body's taking-damage side (about 1:1 — a handgun round kills, and a lethal shot can take a limb). Off keeps the player's own receiving rules: damage × 0.33, no limb removal, no explosion dismemberment, the GANG7 immunity and the fireproof exemption back. Outgoing combat and the fight animations are untouched |
+| `bVCModManualReload` | on | The RELOAD key (unbound by default) starts the reload on foot instead of waiting for the clip to empty. The stock `R` is also the car radio key, so the tick does nothing while driving if it is bound there |
 | `bVCModInfiniteAmmo` (row `INFINITE AMMO`) | off | Reuses the 100% save's reward below 100%: the clip still empties and reloads, the player's total ammo stops dropping, the detonator keeps spending charges. The AMMO KEY (`AMMO KEY` on the KEYS page, unbound by default) toggles it in play |
 | `SAVE GAME` menu row | — | A pause-menu row after Resume that opens the stock slot picker from anywhere on foot. Refused with a notice during a mission, a cutscene, while wasted or busted, and outside play |
 | autosave | on | A passed mission saves itself on the next safe tick without the stock clock jump. The last slot is the autosave slot (`AutoSave`) and is no longer offered in the manual save list |
@@ -254,39 +274,31 @@ the shipped default, so deleting one resets that hotkey.
 | `bVCModFireTruckCannon` | on | The water jet starts at the tower mount whether the player or the AI drives, and the arrow keys aim it |
 | `bVCModSteeringWheel` | on | The pack car models' steering wheel node turns with the front wheels |
 | `bVCModTrafficAI` | on | The traffic layer: right-lane driving, horn on a blocked road, and the path fixes from `mods/` |
+| `bVCModSpeedLimit` | off | Manual driving is capped at the traffic pace (15) with the throttle alone. The cruise brake trim is dropped unless the car is slowing for traffic, so the tail lamps stay off at the cap; a real overshoot still brakes. Left out of ALL ON |
 | `bVCModPedRange` (row `PED RANGE`) | off | Peds walk 25% further before despawning |
 | `bVCModRenderRange` (row `RENDER RANGE`) | off | 25% more model and streaming distance; costs GPU high up |
 
 ## Mod hotkeys
 
-Twelve keys are checked by the mod itself rather than by the controller binding
-table, because `gta_vc.set` rewrites that table on load. All twelve are rebindable
-on the panel's **KEYS** page; the shipped defaults are:
+The mod reads its own keys rather than the controller binding table, because
+`gta_vc.set` rewrites that table on load. Every gameplay action and toggle has a
+slot on the panel's **KEYS** page — BECOME NPC, STREET IDLE, NEVER WANTED,
+ADRENALINE, CALL GANG, SKIP RIDE, WALK MODE, FIRE, CALL DRIVER, SPIN KICK,
+RELOAD, CHASE SPOT, CHASE CAPTURE, 1ST PERSON, CALL CREW, PASSENGER, AMMO, AUTO
+DRIVE, FREEAIM+LOCKON, NPC DOOM AIM, LOCKON LATCH, LOCKON VEHICLES, SPEED LIMIT,
+WHEEL LOSS, CREW AGGRESSIVE and SPAWN NPC. Every one of them ships unbound, so a
+stock key keeps its own action; the panel key (`\`) is the only shipped binding,
+because it is the only way into the page. An ini written by an older build keeps
+the letters it holds; a fresh one starts with every gameplay slot at `NONE`.
 
-- `G` = fire. A trackpad cannot hold the two-finger aim button and press the left
-  mouse button at the same time. Left Ctrl still fires too, and `Insert` (numpad 0)
-  is the other stock default — absent on a laptop.
-- `B` = toggle walk mode.
-- `H` = call the chauffeur, or dismiss him. Checked outside the on-foot block, so
-  it also works from the back seat, where the player state is `PED_DRIVING`.
-- `K` = the spinning roundhouse.
-- `R` = manual reload, on foot only.
-- `J` / `U` = the chase prototype's spot teleport and coordinate log.
-- `C` = the cockpit view on and off.
-- `V` = call the crew, or dismiss it. Like `H` it is checked outside the on-foot
-  block, so it also works from a seat.
-- `P` = board the nearest car as a passenger, driver or not.
-- `AMMO` = infinite ammo on and off. Ships unbound (`NONE`) — click the AMMO KEY
-  row and press a key.
-- `\` = open the panel.
-
-Clicking a KEYS row arms it and the next key press becomes the binding in the same
-moment; `Esc` cancels, and **RESET KEYS** restores all twelve. A binding is saved to
-`[VC Mods]` in `reVC.ini` immediately. While a capture is armed the mod's own
-hotkey handlers stand down, so the key used to bind does not also fire, reload or
-toggle. Binding a key that another action already uses is allowed — both actions
-fire. The chase prototype's tier digits 0–4 and its Enter/Backspace keys stay
-fixed, and the game's own controls stay on the pause menu's Controller Setup page.
+Clicking a KEYS row's keyboard cell or pad cell arms that channel, and the next
+input on it becomes the binding in the same moment; `Esc` cancels, and **RESET
+KEYS** restores every default. A binding is saved to `[VC Mods]` in `reVC.ini`
+immediately. While a capture is armed the mod's own hotkey handlers stand down,
+so the key used to bind does not also fire, reload or toggle. Binding a key that
+another action already uses is allowed — both actions fire. The chase
+prototype's tier digits 0–4 and its Enter/Backspace keys stay fixed, and the
+game's own controls stay on the pause menu's Controller Setup page.
 
 Walk mode is capped in **both** on-foot control paths: `PlayerControlZelda` (the
 camera-relative one) and `PlayerControl1stPersonRunAround`, which is what actually
@@ -354,9 +366,27 @@ the `csplay` variants) and only offers a slot whose file is actually in the
 archive. Anything that still cannot be resolved is refused before the ped is
 touched.
 
+## NPC spawner
+
+**SPAWN NPC** on the DEBUG page picks the body; the key spawns it. The list is
+every pedestrian model the install's ide declares, sorted by name — gang bodies
+read as the plain group name (`Cuban gang`, `Haitian gang`, …) instead of the
+roster label, and the list ends with an `Army gang` entry beside `army`, which
+spawns the stock army body under the GANG9 identity with an M4.
+
+Picking a body never spawns anything: it sets the model, and each **SPAWN NPC
+KEY** press puts one ped two metres ahead on the ground, facing Tommy, through
+`CPopulation::AddPed` with the model's own ide type — civilians walk, gangs carry
+their stock weapons, cop models arrive as their officer type. The ped is an
+ordinary ambient pedestrian from then on: the game's own population system owns
+it, so it walks, fights and despawns like any other, and it is never saved. At
+most eight spawned peds are live at once, and a slot frees itself when the game
+deletes one. In a vehicle, at the cap, with a model that did not load or with no
+ground ahead, the press shows a notice instead of spawning.
+
 ## Passenger riding
 
-The passenger key (`P`) puts Tommy in the passenger seat of the nearest car within
+The passenger key (on the KEYS page, unbound by default) puts Tommy in the passenger seat of the nearest car within
 10 m — driven or empty; nobody has to be at the wheel. Planes, helis and trains are
 passed over, and so is a wrecked car, with a message when that leaves nothing to
 board. A full car is refused the same way. The enter-vehicle key is untouched: on
@@ -393,7 +423,7 @@ dropped rather than followed.
 
 ## Personal driver
 
-**CALL DRIVER** (or `H`) sends a black Stretch with a chauffeur to wherever Tommy
+**CALL DRIVER** sends a black Stretch with a chauffeur to wherever Tommy
 is standing. It spawns on the nearest car path node behind him — far enough that
 the approach is a drive — gets a radar blip, and is made mission-owned so traffic
 cannot reclaim it while it waits. It stops within 15 m; if Tommy walks more than
@@ -433,9 +463,33 @@ marker placed, or with **RIDE TO** set to traffic, it says so and does nothing.
 The passenger key never travels: pressing
 it next to a car always boards and rides.
 
+## Auto drive
+
+From the driver seat, **AUTO DRIVE** on the DRIVING page drives the car or bike
+itself with one of the engine's own NPC styles. It is a session mode, not a stored
+setting: the row cycles `[OFF]`, `[SAFE]`, `[AGGRESSIVE]`, the AUTO DRIVE key
+flips it, and nothing about it is written to the ini.
+
+- `[SAFE]` is `DRIVINGSTYLE_STOP_FOR_CARS`: it slows for cars and peds and stops
+  at red lights.
+- `[AGGRESSIVE]` is `DRIVINGSTYLE_AVOID_CARS`: it runs reds and steers around the
+  cars ahead instead of queuing behind them. Both still stop for a lifting
+  bridge.
+
+Both cruise at the traffic pace (15). A pause-map marker routes the car there and
+it brakes to a stop on arrival, turning itself off; with no marker it cruises the
+road graph like traffic. Taking the wheel — gas, brake, steering or handbrake —
+or pressing the key hands control back on that frame, and the log says which.
+Holding the gas as the mode engages does not cancel it until the gas is released
+and pressed again. Arrival or the hand-back leaves the car under Tommy's control,
+not the AI's.
+
+**SPEED LIMIT** on the same page is the manual counterpart: it caps Tommy's own
+driving at the traffic pace with the throttle alone (see the toggles table).
+
 ## Vercetti crew
 
-**CALL CREW** (or `V`) sends three Vercetti gang members — `PGA`/`PGB`, an M4 each —
+**CALL CREW** sends three Vercetti gang members — `PGA`/`PGB`, an M4 each —
 in a four-door car. The car spawns on a road node behind Tommy the way the
 chauffeur's limo does, drives to him with the same **RIDE STYLE**, and stops within
 15 m. The men are the game's own gang peds, made by `CPopulation::AddPed` with
