@@ -255,6 +255,8 @@ hotkey; no slot ships bound to a pad button.
 | `bVCModNpcAutoType` (row `TYPE FROM BODY`) | on | BECOME NPC derives the profile from the worn body's stock ped type: Tommy and gang bodies run GANG as the body's own gang, police bodies COP, every other body CIVILIAN. NPC TYPE shows the derived profile while it runs; cycling NPC TYPE turns this off and applies the chosen value |
 | `bVCModNpcPlayerWalk` (row `WASD MOVE`) | off | With BECOME NPC on, the movement keys own locomotion in the AI's wander, seeks, flee and chat, and in fights; the AI keeps everything else and resumes moving when the keys are released. Pose waits end on a key; seat, ATM and chat-gesture waits finish on their own |
 | `bVCModNpcMissionTarget` (row `MISSION TARGET`) | off | With BECOME NPC on and a mission running, the AI hunts the mission's own enemy: the nearest mission-created ped that is not on Tommy's side, leaving out followers and the protected. It uses the stock on-foot kill order, so a target in his car is attacked on foot instead of sending the hunter for a car; it holds one target until it dies, then takes the next |
+| `bVCModFollowOwnAnims` (row `FOLLOW ANIMS`) | on | A mission char following Tommy keeps its own stock animation set for idle, walk, run and sprint; stock hands every player-led follower Tommy's clips. The follower still matches his stride rate, and the crew and CALL GANG's men were already exempt |
+| `bVCModFollowSafe` (row `FOLLOW SAFE`) | on | A mission char following Tommy takes no damage the player deals: his guns, fists and melee, a blast he caused, a fire he started and the car he drives. Cops, rival gangs, falls, drowning, fires he did not start and damage from anyone else are unchanged |
 | `bVCModNpcPedWounds` (row `PED WOUNDS`) | on | A modifier of BECOME NPC, acted on only while the mode runs. On keeps the worn body's taking-damage side (about 1:1 — a handgun round kills, and a lethal shot can take a limb). Off keeps the player's own receiving rules: damage × 0.33, no limb removal, no explosion dismemberment, the GANG7 immunity and the fireproof exemption back. Outgoing combat and the fight animations are untouched |
 | `bVCModManualReload` | on | The RELOAD key (unbound by default) starts the reload on foot instead of waiting for the clip to empty. The stock `R` is also the car radio key, so the tick does nothing while driving if it is bound there |
 | `bVCModInfiniteAmmo` (row `INFINITE AMMO`) | off | Reuses the 100% save's reward below 100%: the clip still empties and reloads, the player's total ammo stops dropping, the detonator keeps spending charges. The AMMO KEY (`AMMO KEY` on the KEYS page, unbound by default) toggles it in play |
@@ -286,10 +288,14 @@ slot on the panel's **KEYS** page — BECOME NPC, STREET IDLE, NEVER WANTED,
 ADRENALINE, CALL GANG, SKIP RIDE, WALK MODE, FIRE, CALL DRIVER, SPIN KICK,
 RELOAD, CHASE SPOT, CHASE CAPTURE, 1ST PERSON, CALL CREW, PASSENGER, AMMO, AUTO
 DRIVE, FREEAIM+LOCKON, NPC DOOM AIM, LOCKON LATCH, LOCKON VEHICLES, SPEED LIMIT,
-WHEEL LOSS, CREW AGGRESSIVE and SPAWN NPC. Every one of them ships unbound, so a
+WHEEL LOSS, CREW AGGRESSIVE, SPAWN NPC and HEALTH+ARMOR. Every one of them ships unbound, so a
 stock key keeps its own action; the panel key (`\`) is the only shipped binding,
 because it is the only way into the page. An ini written by an older build keeps
 the letters it holds; a fresh one starts with every gameplay slot at `NONE`.
+
+**HEALTH+ARMOR** is a press, not a switch: it sets Tommy's health and armour to
+the player's own maxima and says so in a HUD notice. It answers in a car as well
+as on foot, and an unbound slot does nothing at all.
 
 Clicking a KEYS row's keyboard cell or pad cell arms that channel, and the next
 input on it becomes the binding in the same moment; `Esc` cancels, and **RESET
@@ -355,7 +361,10 @@ through `Undress`/`Dress`, which re-takes stats from whatever model is worn.
 The **gangs** shelf ends with `Army (gang)`: the stock army model under the
 army-gang identity (GANG9) instead of the cop profile the same body has on the
 cops shelf. TYPE FROM BODY derives GANG9 from it and CALL GANG spawns army-model
-men with M4s, while the cop shelf keeps the stock cop body.
+men with M4s, while the cop shelf keeps the stock cop body. The uniform is one
+army either way: while Tommy wears the army body he stands on the soldiers' side
+even without the alias, so the base's men do not take him for a stranger and his
+own shots at them take no damage.
 
 The **mission** shelf is a special case: `default.ide` declares slots
 `MI_SPECIAL01..21` as `special01`..`special21` with a generic texture dictionary,

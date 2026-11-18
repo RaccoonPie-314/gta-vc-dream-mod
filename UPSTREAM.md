@@ -3,6 +3,7 @@
 Built against [https://github.com/mrxenginner/reVC](https://github.com/mrxenginner/reVC), branch `miami`, commit `a26fff4`.
 Mod commits on top of it:
 
+    6157e4c5 Ship follow anims and follow safety, the health key and the army side
     de225b9c Ship the NPC spawner, the BECOME NPC suspend table and panel housekeeping
     bfc0d4d0 Add autodrive, the speed limit and per-feature key slots
     46e9f0ff Ship NPC stock combat, the BECOME NPC walk, ped range and bigger pools
@@ -55,9 +56,9 @@ Usage record for the build of this folder:
 
     System:   macOS arm64
     Operator: RaccoonPie-314
-    Date:     2026-11-17T09:51:49Z
+    Date:     2026-11-18T01:34:00Z
     Target:   https://github.com/mrxenginner/reVC
-    Hash:     a868920020aa18f7f6827a35f7ec07ba8179a1fe609d5cf959ae19dfb0d2691d
+    Hash:     47196fd6b2daeef0f208596197908288b5e4a78db6be2315e8e7ea1498670ae7
 
 ## Rebuilding
 

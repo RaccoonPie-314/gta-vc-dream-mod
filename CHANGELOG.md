@@ -5,6 +5,54 @@ All the work sits on branch `vcmods` in the reVC checkout, ahead of the upstream
 generated from `git diff miami..vcmods` by `scripts/sync.sh`. Don't hand-edit the
 patch; regenerate it.
 
+## Shipped — 2026-11-18, `6157e4c5`
+
+### FOLLOW ANIMS and FOLLOW SAFE
+
+- Two WORLD rows, both on, one module (`src/extras/vcmodfollow`). **`FOLLOW
+  ANIMS`**: a mission char following Tommy keeps its own stock animation set for
+  idle, walk, run and sprint instead of borrowing `ASSOCGRP_PLAYER`; the follower
+  still matches his stride rate, and the crew and CALL GANG's men were already
+  exempt. **`FOLLOW SAFE`**: the same follower takes no damage the player deals —
+  guns, fists and melee, a blast he caused, a fire he started, and the car he
+  drives — while cops, rival gangs, falls, drowning, fires he did not start and
+  everyone else's damage land as stock. Seen.
+- The shield hooks `CPed::InflictDamage` before the havoc count, so a blocked hit
+  is not a brawl either, and `CFireManager::StartFire`, so a flamethrower or a
+  burning round cannot leave the follower alight. A follower of some other ped is
+  untouched; the predicates require `MISSION_CHAR`, and the shield also requires
+  the player as leader. Harness.
+- The old mod-added gate that made every mission friend immune to the player and
+  to each other is gone. FOLLOW SAFE restores only the player-to-follower half,
+  which is the half the companion rule needs; friend-to-friend damage is stock
+  again (and was the bleed-not-die suspect in the job-SWAT investigation).
+
+### HEALTH+ARMOR key
+
+- New KEYS slot `HEALTH+ARMOR` (keyboard and pad, unbound like every other
+  gameplay slot): a press sets Tommy's health and armour to the player's own
+  maxima and shows a HUD notice. It answers in a car as well as on foot, beside
+  the ammo key. An unbound slot reads nothing and writes nothing. Harness.
+
+### The army body's side
+
+- The army body now counts as one army on the player's side whether or not the
+  GANGS shelf's `Army (gang)` alias is on: the base's soldiers wear the same
+  uniform, and the script row that creates them names PLAYER1, so the uniform
+  alone decides. A player wearing it is kin to GANG9 and to the base's GANG3
+  repaint; any other body keeps stock. Seen.
+- The threat scan (gunshot and sight branches) and the point-gun reaction ask the
+  side before they answer, so a same-side soldier is not registered as a threat.
+  Harness.
+
+### Diagnostics
+
+- Temporary probes, off unless DIAGNOSTICS is on: the script-created ped and the
+  population cop with their type, model, creator and friend flag; every
+  `SET_CHAR_AS_FRIEND` write; the name of each script block as it starts; and a
+  non-player hit naming the victim's gates (proofs, weakness, creator, friend,
+  dying state, attacker, objective and ped state) at most every 300 ms.
+
 ## Shipped — 2026-11-17, `de225b9c`
 
 ### NPC spawner
